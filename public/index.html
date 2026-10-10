@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WIESPL CRM</title>
+  <link rel="icon" href="logo.jpeg">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form class="login-card" id="login-form">
+      <img src="logo.jpeg" alt="WIESPL" class="login-logo">
+      <h1>WIESPL CRM &amp; ERP</h1>
+      <label>Username<input name="username" autocomplete="username" required autofocus></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <p class="error" id="login-error"></p>
+    </form>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#/dashboard"><img src="logo.jpeg" alt=""><span>WIESPL<small>CRM &amp; ERP</small></span></a>
+      <nav id="nav"></nav>
+    </aside>
+    <div class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu">☰</button>
+        <form id="global-search" class="global-search"><input placeholder="Search enquiries, customers, quotations…" name="q"></form>
+        <div class="user-box">
+          <span id="user-name"></span>
+          <button class="btn small" id="btn-password">Password</button>
+          <button class="btn small" id="btn-logout">Logout</button>
+        </div>
+      </header>
+      <main id="view" class="view"></main>
+    </div>
+  </div>
+
+  <div id="print-root" class="print-root hidden"></div>
+  <div id="toast" class="toast"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
