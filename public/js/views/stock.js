@@ -1,6 +1,6 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
 import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge } from '../ui.js';
-import { MOVE_TYPES, ITEM_CATEGORIES, canWrite } from '../schema.js';
+import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, hasFunction } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker } from './form.js';
 
@@ -118,8 +118,10 @@ export async function stockEntryView(root) {
       location.hash = `#/stock-entry?type=${type}&t=${Date.now()}`;
     } catch (e) {
       if (/Not enough stock/.test(e.message) && !allowNegative) {
-        const ok = await modal('Not enough stock', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), h('p', 'Save anyway? Stock will go negative for these items.')),
-          [{ label: 'Cancel', value: false }, { label: 'Save anyway', cls: 'danger solid', value: true }]);
+        const may = hasFunction(state.user.role, 'allow_negative');
+        const ok = await modal('Not enough stock', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
+          h('p', may ? 'Save anyway? Stock will go negative for these items.' : 'Reduce the quantity, record the inward first, or ask someone allowed to issue more than the available stock.')),
+          may ? [{ label: 'Cancel', value: false }, { label: 'Save anyway', cls: 'danger solid', value: true }] : [{ label: 'OK', value: false }]);
         if (ok) return save(true);
         return;
       }
@@ -189,7 +191,7 @@ export async function stockSummaryView(root) {
   async function load() { try { data = await api(`/stock/summary?${query()}`); page = 0; draw(); } catch (e) { fail(e); } }
   let timer;
   for (const el of Object.values(f)) el.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
-  const canCarry = ['admin', 'manager', 'store', 'purchase_head'].includes(state.user.role);
+  const canCarry = hasFunction(state.user.role, 'stock_opening');
   root.replaceChildren(
     h('div.page-head', h('h1', '📊 Stock Summary'), h('div.actions',
       h('a.btn', { href: '#/stock-entry' }, '🔁 Stock Entry'),

@@ -30,7 +30,8 @@ export async function exportEntity(name, query) {
   const rows = listRows(name, query);
   const wb = new ExcelJS.Workbook();
   wb.creator = 'WIESPL CRM';
-  const ws = wb.addWorksheet(ent.label.slice(0, 31));
+  // Excel sheet names cannot contain * ? : \ / [ ] and are limited to 31 characters.
+  const ws = wb.addWorksheet(ent.label.replace(/[*?:\\/[\]]/g, '-').replace(/\s+/g, ' ').slice(0, 31));
 
   if (name === 'enquiries') {
     const fy = query.fy || fyOf();

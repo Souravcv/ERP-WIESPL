@@ -1,5 +1,5 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today } from '../ui.js';
-import { ENTITIES, canWrite, APPROVAL_FLOWS } from '../schema.js';
+import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS } from '../schema.js';
 import { linesTotals, inr, round2 } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 
@@ -7,9 +7,8 @@ const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
 };
-const isManager = () => ['admin', 'manager'].includes(state.user.role);
-export const canApprove = (docType, stage) => state.user.role === 'admin'
-  || ((APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0])?.roles.includes(state.user.role);
+const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
+export const canApprove = (docType, stage) => !!stepOf(docType, stage) && hasFunction(state.user.role, stepOf(docType, stage).fn);
 export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
   : typeof d === 'string' && d.startsWith('setting:') ? state.settings[d.slice(8)] ?? '' : d;
 
@@ -86,7 +85,31 @@ function linesEditor(f, value, { readonly, onTotals }) {
     totals();
   }
   if (f.itemRef) refOptions('items').then(o => { items = o; render(); }).catch(fail); else render();
-  return { el: wrap, get: () => lines };
+  return { el: wrap, get: () => lines, set: next => { lines = next.map(l => ({ ...l })); render(); } };
+}
+
+// PO: choosing a requisition copies its materials into the PO (prices, HSN and GST from the item master).
+async function fillFromRequisition(reqId, inputs) {
+  if (!reqId) return;
+  const r = await api(`/requisitions/${reqId}`);
+  const reqLines = (r.lines || []).filter(l => l.description || l.item_id || Number(l.qty));
+  if (!reqLines.length) { toast('That requisition has no materials'); return; }
+  const current = inputs.lines.get().filter(l => l.description || l.item_id || l.spec);
+  let keep = [];
+  if (current.length) {
+    const choice = await modal(`Materials from ${r.req_no}`, h('p', `The PO already has ${current.length} line(s). Replace them with the ${reqLines.length} material(s) from the requisition, or add the materials below them?`),
+      [{ label: 'Cancel', value: null }, { label: 'Add below', value: 'add' }, { label: 'Replace', cls: 'primary', value: 'replace' }]);
+    if (!choice) return;
+    if (choice === 'add') keep = current;
+  }
+  const mapped = await Promise.all(reqLines.map(async l => {
+    const it = l.item_id ? await api(`/items/${l.item_id}`).catch(() => null) : null;
+    return { item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
+      qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18 };
+  }));
+  inputs.lines.set([...keep, ...mapped]);
+  if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.el.value = r.project_id;
+  toast(`${mapped.length} material(s) copied from ${r.req_no}. You can add or change lines before saving.`);
 }
 
 // ---------------------------------------------------------------- approval progress (PO: technical → commercial → GM)
@@ -146,8 +169,7 @@ function actionsFor(entity, row, reload) {
         });
         A.push(h('button.btn.good', { onclick: decide('Approved') }, '✔ Approve'), h('button.btn.danger.solid', { onclick: decide('Rejected') }, '✖ Reject'));
       } else if (row.status === 'Pending') {
-        const step = (APPROVAL_FLOWS[row.doc_type] || []).find(s => s.stage === row.stage);
-        A.push(h('span.muted', `Waiting for: ${(step?.roles || ['manager']).join(' / ')}`));
+        A.push(h('span.muted', `Waiting for someone allowed to: ${FUNCTIONS[stepOf(row.doc_type, row.stage)?.fn] || 'approve'}`));
       }
       break;
     }
@@ -290,6 +312,11 @@ export async function recordView(root, entity, id) {
   };
   for (const ctrl of new Set(conditional.map(([f]) => Object.keys(f.showIf)[0]))) inputs[ctrl]?.el.addEventListener('change', applyShowIf);
   applyShowIf();
+  if (entity === 'purchase_orders' && writable && inputs.requisition_id) {
+    inputs.requisition_id.el.addEventListener('change', () => fillFromRequisition(inputs.requisition_id.get(), inputs).catch(fail));
+    // Opened as "new PO" from a requisition link: fill straight away.
+    if (isNew && presets.requisition_id) fillFromRequisition(Number(presets.requisition_id), inputs).catch(fail);
+  }
 
   async function save() {
     const body = {};
@@ -336,17 +363,59 @@ export async function recordView(root, entity, id) {
       h('div.actions',
         isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id)),
         writable ? h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save') : null,
-        !isNew && isManager() && !locked ? h('button.btn.danger', { onclick: () => remove().catch(fail) }, 'Delete') : null)),
+        !isNew && canDelete(entity, state.user.role) && !locked ? h('button.btn.danger', { onclick: () => remove().catch(fail) }, 'Delete') : null)),
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
     h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
       `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
+    isNew ? null : attachments(entity, r.id, canWrite(entity, state.user.role)),
     isNew ? null : related(entity, r),
-    isNew || !isManager() ? null : history(entity, id),
+    isNew || !hasFunction(state.user.role, 'view_audit') ? null : history(entity, id),
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); save().catch(fail); } };
+}
+
+// ---------------------------------------------------------------- files: work orders, drawings, CAD (dwg/dxf), PDFs, photos …
+const ATTACH_TITLES = { projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
+const fileSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+const PREVIEWABLE = /\.(pdf|png|jpe?g|gif|webp|txt)$/i;
+
+function attachments(entity, recordId, writable) {
+  const list = h('div', h('div.muted', 'Loading…'));
+  const file = h('input', { type: 'file', multiple: true });
+  const note = h('input', { placeholder: 'Note (optional), e.g. "Work order R3", "Approved layout Rev 2"', style: { flex: 1, minWidth: '200px' } });
+  async function load() {
+    const rows = await api(`/attachments/${entity}/${recordId}`).catch(() => null);
+    if (!rows) { list.replaceChildren(h('div.muted', 'Could not load files')); return; }
+    list.replaceChildren(rows.length ? h('table.data', h('tbody', rows.map(a => h('tr',
+      h('td', '📎 ', PREVIEWABLE.test(a.filename) ? h('a', { href: `/api/files/${a.id}?inline=1`, target: '_blank' }, a.filename) : h('a', { href: `/api/files/${a.id}` }, a.filename),
+        a.note ? h('div.muted', a.note) : null),
+      h('td.num.muted', fileSize(a.size)), h('td.muted.nowrap', `${a.uploaded_by || ''} · ${fmtDate(a.at)}`),
+      h('td.nowrap', h('a.btn.small', { href: `/api/files/${a.id}` }, '⬇ Download'),
+        writable ? h('button.icon-btn.del', { title: 'Remove file', onclick: async () => {
+          if (!(await confirmBox(`Remove ${a.filename}?`, 'Remove'))) return;
+          try { await api(`/files/${a.id}`, { method: 'DELETE' }); load(); } catch (e) { fail(e); }
+        } }, '✕') : null))))) : h('div.muted', 'No files yet'));
+  }
+  async function upload() {
+    if (!file.files.length) throw new Error('Choose one or more files first');
+    for (const f of file.files) {
+      if (f.size > 200 * 1048576) throw new Error(`${f.name} is larger than 200 MB`);
+      const res = await fetch(`/api/attachments/${entity}/${recordId}?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(note.value)}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Type': f.type || 'application/octet-stream' }, body: f });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload of ${f.name} failed`);
+    }
+    toast(`${file.files.length} file(s) uploaded`);
+    file.value = ''; note.value = '';
+    load();
+  }
+  load();
+  return h('div.card', h('h2', `📎 ${ATTACH_TITLES[entity] || 'Files'}`),
+    writable ? h('div.toolbar', file, note, h('button.btn.primary', { onclick: () => upload().catch(fail) }, '⬆ Upload')) : null,
+    writable ? h('p.muted', { style: { fontSize: '12px', margin: '0 0 8px' } }, 'Any file type: PDF, Word, Excel, AutoCAD (.dwg / .dxf), images, ZIP … up to 200 MB each.') : null,
+    list);
 }
 
 function related(entity, row) {

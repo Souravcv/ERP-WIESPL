@@ -1,7 +1,7 @@
 import { db, tx, getSettings, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
-import { APPROVAL_FLOWS } from '../public/js/schema.js';
+import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
@@ -12,9 +12,8 @@ const DOCS = {
 };
 
 export function canApprove(docType, stage, user) {
-  if (user.role === 'admin') return true;
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
-  return !!step && step.roles.includes(user.role);
+  return !!step && hasFunction(user.role, step.fn);
 }
 
 function openStep(docType, docId, row, stepIndex, user) {
@@ -53,8 +52,8 @@ export function decide(approvalId, decision, comments, user) {
   const ap = getRow('approvals', approvalId);
   if (ap.status !== 'Pending') throw new HttpError(400, `Already ${ap.status}`);
   if (!canApprove(ap.doc_type, ap.stage, user)) {
-    const step = (APPROVAL_FLOWS[ap.doc_type] || []).find(s => s.stage === ap.stage);
-    throw new HttpError(403, `“${ap.stage || 'This step'}” must be approved by: ${(step?.roles || ['manager']).join(', ')}`);
+    const step = (APPROVAL_FLOWS[ap.doc_type] || []).find(s => s.stage === ap.stage) || (APPROVAL_FLOWS[ap.doc_type] || [])[0];
+    throw new HttpError(403, `Your role is not allowed to give “${ap.stage || 'this'}” approval (${FUNCTIONS[step?.fn] || 'approval'}). An admin can allow it under Roles & Permissions.`);
   }
   const d = DOCS[ap.doc_type];
   return tx(() => {

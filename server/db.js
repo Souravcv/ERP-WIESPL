@@ -66,6 +66,13 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS ix_stock_item_date ON stock_moves(item_id, type, date);
     CREATE INDEX IF NOT EXISTS ix_stock_doc ON stock_moves(type, doc_no);
     CREATE INDEX IF NOT EXISTS ix_items_code ON items(code);
+    CREATE TABLE IF NOT EXISTS roles (
+      name TEXT PRIMARY KEY, label TEXT NOT NULL, description TEXT, perms TEXT, builtin INTEGER DEFAULT 0,
+      updated_at TEXT DEFAULT (datetime('now','localtime')));
+    CREATE TABLE IF NOT EXISTS attachments (
+      id INTEGER PRIMARY KEY, entity TEXT NOT NULL, record_id INTEGER NOT NULL, filename TEXT NOT NULL, mime TEXT, size INTEGER,
+      stored TEXT NOT NULL, note TEXT, uploaded_by TEXT, at TEXT DEFAULT (datetime('now','localtime')));
+    CREATE INDEX IF NOT EXISTS ix_attach_rec ON attachments(entity, record_id);
     CREATE TABLE IF NOT EXISTS import_batches (
       id INTEGER PRIMARY KEY, at TEXT DEFAULT (datetime('now','localtime')), user TEXT, kind TEXT, file_hash TEXT, summary TEXT);
   `);

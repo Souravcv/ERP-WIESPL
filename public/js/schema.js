@@ -45,14 +45,52 @@ export const STOCK_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM stock_moves o WHERE o
   + (SELECT COALESCE(SUM(${SIGNED_QTY('m')}), 0) FROM stock_moves m WHERE m.item_id = {t}.id
       AND m.date >= COALESCE((SELECT MAX(o.date) FROM stock_moves o WHERE o.item_id = {t}.id AND o.type = 'OPENING'), '0000-00-00')))`;
 
-// Who may approve each step. Admin can always approve.
+// ---------------------------------------------------------------- roles & permissions
+// Built-in roles; admins can edit them and create new ones under Admin → Roles & Permissions.
+export const ROLE_INFO = {
+  admin: { label: 'Administrator', description: 'Everything, incl. users, roles, settings and backup' },
+  manager: { label: 'General Manager', description: 'Everything + final (GM) approval of POs, quotation approval, deletes records' },
+  sales: { label: 'Sales', description: 'Customers, enquiries, follow-ups, quotations, catalog' },
+  accounts: { label: 'Account Manager', description: 'Commercial approval of POs, sales orders, invoices, payments, vendors' },
+  store: { label: 'Store', description: 'Item master, stock inward / issue / transfer / return / scrap, opening stock' },
+  engineer: { label: 'Site Engineer', description: 'Projects, material/drawing approvals, service tickets, material issue' },
+  purchase: { label: 'Purchase Executive', description: 'Vendors, requisitions, prepares purchase orders' },
+  purchase_head: { label: 'Purchase Head', description: 'Approves material requisitions; purchase and store' },
+  technical: { label: 'Technical Manager', description: 'Technical approval of POs; projects' },
+};
+
+// Special actions a role may be allowed, beyond module access.
+export const FUNCTIONS = {
+  approve_quotation: 'Approve quotations',
+  approve_requisition: 'Approve material requisitions (Purchase Head step)',
+  po_technical: 'PO step 2 – Technical Approval',
+  po_commercial: 'PO step 3 – Commercial Approval',
+  po_final: 'PO step 4 – Final approval (GM)',
+  stock_opening: 'Create 1 April opening stock for all items',
+  allow_negative: 'Issue more than the available stock',
+  import: 'Import from Excel',
+  view_audit: 'See change history / activity log',
+};
+const DEFAULT_FUNCTIONS = {
+  manager: Object.keys(FUNCTIONS),
+  purchase_head: ['approve_requisition', 'stock_opening', 'import'],
+  technical: ['po_technical'],
+  accounts: ['po_commercial', 'import'],
+  store: ['stock_opening', 'import'],
+  purchase: ['import'],
+  sales: ['import'],
+  engineer: [],
+};
+export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
+
+// Approval steps; who may approve is the role's function list.
 export const APPROVAL_FLOWS = {
-  Quotation: [{ stage: 'Approval', roles: ['manager'] }],
-  Requisition: [{ stage: 'Purchase Head', roles: ['purchase_head', 'manager'] }],
+  Quotation: [{ stage: 'Approval', fn: 'approve_quotation' }],
+  Requisition: [{ stage: 'Purchase Head', fn: 'approve_requisition' }],
   'Purchase Order': [
-    { stage: 'Technical Approval', roles: ['technical', 'manager'], field: 'tech_approved_by' },
-    { stage: 'Commercial Approval', roles: ['accounts', 'manager'], field: 'comm_approved_by' },
-    { stage: 'Approved By (GM)', roles: ['manager'], field: 'approved_by' },
+    { stage: 'Technical Approval', fn: 'po_technical', field: 'tech_approved_by' },
+    { stage: 'Commercial Approval', fn: 'po_commercial', field: 'comm_approved_by' },
+    { stage: 'Approved By (GM)', fn: 'po_final', field: 'approved_by' },
   ],
 };
 
@@ -474,7 +512,7 @@ export const ENTITIES = {
       { key: 'term_invoice', label: 'Invoice Copies', type: 'text', default: 'setting:po_term_invoice' },
       { key: 'term_jurisdiction', label: 'Jurisdiction', type: 'text', default: 'setting:po_term_jurisdiction' },
       { key: 'terms', label: 'Additional Terms', type: 'textarea', span: 2, default: 'setting:po_term_extra' },
-      { key: 'project_note', label: 'Note (project reference)', type: 'text', span: 2, hint: 'e.g. WIESPL / 1010 / 01/2025-26 - Sanjeevani Hospital - Solapur (OT 1, OT 2 & Passage). Filled from the project if blank.' },
+      { key: 'project_note', label: 'Note', type: 'text', span: 2 },
       { key: 'prepared_by', label: 'Prepared By', type: 'person', default: 'me' },
       { key: 'tech_approved_by', label: 'Technical Approval', type: 'text', readonly: true },
       { key: 'comm_approved_by', label: 'Commercial Approval', type: 'text', readonly: true },
@@ -551,7 +589,25 @@ export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));
 }
 
-export function canWrite(entity, role) {
-  if (role === 'admin') return true;
-  return (ENTITIES[entity]?.write || []).includes(role);
+// Permissions of each role, loaded from the database (server) or from /me (browser).
+let PERMS = {};
+export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
+
+// Defaults for the built-in roles (also the starting point for a new role).
+export function defaultPermissions(role) {
+  const modules = {};
+  for (const [name, ent] of Object.entries(ENTITIES)) {
+    modules[name] = role === 'manager' ? 'full' : (ent.write || []).includes(role) ? 'edit' : 'view';
+  }
+  return { modules, functions: DEFAULT_FUNCTIONS[role] || [] };
 }
+const permsOf = role => PERMS[role] || defaultPermissions(role);
+
+export function moduleAccess(entity, role) {
+  if (role === 'admin') return 'full';
+  return permsOf(role).modules?.[entity] || 'none';
+}
+export const canView = (entity, role) => moduleAccess(entity, role) !== 'none';
+export const canWrite = (entity, role) => ['edit', 'full'].includes(moduleAccess(entity, role));
+export const canDelete = (entity, role) => moduleAccess(entity, role) === 'full';
+export const hasFunction = (role, fn) => role === 'admin' || (permsOf(role).functions || []).includes(fn);

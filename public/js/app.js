@@ -1,38 +1,43 @@
 import { h, api, state, toast, fail, modal } from './ui.js';
-import { ENTITIES, GROUPS } from './schema.js';
+import { ENTITIES, GROUPS, canView, hasFunction, setPermissions } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
 import { recordView } from './views/form.js';
 import { quotationView } from './views/quotation.js';
 import { printView } from './views/print.js';
-import { usersView, settingsView, auditView, importView, searchView } from './views/admin.js';
+import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 
 const $ = id => document.getElementById(id);
 
 // Screens that are not a single module list, shown at the top of their menu group.
+// Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
-  Purchase: [['#/po-tracker', '🔎', 'PO Tracker']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)'], ['#/stock-summary', '📊', 'Stock Summary']],
+  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items']],
 };
+// [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
-  ['#/import', '📥', 'Import from Excel / Backup', ['admin', 'manager', 'sales', 'store', 'purchase', 'purchase_head', 'accounts']],
-  ['#/users', '👥', 'Users & Roles', ['admin']],
-  ['#/settings', '⚙️', 'Company & Quotation Settings', ['admin']],
-  ['#/audit', '🕘', 'Activity Log', ['admin', 'manager']],
+  ['#/import', '📥', 'Import from Excel / Backup', 'import'],
+  ['#/users', '👥', 'Users', 'admin'],
+  ['#/roles', '🛡️', 'Roles & Permissions', 'admin'],
+  ['#/settings', '⚙️', 'Company & Quotation Settings', 'admin'],
+  ['#/audit', '🕘', 'Activity Log', 'view_audit'],
 ];
 
 function buildNav(pending = 0) {
   const nav = $('nav');
+  const role = state.user.role;
   nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'));
   for (const g of GROUPS) {
-    nav.append(h('div.grp', g));
-    for (const [href, icon, label] of EXTRA_LINKS[g] || []) nav.append(h('a', { href }, `${icon} ${label}`));
-    for (const [key, e] of Object.entries(ENTITIES).filter(([, e]) => e.group === g)) {
-      nav.append(h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null));
-    }
+    const links = [
+      ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
+      ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role))
+        .map(([key, e]) => h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null)),
+    ];
+    if (links.length) nav.append(h('div.grp', g), ...links);
   }
-  const admin = ADMIN_LINKS.filter(l => l[3].includes(state.user.role));
+  const admin = ADMIN_LINKS.filter(l => (l[3] === 'admin' ? role === 'admin' : hasFunction(role, l[3])));
   if (admin.length) {
     nav.append(h('div.grp', 'Admin'));
     for (const [href, icon, label] of admin) nav.append(h('a', { href }, `${icon} ${label}`));
@@ -68,6 +73,7 @@ async function route() {
       case 'quotation': await quotationView(view, a); break;
       case 'print': $('app').classList.add('hidden'); await printView($('print-root'), a, b); break;
       case 'users': await usersView(view); break;
+      case 'roles': await rolesView(view); break;
       case 'settings': await settingsView(view); break;
       case 'audit': await auditView(view); break;
       case 'import': await importView(view); break;
@@ -103,6 +109,7 @@ async function start() {
   try {
     const me = await api('/me');
     state.user = me.user; state.settings = me.settings;
+    if (me.perms) setPermissions({ [me.user.role]: me.perms });
     state.people = await api('/people');
   } catch {
     $('app').classList.add('hidden');
@@ -111,7 +118,7 @@ async function start() {
   }
   $('login').classList.add('hidden');
   $('app').classList.remove('hidden');
-  $('user-name').textContent = `${state.user.name} · ${state.user.role}`;
+  $('user-name').textContent = `${state.user.name} · ${state.user.role_label || state.user.role}`;
   buildNav();
   refreshPending();
   if (state.user.must_change) await changePassword(true);

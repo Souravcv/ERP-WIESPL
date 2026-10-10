@@ -375,7 +375,7 @@ export async function templateFile(kind) {
   const t = TEMPLATES[kind];
   if (!t) throw new HttpError(404, 'Unknown template');
   const wb = new ExcelJS.Workbook();
-  const ws = wb.addWorksheet(t.title.slice(0, 31));
+  const ws = wb.addWorksheet(t.title.replace(/[*?:\\/[\]]/g, '-').slice(0, 31));
   const hdr = ws.addRow(t.cols);
   hdr.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   hdr.eachCell(c => { c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E9A' } }; });

@@ -1,35 +1,28 @@
 import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRefCache, fmtDate } from '../ui.js';
-import { ROLES, ENTITIES } from '../schema.js';
+import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions } from '../schema.js';
 import { table } from './list.js';
 
-const ROLE_HELP = {
-  admin: 'Everything, incl. users, settings, backup',
-  manager: 'General Manager: everything + final (GM) approval of POs, quotation approval, deletes records',
-  sales: 'Customers, enquiries, follow-ups, quotations, catalog',
-  accounts: 'Account Manager: commercial approval of POs, sales orders, invoices, payments, vendors',
-  store: 'Store: item master, stock inward / issue / transfer / return / scrap, opening stock',
-  engineer: 'Projects, material/drawing approvals, service tickets, material issue',
-  purchase: 'Purchase Executive: vendors, requisitions, prepares purchase orders',
-  purchase_head: 'Purchase Head: approves material requisitions, purchase and store',
-  technical: 'Technical Manager: technical approval of POs, projects',
-};
-
+// ---------------------------------------------------------------- users (each user gets one role)
 export async function usersView(root) {
-  const users = await api('/users');
+  const [users, roles] = await Promise.all([api('/users'), api('/roles')]);
+  const roleLabel = Object.fromEntries(roles.map(r => [r.name, r.label]));
   const edit = async (u = {}) => {
+    const roleHelp = h('div.muted', { style: { fontSize: '12px', fontWeight: 400 } });
     const f = {
       username: h('input', { value: u.username || '', readOnly: !!u.id }),
       name: h('input', { value: u.name || '' }),
-      role: h('select', ROLES.map(r => h('option', { value: r }, `${r} – ${ROLE_HELP[r]}`))),
+      role: h('select', roles.map(r => h('option', { value: r.name }, r.label))),
       email: h('input', { type: 'email', value: u.email || '' }),
       phone: h('input', { value: u.phone || '' }),
       password: h('input', { type: 'password', autocomplete: 'new-password', placeholder: u.id ? 'Leave blank to keep current' : 'min 8 characters' }),
       active: h('select', h('option', { value: '1' }, 'Active'), h('option', { value: '0' }, 'Disabled')),
     };
-    f.role.value = u.role || 'sales';
+    f.role.value = u.role || roles.find(r => r.name === 'sales')?.name || roles[0].name;
+    const showHelp = () => { roleHelp.textContent = roles.find(r => r.name === f.role.value)?.description || ''; };
+    f.role.onchange = showHelp; showHelp();
     f.active.value = u.id && !u.active ? '0' : '1';
     await modal(u.id ? `Edit ${u.name}` : 'New user', h('div.form-grid',
-      h('label', 'Username', f.username), h('label', 'Full name', f.name), h('label.span-2', 'Role', f.role),
+      h('label', 'Username (for login)', f.username), h('label', 'Full name', f.name), h('label.span-2', 'Role', f.role, roleHelp),
       h('label', 'Email', f.email), h('label', 'Phone', f.phone), h('label', u.id ? 'Reset password' : 'Initial password', f.password), h('label', 'Status', f.active)),
       [{ label: 'Cancel' }, { label: 'Save', cls: 'primary', action: async () => {
         const body = { username: f.username.value, name: f.name.value, role: f.role.value, email: f.email.value, phone: f.phone.value, active: f.active.value === '1' };
@@ -40,12 +33,72 @@ export async function usersView(root) {
       } }]);
   };
   root.replaceChildren(
-    h('div.page-head', h('h1', '👥 Users & Roles'), h('div.actions', h('button.btn.primary', { onclick: () => edit() }, '+ New user'))),
+    h('div.page-head', h('h1', '👥 Users'), h('div.actions', h('a.btn', { href: '#/roles' }, '🛡️ Roles & Permissions'), h('button.btn.primary', { onclick: () => edit() }, '+ New user'))),
+    h('p.muted', 'Each user gets one role. What a role can see and do is set under Roles & Permissions.'),
     h('div.card.flush', h('table.data', h('thead', h('tr', ['Name', 'Username', 'Role', 'Email', 'Phone', 'Status'].map(t => h('th', t)))),
-      h('tbody', users.map(u => h('tr.clickable', { onclick: () => edit(u) }, h('td', u.name), h('td', u.username), h('td', u.role), h('td', u.email || ''), h('td', u.phone || ''),
+      h('tbody', users.map(u => h('tr.clickable', { onclick: () => edit(u) }, h('td', u.name), h('td', u.username), h('td', roleLabel[u.role] || u.role), h('td', u.email || ''), h('td', u.phone || ''),
         h('td', u.active ? badge('Active') : badge('Cancelled'), u.must_change ? h('span.muted', ' (must change password)') : null)))))),
-    h('div.card', h('h2', 'What each role can do'), h('table.data', h('tbody', ROLES.map(r => h('tr', h('td', h('b', r)), h('td', ROLE_HELP[r])))))),
   );
+}
+
+// ---------------------------------------------------------------- roles: what a role handles + module access + functions
+export async function rolesView(root) {
+  const roles = await api('/roles');
+  const edit = async (r = null) => {
+    const isAdminRole = r?.name === 'admin';
+    const label = h('input', { value: r?.label || '', placeholder: 'e.g. Store Keeper, Site Supervisor' });
+    const description = h('textarea', { rows: 3, placeholder: 'What this person handles, e.g. "Receives material at site, issues to installation team, records returns"' });
+    description.value = r?.description || '';
+    const base = r?.perms || roles.find(x => x.name === 'engineer')?.perms || { modules: {}, functions: [] };
+    const modSel = {};
+    const funcChk = {};
+    const levelSelect = cur => {
+      const s = h('select', { style: { width: 'auto' } }, Object.entries(ACCESS_LEVELS).map(([k, v]) => h('option', { value: k }, v)));
+      s.value = cur || 'none';
+      return s;
+    };
+    const setAll = lvl => { for (const s of Object.values(modSel)) s.value = lvl; };
+    const matrix = isAdminRole ? h('p', 'The Administrator always has full access to everything.') : h('div',
+      h('div.toolbar', h('b', 'Module access'), h('span.muted', 'Set all to:'), Object.entries(ACCESS_LEVELS).map(([k, v]) => h('button.btn.small', { type: 'button', onclick: () => setAll(k) }, v))),
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '6px 18px' } },
+        GROUPS.map(g => h('div', h('div', { style: { fontWeight: 700, margin: '8px 0 4px', color: 'var(--text-2)' } }, g),
+          Object.entries(ENTITIES).filter(([, e]) => e.group === g).map(([k, e]) => {
+            modSel[k] = levelSelect(base.modules?.[k]);
+            return h('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '2px 0' } }, h('span', `${e.icon} ${e.label}`), modSel[k]);
+          })))),
+      h('div', { style: { fontWeight: 700, margin: '16px 0 6px' } }, 'Special functions'),
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '4px 18px' } },
+        Object.entries(FUNCTIONS).map(([k, v]) => {
+          funcChk[k] = h('input', { type: 'checkbox', checked: (base.functions || []).includes(k), style: { width: 'auto' } });
+          return h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 400 } }, funcChk[k], v);
+        })),
+      h('p.muted', { style: { fontSize: '12px' } }, 'View = can open and search. View + add / edit = can also create and change records. Full = can also delete. PO approvals happen in order: Technical → Commercial → Final (GM).'));
+    await modal(r ? `Role: ${r.label}` : 'New role', h('div.grid', h('div.form-grid', h('label', 'Role name', label), h('label.span-2', 'What this role handles', description)), matrix),
+      [{ label: 'Cancel' }, ...(r && !r.builtin && !r.users ? [{ label: 'Delete role', cls: 'danger', action: async () => {
+        if (!(await confirmBox(`Delete the role "${r.label}"?`, 'Delete'))) return false;
+        await api(`/roles/${r.name}`, { method: 'DELETE' }); toast('Role deleted'); rolesView(root);
+      } }] : []),
+      { label: 'Save role', cls: 'primary', action: async () => {
+        const perms = isAdminRole ? null : { modules: Object.fromEntries(Object.entries(modSel).map(([k, s]) => [k, s.value])), functions: Object.keys(funcChk).filter(k => funcChk[k].checked) };
+        const saved = await api(r ? `/roles/${r.name}` : '/roles', { method: r ? 'PUT' : 'POST', body: { label: label.value, description: description.value, perms } });
+        if (saved.name === state.user.role && saved.perms) setPermissions({ [saved.name]: saved.perms });
+        toast(r ? 'Role saved' : `Role "${saved.label}" created. Assign it to users on the Users page.`);
+        rolesView(root);
+      } }], { wide: true });
+  };
+  const summary = r => {
+    if (!r.perms) return 'Everything';
+    const by = lvl => Object.entries(r.perms.modules).filter(([, v]) => v === lvl).map(([k]) => ENTITIES[k]?.label).filter(Boolean);
+    const edit = [...by('full'), ...by('edit')];
+    return `${edit.length ? 'Edits: ' + edit.join(', ') : 'View only'}${r.perms.functions.length ? ' · Can: ' + r.perms.functions.map(f => FUNCTIONS[f]).join('; ') : ''}`;
+  };
+  root.replaceChildren(
+    h('div.page-head', h('h1', '🛡️ Roles & Permissions'), h('div.actions', h('a.btn', { href: '#/users' }, '👥 Users'), h('button.btn.primary', { onclick: () => edit().catch(fail) }, '+ New role'))),
+    h('p.muted', 'A role says what a person handles and which tabs and functions they get. Create as many as you need (e.g. "Store Keeper – Site", "Drawing Engineer") and assign them to users.'),
+    h('div.card.flush', h('table.data', h('thead', h('tr', ['Role', 'What they handle', 'Access', 'Users'].map(t => h('th', t)))),
+      h('tbody', roles.map(r => h('tr.clickable', { onclick: () => edit(r).catch(fail) },
+        h('td.nowrap', h('b', r.label), r.builtin ? h('div.muted', { style: { fontSize: '11px' } }, 'built-in') : null),
+        h('td', r.description || ''), h('td', { style: { fontSize: '12px', color: 'var(--text-2)', maxWidth: '520px' } }, summary(r)), h('td.num', r.users)))))));
 }
 
 const SETTINGS_FORM = [

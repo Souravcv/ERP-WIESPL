@@ -15,7 +15,8 @@ import {
 import { listRows, getRow, insertRow, updateRow, deleteRow, options, entityOr404, HttpError } from './crud.js';
 import * as wf from './workflows.js';
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, ROLES, canWrite, STOCK_SQL } from '../public/js/schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
+import * as roles from './roles.js';
 import { fyOf } from '../public/js/calc.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -23,6 +24,7 @@ const PORT = Number(process.env.PORT) || 3000;
 
 migrate();
 seed();
+roles.seedRoles();
 purgeExpiredSessions();
 
 const app = express();
@@ -57,7 +59,10 @@ api.post('/logout', (req, res) => { destroySession(req, res); res.json({ ok: tru
 
 api.use(authenticate);
 
-api.get('/me', wrap(req => ({ user: publicUser(req.user), settings: getSettings() })));
+api.get('/me', wrap(req => {
+  const r = roles.listRoles().find(x => x.name === req.user.role);
+  return { user: { ...publicUser(req.user), role_label: r?.label || req.user.role }, settings: getSettings(), perms: r?.perms || null };
+}));
 api.post('/me/password', wrap(req => {
   const { current, password } = req.body || {};
   if (!verifyPassword(current, req.user.pass_hash)) throw new HttpError(400, 'Current password is wrong');
@@ -72,7 +77,7 @@ api.get('/users', wrap(() => db.prepare('SELECT * FROM users ORDER BY active DES
 api.get('/people', wrap(() => db.prepare('SELECT name, role FROM users WHERE active = 1 ORDER BY name').all()));
 api.post('/users', requireRole(), wrap(req => {
   const { username, name, role, email, phone, password } = req.body || {};
-  if (!username || !name || !ROLES.includes(role)) throw new HttpError(400, 'Username, name and a valid role are required');
+  if (!username || !name || !roles.roleExists(role)) throw new HttpError(400, 'Username, name and a valid role are required');
   if (!password || password.length < 8) throw new HttpError(400, 'Initial password must be at least 8 characters');
   if (db.prepare('SELECT 1 FROM users WHERE lower(username) = lower(?)').get(username)) throw new HttpError(409, 'Username already exists');
   const info = db.prepare('INSERT INTO users (username, name, role, email, phone, pass_hash, must_change) VALUES (?, ?, ?, ?, ?, ?, 1)')
@@ -84,7 +89,7 @@ api.put('/users/:id', requireRole(), wrap(req => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
   if (!u) throw new HttpError(404, 'User not found');
   const { name = u.name, role = u.role, email = u.email, phone = u.phone, active = !!u.active, password } = req.body || {};
-  if (!ROLES.includes(role)) throw new HttpError(400, 'Invalid role');
+  if (!roles.roleExists(role)) throw new HttpError(400, 'Invalid role');
   if (u.id === req.user.id && (role !== 'admin' || !active)) throw new HttpError(400, 'You cannot remove your own admin access');
   db.prepare('UPDATE users SET name = ?, role = ?, email = ?, phone = ?, active = ? WHERE id = ?').run(name, role, email, phone, active ? 1 : 0, u.id);
   if (password) {
@@ -98,7 +103,8 @@ api.put('/users/:id', requireRole(), wrap(req => {
 }));
 api.get('/settings', wrap(() => getSettings()));
 api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
-api.get('/audit', requireRole('manager'), wrap(req => {
+api.get('/audit', wrap(req => {
+  if (!hasFunction(req.user.role, 'view_audit')) throw new HttpError(403, 'You do not have permission to see the activity log');
   const { entity, record_id } = req.query;
   if (entity && record_id) return db.prepare('SELECT * FROM audit WHERE entity = ? AND record_id = ? ORDER BY id DESC LIMIT 200').all(entity, Number(record_id));
   return db.prepare('SELECT * FROM audit ORDER BY id DESC LIMIT 1000').all();
@@ -166,10 +172,13 @@ api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submit
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- store
-api.post('/stock/entry', need('stock_moves'), wrap(req => stock.stockEntry(req.body, req.user)));
+api.post('/stock/entry', need('stock_moves'), wrap(req => stock.stockEntry({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user)));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
 api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
-api.post('/stock/opening', requireRole('manager', 'store', 'purchase_head'), wrap(req => stock.carryForwardOpening(req.body?.fy, req.user)));
+api.post('/stock/opening', wrap(req => {
+  if (!hasFunction(req.user.role, 'stock_opening')) throw new HttpError(403, 'You do not have permission to create opening stock');
+  return stock.carryForwardOpening(req.body?.fy, req.user);
+}));
 api.get('/reports/po-lines', wrap(req => stock.poLines(req.query)));
 api.get('/export/stock-summary', wrap(async (req, res) => {
   const { from, to, rows } = stock.stockSummary(req.query);
@@ -266,6 +275,33 @@ api.post('/import/enquiries', need('enquiries'), express.raw({ type: () => true,
   return importEnquiries(req.body, req.user);
 }));
 
+// ---------------------------------------------------------------- roles & permissions (admin)
+const viewable = req => { entityOr404(req.params.entity); if (!canView(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this module'); };
+api.get('/roles', wrap(() => roles.listRoles()));
+api.post('/roles', requireRole(), wrap(req => roles.saveRole(null, req.body, req.user)));
+api.put('/roles/:name', requireRole(), wrap(req => roles.saveRole(req.params.name, req.body, req.user)));
+api.delete('/roles/:name', requireRole(), wrap(req => { roles.deleteRole(req.params.name, req.user); return { ok: true }; }));
+
+// ---------------------------------------------------------------- file attachments (work orders, drawings, CAD …)
+api.get('/attachments/:entity/:id', wrap(req => { viewable(req); return roles.listAttachments(req.params.entity, req.params.id); }));
+api.post('/attachments/:entity/:id', express.raw({ type: () => true, limit: '200mb' }), wrap(req => {
+  if (!canWrite(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have permission to add files here');
+  return roles.saveAttachment(req.params.entity, req.params.id, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user);
+}));
+api.get('/files/:id', wrap((req, res) => {
+  const a = roles.attachmentFile(req.params.id);
+  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  const inline = req.query.inline && /^(image\/|application\/pdf|text\/plain)/.test(a.mime || '');
+  res.setHeader('Content-Type', inline ? a.mime : 'application/octet-stream');
+  res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
+  res.sendFile(a.full);
+}));
+api.delete('/files/:id', wrap(req => {
+  const a = roles.attachmentFile(req.params.id);
+  roles.deleteAttachment(req.params.id, req.user, canDelete(a.entity, req.user.role));
+  return { ok: true };
+}));
+
 // ---------------------------------------------------------------- generic CRUD for every module
 // Documents locked once they enter approval; changes go through Revise / status actions.
 const LOCKED = {
@@ -275,8 +311,8 @@ const LOCKED = {
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
-api.get('/:entity', wrap(req => listRows(req.params.entity, req.query)));
-api.get('/:entity/:id', wrap(req => getRow(req.params.entity, req.params.id)));
+api.get('/:entity', wrap(req => { viewable(req); return listRows(req.params.entity, req.query); }));
+api.get('/:entity/:id', wrap(req => { viewable(req); return getRow(req.params.entity, req.params.id); }));
 api.post('/:entity', wrap(req => {
   const ent = entityOr404(req.params.entity);
   if (!canWrite(req.params.entity, req.user.role) || ent.noCreate) throw new HttpError(403, 'You do not have permission to create this');
@@ -292,7 +328,7 @@ api.put('/:entity/:id', wrap(req => {
   }
   return updateRow(entity, id, req.body || {}, req.user);
 }));
-api.delete('/:entity/:id', requireRole('manager'), wrap(req => { deleteRow(req.params.entity, req.params.id, req.user); return { ok: true }; }));
+api.delete('/:entity/:id', wrap(req => { if (!canDelete(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have permission to delete this'); deleteRow(req.params.entity, req.params.id, req.user); return { ok: true }; }));
 
 app.use('/api', api);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
