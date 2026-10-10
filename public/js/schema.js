@@ -38,12 +38,17 @@ export const MOVE_TYPES = {
   ADJUST: { label: 'Adjustment (+/-)', sign: 1, doc: 'ADJ' },
 };
 const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP') THEN -${m}.qty ELSE 0 END`;
+// Quantity of a BOQ line sent on challans with the given statuses (challan lines carry boq_item_id).
+const BOQ_SENT = statuses => `(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.qty') AS REAL)), 0) FROM challans c, json_each(c.lines) j
+  WHERE c.status IN (${statuses}) AND CAST(json_extract(j.value, '$.boq_item_id') AS INTEGER) = {t}.id)`;
 // Current stock: the latest 1-April opening entry (or the legacy opening field) plus every movement since it.
-export const STOCK_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM stock_moves o WHERE o.item_id = {t}.id AND o.type = 'OPENING')
-    THEN (SELECT o.qty FROM stock_moves o WHERE o.item_id = {t}.id AND o.type = 'OPENING' ORDER BY o.date DESC, o.id DESC LIMIT 1)
+// Only openings dated today or earlier count, so an opening entered in advance for next April changes nothing yet.
+const OPEN_OK = `o.item_id = {t}.id AND o.type = 'OPENING' AND o.date <= date('now', 'localtime')`;
+export const STOCK_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM stock_moves o WHERE ${OPEN_OK})
+    THEN (SELECT o.qty FROM stock_moves o WHERE ${OPEN_OK} ORDER BY o.date DESC, o.id DESC LIMIT 1)
     ELSE COALESCE({t}.opening_stock, 0) END
   + (SELECT COALESCE(SUM(${SIGNED_QTY('m')}), 0) FROM stock_moves m WHERE m.item_id = {t}.id
-      AND m.date >= COALESCE((SELECT MAX(o.date) FROM stock_moves o WHERE o.item_id = {t}.id AND o.type = 'OPENING'), '0000-00-00')))`;
+      AND m.date >= COALESCE((SELECT MAX(o.date) FROM stock_moves o WHERE ${OPEN_OK}), '0000-00-00')))`;
 
 // ---------------------------------------------------------------- roles & permissions
 // Built-in roles; admins can edit them and create new ones under Admin → Roles & Permissions.
@@ -325,7 +330,7 @@ export const ENTITIES = {
     search: ['code', 'project_no', 'name', 'site', 'site_address', 'engineer', 'notes'],
     list: ['project_no', 'name', 'customer_id', 'site', 'stage', 'material_cost', 'po_value', 'status'],
     statusField: 'status',
-    related: [['requisitions', 'project_id'], ['purchase_orders', 'project_id'], ['stock_moves', 'project_id'], ['material_approvals', 'project_id'], ['invoices', 'project_id'], ['service_tickets', 'project_id']],
+    related: [['challans', 'project_id'], ['requisitions', 'project_id'], ['purchase_orders', 'project_id'], ['stock_moves', 'project_id'], ['material_approvals', 'project_id'], ['invoices', 'project_id'], ['service_tickets', 'project_id']],
     fields: [
       { key: 'code', label: 'Internal Code', type: 'text', readonly: true },
       { key: 'project_no', label: 'Project / Work Order No', type: 'text', hint: 'e.g. WIESPL / 1001 / 04/2026-27' },
@@ -347,6 +352,68 @@ export const ENTITIES = {
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'On Hold', 'Completed', 'Cancelled'], default: 'Active' },
       { key: 'warranty_until', label: 'Warranty Until', type: 'date' },
       { key: 'notes', label: 'Site Notes', type: 'textarea', span: 2 },
+    ],
+  },
+  boq_items: {
+    label: 'Work Order BOQ', singular: 'BOQ Line', group: 'Sales & Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'),
+    display: "COALESCE({t}.sr_no || ' ', '') || substr(COALESCE({t}.heading || ' › ', '') || {t}.description, 1, 90)",
+    search: ['section', 'wo_no', 'sr_no', 'heading', 'description', 'remarks'],
+    list: ['section', 'sr_no', 'description', 'uom', 'qty', 'dispatched', 'delivered', 'pending', 'delivery_status'],
+    statusField: 'kind',
+    fields: [
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true },
+      { key: 'section', label: 'Section / Annexure', type: 'text', hint: 'e.g. MOT PPGL, Passage, MGPS, Electrical' },
+      { key: 'wo_no', label: 'Work Order No', type: 'text' },
+      { key: 'sr_no', label: 'Sr. No.', type: 'text' },
+      { key: 'kind', label: 'Line Type', type: 'select', options: ['Item', 'Heading'], default: 'Item' },
+      { key: 'heading', label: 'Under heading', type: 'text', span: 2 },
+      { key: 'description', label: 'Description', type: 'textarea', span: 2, required: true },
+      { key: 'uom', label: 'UOM', type: 'text' },
+      { key: 'qty', label: 'WO Qty', type: 'number', hint: 'Blank = quantity not fixed (UR)' },
+      { key: 'area_qty', label: 'Qty per area', type: 'text', hint: 'e.g. Mj OT 1: 1, Mj OT 2: 1' },
+      { key: 'item_id', label: 'Store item (for stock)', type: 'ref', ref: 'items', hint: 'Link to deduct store stock when dispatched' },
+      { key: 'dispatched', label: 'Dispatched', type: 'number', computed: BOQ_SENT("'Dispatched','Delivered'") },
+      { key: 'delivered', label: 'Delivered (site confirmed)', type: 'number', computed: BOQ_SENT("'Delivered'") },
+      { key: 'pending', label: 'Pending', type: 'number', computed: `CASE WHEN {t}.qty IS NULL THEN NULL ELSE MAX({t}.qty - ${BOQ_SENT("'Dispatched','Delivered'")}, 0) END` },
+      { key: 'delivery_status', label: 'Status', type: 'select', options: ['', 'Pending', 'Partly Dispatched', 'Dispatched', 'Delivered', 'Qty TBD'], computed: `CASE WHEN {t}.kind = 'Heading' THEN ''
+        WHEN {t}.qty IS NULL THEN CASE WHEN ${BOQ_SENT("'Dispatched','Delivered'")} > 0 THEN 'Partly Dispatched' ELSE 'Qty TBD' END
+        WHEN ${BOQ_SENT("'Delivered'")} >= {t}.qty THEN 'Delivered'
+        WHEN ${BOQ_SENT("'Dispatched','Delivered'")} >= {t}.qty THEN 'Dispatched'
+        WHEN ${BOQ_SENT("'Dispatched','Delivered'")} > 0 THEN 'Partly Dispatched' ELSE 'Pending' END` },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+      { key: 'sort', label: 'Order', type: 'number', hidden: true },
+    ],
+  },
+  challans: {
+    label: 'Delivery Challans', singular: 'Delivery Challan', group: 'Sales & Projects', icon: '🚚', write: ENG.concat('store', 'purchase', 'purchase_head'),
+    display: "{t}.challan_no",
+    search: ['challan_no', 'ship_to', 'vehicle_no', 'transporter', 'lr_no', 'eway_bill', 'received_by', 'remarks'],
+    list: ['challan_no', 'date', 'project_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
+    statusField: 'status', print: 'challan',
+    fields: [
+      { key: 'challan_no', label: 'Challan No', type: 'text', readonly: true, hint: 'Auto: DC-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'project_id', label: 'Project / Work Order', type: 'ref', ref: 'projects', required: true },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
+      { key: 'challan_type', label: 'Challan Type', type: 'select', options: ['Non-Returnable', 'Returnable'], default: 'Non-Returnable' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Dispatched', 'Delivered', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'ship_to', label: 'Ship To (site address)', type: 'textarea', span: 2 },
+      { key: 'site_contact', label: 'Site Contact / Phone', type: 'text' },
+      { key: 'vehicle_no', label: 'Vehicle No', type: 'text' },
+      { key: 'transporter', label: 'Transporter', type: 'text' },
+      { key: 'lr_no', label: 'LR / Docket No', type: 'text' },
+      { key: 'driver', label: 'Driver Name / Phone', type: 'text' },
+      { key: 'eway_bill', label: 'E-way Bill No', type: 'text' },
+      { key: 'lines', label: 'Material', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
+        { key: 'description', label: 'Description', type: 'textarea', width: 320 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+        { key: 'qty', label: 'Qty', type: 'number', width: 80 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+      ] },
+      { key: 'dispatched_by', label: 'Dispatched By', type: 'text', readonly: true },
+      { key: 'delivered_date', label: 'Delivered On', type: 'date', readonly: true },
+      { key: 'received_by', label: 'Received By (site)', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
   invoices: {

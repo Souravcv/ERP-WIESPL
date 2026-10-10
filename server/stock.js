@@ -170,6 +170,7 @@ export function poLines(q = {}) {
 export function carryForwardOpening(fy, user) {
   if (!/^\d{2}-\d{2}$/.test(fy || '')) throw new HttpError(400, 'Financial year must look like 26-27');
   const date = fyStart(fy);
+  if (date > today()) throw new HttpError(400, `FY 20${fy} has not started yet. Create its opening stock on or after ${date.split('-').reverse().join('/')}, once all March entries are in.`);
   const prevDay = new Date(new Date(date) - 864e5).toISOString().slice(0, 10);
   const { rows } = stockSummary({ from: '0000-01-01', to: prevDay });
   const has = db.prepare("SELECT 1 FROM stock_moves WHERE item_id = ? AND type = 'OPENING' AND date = ?");

@@ -6,6 +6,7 @@ import { table, newRecord, recordHref } from './list.js';
 const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
+  challans: ['Dispatched', 'Delivered', 'Cancelled'],
 };
 const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
 export const canApprove = (docType, stage) => !!stepOf(docType, stage) && hasFunction(state.user.role, stepOf(docType, stage).fn);
@@ -189,7 +190,41 @@ function actionsFor(entity, row, reload) {
         location.hash = `#/view/invoices/${inv.id}`;
       }) }, '💳 Create Invoice'));
       break;
+    case 'boq_items':
+      if (row.project_id) A.push(h('a.btn', { href: `#/project-boq/${row.project_id}` }, '📑 Project BOQ & Dispatch'));
+      break;
+    case 'challans': {
+      const st = row.status;
+      A.push(h('a.btn', { href: `#/print/challan/${id}`, target: '_blank' }, '🖨 Print Challan'));
+      if (row.project_id) A.push(h('a.btn', { href: `#/project-boq/${row.project_id}` }, '📑 BOQ status'));
+      if (can(entity) && st === 'Draft') A.push(h('button.btn.good', { onclick: go(async () => {
+        const stockLines = (row.lines || []).filter(l => l.item_id).length;
+        if (!(await confirmBox(`Dispatch ${row.challan_no}? The material is marked as sent against the work order${stockLines ? ` and ${stockLines} store item(s) are issued from stock` : ''}. The challan cannot be edited afterwards.`, 'Dispatch'))) return;
+        try {
+          await post(`/challans/${id}/dispatch`, {});
+        } catch (e) {
+          if (!/Not enough stock|More than the work order/.test(e.message) || !hasFunction(state.user.role, 'allow_negative')) throw e;
+          if (!(await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]))) return;
+          await post(`/challans/${id}/dispatch`, { allowNegative: true, force: true });
+        }
+        toast('Dispatched');
+        reload();
+      }) }, '🚚 Dispatch'));
+      if (can(entity) && st === 'Dispatched') A.push(h('button.btn.good', { onclick: go(async () => {
+        const who = h('input', { placeholder: 'Name of the person at site who received it' });
+        const date = h('input', { type: 'date', value: today() });
+        const ok = await modal(`Delivered – ${row.challan_no}`, h('div.grid', h('label', 'Received by', who), h('label', 'Delivered on', date),
+          h('p.muted', 'Tip: attach the signed challan copy below as proof of delivery.')), [{ label: 'Cancel', value: false }, { label: '✓ Mark delivered', cls: 'good', value: true }]);
+        if (!ok) return;
+        await post(`/challans/${id}/deliver`, { received_by: who.value, delivered_date: date.value });
+        toast('Marked delivered');
+        reload();
+      }) }, '✓ Mark Delivered'));
+      if (can(entity) && st === 'Draft') A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this challan?') }, 'Cancel'));
+      break;
+    }
     case 'projects':
+      A.push(h('a.btn.primary', { href: `#/project-boq/${id}` }, '📑 Work Order BOQ & Dispatch'));
       if (can('requisitions')) A.push(h('button.btn', { onclick: () => newRecord('requisitions', { project_id: id }) }, '📝 Requisition'));
       if (can('stock_moves')) A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&project=${id}` }, '📤 Issue Material'));
       if (can('purchase_orders')) A.push(h('button.btn', { onclick: () => newRecord('purchase_orders', { project_id: id }) }, '🛒 Purchase Order'));
@@ -378,7 +413,7 @@ export async function recordView(root, entity, id) {
 }
 
 // ---------------------------------------------------------------- files: work orders, drawings, CAD (dwg/dxf), PDFs, photos …
-const ATTACH_TITLES = { projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
+const ATTACH_TITLES = { challans: 'Signed challan / proof of delivery', projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
 const fileSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 const PREVIEWABLE = /\.(pdf|png|jpe?g|gif|webp|txt)$/i;
 

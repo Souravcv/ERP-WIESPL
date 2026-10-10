@@ -233,6 +233,35 @@ function requisitionDoc(r, s) {
       h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td'), h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? `${r.approved_by} (${r.approved_at || ''})` : r.status))))));
 }
 
+function challanDoc(c, project, s) {
+  const lines = (c.lines || []).filter(l => l.description || Number(l.qty));
+  const blanks = Math.max(0, 8 - lines.length);
+  const cellInfo = (k, v) => [h('th', { style: { width: '17%' } }, k), h('td', v || '')];
+  return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
+    companyHead(s, `DELIVERY CHALLAN${c.challan_type === 'Returnable' ? ' (RETURNABLE)' : ''}`),
+    h('div', { style: { textAlign: 'center', fontSize: '11px', marginBottom: '6px' } }, `GSTIN : ${s.gstin || ''}   ·   PAN : ${s.pan || ''}`),
+    h('table', h('tbody',
+      h('tr', ...cellInfo('Challan No', h('b', c.challan_no)), ...cellInfo('Date', fmtDate(c.date))),
+      h('tr', ...cellInfo('Work Order', project?.project_no || ''), ...cellInfo('Project', project?.name || c.project_id_label)),
+      h('tr', h('th', 'Consignee / Ship To'), h('td', { colspan: 3 }, ...multiline(c.ship_to || ''), c.site_contact ? [h('br'), `Contact: ${c.site_contact}`] : null)),
+      h('tr', ...cellInfo('Vehicle No', c.vehicle_no), ...cellInfo('Transporter', c.transporter)),
+      h('tr', ...cellInfo('LR / Docket No', c.lr_no), ...cellInfo('E-way Bill No', c.eway_bill)),
+      c.driver ? h('tr', ...cellInfo('Driver', c.driver), h('th'), h('td')) : null)),
+    h('table', { style: { marginTop: '8px' } },
+      h('thead', h('tr', ['Sr.', 'Description of Material', 'UOM', 'Qty', 'Remark'].map((x, i) => h('th' + (i === 3 ? '.num' : ''), x)))),
+      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td.spec', l.description || ''), h('td', l.uom || ''), h('td.num', h('b', l.qty ?? '')), h('td', l.remark || ''))),
+        Array.from({ length: blanks }, () => h('tr', Array.from({ length: 5 }, () => h('td', { style: { height: '20px' } }, ''))))),
+      h('tfoot', h('tr', h('td', { colspan: 3 }, h('b', `Total items: ${lines.length}`)), h('td.num', h('b', round2(lines.reduce((a, l) => a + (Number(l.qty) || 0), 0)))), h('td')))),
+    c.remarks ? h('p', h('b', 'Remarks: '), c.remarks) : null,
+    h('p', { style: { fontSize: '11px' } }, 'Material dispatched against the above work order for supply / installation at site. Please check the material on receipt and sign with date and stamp.'),
+    h('table', { style: { marginTop: '18px', textAlign: 'center' } }, h('tbody',
+      h('tr', ['Prepared By', 'Checked By (Store)', 'Driver / Transporter', "Receiver's Sign, Date & Stamp"].map(x => h('th', { style: { width: '25%' } }, x))),
+      h('tr', [plainName(c.dispatched_by) || c.created_by, '', '', c.received_by ? `${c.received_by}${c.delivered_date ? ' · ' + fmtDate(c.delivered_date) : ''}` : ''].map(x => h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, x || ''))))),
+    h('div', { style: { marginTop: '6px' } }, h('b', `For, ${s.company_name}`)),
+    c.status === 'Draft' ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, 'DRAFT – not yet dispatched') : null,
+    footer()));
+}
+
 const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
 function stockSlipDoc(type, docNo, moves, s) {
   const m0 = moves[0] || {};
@@ -279,6 +308,11 @@ export async function printView(root, kind, id) {
     const v = await api(`/vendors/${po.vendor_id}`);
     title = `PO ${po.po_no} ${v.name}`;
     doc = poDoc(po, v, s);
+  } else if (kind === 'challan') {
+    const c = await api(`/challans/${id}`);
+    const project = c.project_id ? await api(`/projects/${c.project_id}`).catch(() => null) : null;
+    title = c.challan_no;
+    doc = challanDoc(c, project, s);
   } else if (kind === 'requisition') {
     const r = await api(`/requisitions/${id}`);
     title = r.req_no;

@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { db, migrate, getSettings, setSettings, audit, RESTORE_FILE } from './db.js';
 import * as stock from './stock.js';
 import * as importer from './importer.js';
+import * as dispatch from './dispatch.js';
 import { seed } from './seed.js';
 import {
   authenticate, requireRole, createSession, destroySession, verifyPassword, hashPassword, publicUser,
@@ -171,6 +172,15 @@ api.post('/purchase_orders/:id/submit', need('purchase_orders'), wrap(req => wf.
 api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submitForApproval('Requisition', req.params.id, req.user)));
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
+// ---------------------------------------------------------------- work order BOQ & delivery challans
+api.post('/projects/:id/boq/import', need('boq_items'), express.raw({ type: () => true, limit: '60mb' }), wrap(req => {
+  if (!req.body?.length) throw new HttpError(400, 'Upload the work order .xlsx');
+  return dispatch.importBoq(req.params.id, req.body, req.query.mode, req.user);
+}));
+api.post('/projects/:id/challan', need('challans'), wrap(req => dispatch.challanFromBoq(req.params.id, req.body?.picks, req.user)));
+api.post('/challans/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchChallan(req.params.id, req.body, req.user)));
+api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
+
 // ---------------------------------------------------------------- store
 api.post('/stock/entry', need('stock_moves'), wrap(req => stock.stockEntry({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user)));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
@@ -249,6 +259,7 @@ const TRANSITIONS = {
   quotations: { Approved: ['Sent', 'Lost'], Sent: ['Won', 'Lost'], Rejected: ['Draft'], Lost: ['Draft'] },
   purchase_orders: { Draft: ['Cancelled'], Approved: ['Sent', 'Cancelled'], Sent: ['Cancelled'], Rejected: ['Draft', 'Cancelled'], 'Partially Received': ['Closed'] },
   requisitions: { Draft: ['Closed'], Rejected: ['Draft', 'Closed'], Approved: ['Closed'], 'Converted to PO': ['Closed'] },
+  challans: { Draft: ['Cancelled'] },
 };
 api.post('/:entity/:id/status', wrap(req => {
   const { entity, id } = req.params;
@@ -308,6 +319,7 @@ const LOCKED = {
   quotations: ['Pending Approval', 'Approved', 'Sent', 'Won', 'Lost', 'Superseded'],
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
+  challans: ['Dispatched', 'Delivered', 'Cancelled'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
@@ -324,7 +336,7 @@ api.put('/:entity/:id', wrap(req => {
   if (!canWrite(entity, req.user.role)) throw new HttpError(403, 'You do not have permission to edit this');
   if (LOCKED[entity]) {
     const st = db.prepare(`SELECT status FROM ${entity} WHERE id = ?`).get(Number(id))?.status;
-    if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked. Use Revise to make changes.`);
+    if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked.${entity === 'quotations' ? ' Use Revise to make changes.' : ''}`);
   }
   return updateRow(entity, id, req.body || {}, req.user);
 }));

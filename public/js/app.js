@@ -7,6 +7,7 @@ import { quotationView } from './views/quotation.js';
 import { printView } from './views/print.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
+import { projectBoqView } from './views/dispatch.js';
 
 const $ = id => document.getElementById(id);
 
@@ -80,6 +81,7 @@ async function route() {
       case 'stock-entry': await stockEntryView(view); break;
       case 'stock-summary': await stockSummaryView(view); break;
       case 'po-tracker': await poTrackerView(view); break;
+      case 'project-boq': await projectBoqView(view, a); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }

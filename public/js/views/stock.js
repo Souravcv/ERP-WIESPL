@@ -1,6 +1,6 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
 import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge } from '../ui.js';
-import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, hasFunction } from '../schema.js';
+import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker } from './form.js';
 
@@ -13,11 +13,30 @@ const suggest = (list, attrs = {}) => {
   return h('span', { style: { display: 'contents' } }, h('input', { list: id, ...attrs }), h('datalist', { id }, list.map(v => h('option', { value: v }))));
 };
 
+// What has come in against a PO so far, line by line (✓ = fully received).
+function poStatus(po) {
+  let heading = '';
+  const rows = (po.lines || []).map(l => {
+    if (l.description) heading = l.description;
+    const qty = Number(l.qty) || 0;
+    if (!qty) return null;
+    const rec = Number(l.received) || 0, pend = round2(Math.max(0, qty - rec));
+    return h('tr', h('td', { style: { color: pend ? 'var(--muted)' : 'var(--good)', fontSize: '16px' } }, pend ? (rec ? '◐' : '○') : '✓'),
+      h('td', [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – ')),
+      h('td', l.uom || ''), h('td.num', qty), h('td.num', rec), h('td.num', { style: { fontWeight: 600, color: pend ? 'var(--warn)' : '' } }, pend));
+  }).filter(Boolean);
+  return h('div.card', h('h2', `PO ${po.po_no} – ${po.vendor_id_label || ''}: received so far`, ' ', badge(po.status)),
+    h('table.data', h('thead', h('tr', ['', 'Item', 'UOM', 'Ordered', 'Received', 'Pending'].map((x, i) => h('th' + (i >= 3 ? '.num' : ''), x)))), h('tbody', rows)),
+    h('p.muted', { style: { fontSize: '12px', margin: '6px 0 0' } }, 'Lines still pending are pre-filled below with the pending quantity. Change the quantities to what actually arrived.'));
+}
+
 // ---------------------------------------------------------------- Stock entry (one slip, many items)
 export async function stockEntryView(root) {
   const p = qs();
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
-  const [items, vendors, projects] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects')]);
+  const [items, vendors, projects, allPos] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
+    canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : []]);
+  const openPos = allPos.filter(x => ['Approved', 'Sent', 'Partially Received'].includes(x.status)).map(x => ({ id: x.id, label: `${x.po_no} · ${x.vendor_id_label || ''}` }));
   const itemById = new Map(items.map(i => [i.id, i]));
   const itemOpts = items.map(i => ({ id: i.id, label: `${i.code} · ${i.name}` }));
   const header = {};
@@ -49,7 +68,8 @@ export async function stockEntryView(root) {
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
     const F = [field('Date *', date), field({ INWARD: 'GRN No', OUTWARD: 'Issue No', TRANSFER: 'Transfer No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
-      if (po) F.push(field('Against PO', h('input', { value: `${po.po_no} · ${po.vendor_id_label}`, readOnly: true })));
+      // Choosing a PO reloads the slip with that PO's pending lines.
+      F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('PO No (text)', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27 or Verbal' }))));
@@ -96,6 +116,7 @@ export async function stockEntryView(root) {
     });
     body.replaceChildren(
       h('div.card', h('div.form-grid', headerFields())),
+      po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
         h('thead', h('tr', h('th', '#'), h('th', 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), h('th', priced ? 'Price / piece *' : 'Price / piece'), h('th.num', 'Value'), h('th', 'Remark'), h('th'))),
         h('tbody', rows))),

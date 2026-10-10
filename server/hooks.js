@@ -91,6 +91,18 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
+    case 'challans': {
+      if (!existing && !row.challan_no) row.challan_no = docNo('challan', date, (n, fy) => `DC-${n}/20${fy}`);
+      const pid = row.project_id ?? existing?.project_id;
+      if (pid && (!(row.ship_to ?? existing?.ship_to) || !(row.customer_id ?? existing?.customer_id))) {
+        const p = db.prepare('SELECT p.name, p.site, p.site_address, p.customer_id, c.name cname, c.address caddr FROM projects p LEFT JOIN customers c ON c.id = p.customer_id WHERE p.id = ?').get(pid);
+        if (p) {
+          if (!(row.customer_id ?? existing?.customer_id) && p.customer_id) row.customer_id = p.customer_id;
+          if (!(row.ship_to ?? existing?.ship_to)) row.ship_to = [p.cname || p.name, p.site_address || p.caddr, p.site].filter(Boolean).join('\n');
+        }
+      }
+      break;
+    }
     case 'requisitions':
       if (!existing && !row.req_no) row.req_no = docNo('requisition', date, (n, fy) => `REQ-${n}/20${fy}`);
       if ((row.project_id ?? existing?.project_id) && !(row.project_name ?? existing?.project_name)) {
