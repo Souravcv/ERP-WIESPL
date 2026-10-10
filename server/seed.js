@@ -400,6 +400,13 @@ export function seed() {
   }
 
   if (!db.prepare('SELECT COUNT(*) c FROM users').get().c) {
+    // On hosts without file access (e.g. Render) set ADMIN_PASSWORD in the environment instead.
+    if (process.env.ADMIN_PASSWORD) {
+      db.prepare('INSERT INTO users (username, name, role, pass_hash, must_change) VALUES (?, ?, ?, ?, 0)')
+        .run('admin', 'Administrator', 'admin', hashPassword(process.env.ADMIN_PASSWORD));
+      console.log('\n  First run: admin login created with the ADMIN_PASSWORD environment variable.\n');
+      return;
+    }
     const pw = crypto.randomBytes(6).toString('base64url');
     db.prepare('INSERT INTO users (username, name, role, pass_hash, must_change) VALUES (?, ?, ?, ?, 1)')
       .run('admin', 'Administrator', 'admin', hashPassword(pw));
