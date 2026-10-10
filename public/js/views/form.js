@@ -1,67 +1,105 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today } from '../ui.js';
-import { ENTITIES, canWrite } from '../schema.js';
+import { ENTITIES, canWrite, APPROVAL_FLOWS } from '../schema.js';
 import { linesTotals, inr, round2 } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 
 const LOCKED = {
-  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Cancelled'],
+  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
+  requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
 };
 const isManager = () => ['admin', 'manager'].includes(state.user.role);
+export const canApprove = (docType, stage) => state.user.role === 'admin'
+  || ((APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0])?.roles.includes(state.user.role);
+export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
+  : typeof d === 'string' && d.startsWith('setting:') ? state.settings[d.slice(8)] ?? '' : d;
 
-// ---------------------------------------------------------------- line items (PO / invoice)
+// Searchable item picker: type a code or part of the name ("1001", "diffuser").
+let pickerId = 0;
+export function itemPicker(items, value, { readonly, onPick } = {}) {
+  const id = 'items-dl-' + ++pickerId;
+  const byLabel = new Map(items.map(o => [o.label, o.id]));
+  const inp = h('input', { list: id, readOnly: readonly, placeholder: 'Item code or name…', style: { minWidth: '220px' } });
+  inp.value = items.find(o => o.id === value)?.label || '';
+  inp.onchange = () => {
+    const picked = byLabel.get(inp.value) ?? (items.find(o => o.label.split(' · ')[0] === inp.value.trim())?.id);
+    if (picked) inp.value = items.find(o => o.id === picked).label;
+    onPick?.(picked || null);
+  };
+  return h('span', { style: { display: 'contents' } }, inp, h('datalist', { id }, items.map(o => h('option', { value: o.label }))));
+}
+
+// ---------------------------------------------------------------- line items (PO / invoice / requisition)
 function linesEditor(f, value, { readonly, onTotals }) {
   let lines = Array.isArray(value) ? value.map(l => ({ ...l })) : [];
+  const amounts = f.amounts !== false;
   const wrap = h('div');
   const totalsBox = h('div.totals');
   let items = [];
 
   function totals() {
+    if (!amounts) return;
     const t = linesTotals(lines);
     totalsBox.replaceChildren(h('span', 'Taxable value'), h('span.right', inr(t.subtotal)), h('span', 'GST'), h('span.right', inr(t.tax)),
       h('span.grand', 'Total'), h('span.right.grand', inr(t.total)));
     onTotals?.(t);
   }
   function render() {
-    const head = h('tr', f.itemRef ? h('th', 'Inventory item') : null, f.columns.map(c => h('th', { style: { minWidth: c.width + 'px' } }, c.label)),
-      h('th.num', 'Amount'), f.itemRef ? h('th.num', 'Received') : null, readonly ? null : h('th'));
+    const head = h('tr', h('th', '#'), f.itemRef ? h('th', 'Inventory item') : null, f.columns.map(c => h('th', { style: { minWidth: c.width + 'px' } }, c.label)),
+      amounts ? h('th.num', 'Amount') : null, f.itemRef && amounts ? h('th.num', 'Received') : null, readonly ? null : h('th'));
+    let sr = 0;
     const rows = lines.map((l, i) => {
-      const amount = h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0)));
+      const amount = amounts ? h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0))) : null;
       const cells = f.columns.map(c => {
-        const inp = c.key === 'description'
-          ? h('textarea', { rows: 1, readOnly: readonly, style: { minHeight: '32px' } })
+        const inp = c.type === 'textarea' || c.key === 'description'
+          ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
           : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : 'text', step: 'any', readOnly: readonly });
         inp.value = l[c.key] ?? '';
         inp.oninput = () => {
           l[c.key] = ['number', 'money'].includes(c.type) ? (inp.value === '' ? null : Number(inp.value)) : inp.value;
-          amount.textContent = inr((Number(l.qty) || 0) * (Number(l.rate) || 0));
+          if (amount) amount.textContent = inr((Number(l.qty) || 0) * (Number(l.rate) || 0));
           totals();
         };
         return h('td', inp);
       });
       let itemCell = null;
       if (f.itemRef) {
-        const sel = h('select', { disabled: readonly }, h('option', { value: '' }, '— none —'), items.map(o => h('option', { value: o.id }, o.label)));
-        sel.value = l.item_id ?? '';
-        sel.onchange = async () => {
-          l.item_id = sel.value ? Number(sel.value) : null;
-          if (l.item_id) {
-            const it = await api(`/items/${l.item_id}`);
-            Object.assign(l, { description: l.description || it.name, uom: it.uom, rate: l.rate || it.rate, hsn: l.hsn || it.hsn });
-            render();
-          }
-        };
-        itemCell = h('td', sel);
+        itemCell = h('td', itemPicker(items, l.item_id, { readonly, onPick: async itemId => {
+          l.item_id = itemId;
+          if (!itemId) return;
+          const it = await api(`/items/${itemId}`);
+          Object.assign(l, { description: l.description || it.name, uom: it.uom || l.uom, hsn: l.hsn || it.hsn || '' });
+          if (amounts) Object.assign(l, { rate: l.rate || it.rate || 0, gst: l.gst ?? it.gst_rate ?? 18 });
+          render();
+        } }));
       }
-      return h('tr', itemCell, cells, amount, f.itemRef ? h('td.num', l.received ?? 0) : null,
-        readonly ? null : h('td', h('button.icon-btn.del', { type: 'button', title: 'Remove line', onclick: () => { lines.splice(i, 1); render(); } }, '✕')));
+      const label = l.description ? String(++sr) : '';
+      return h('tr', h('td.muted', label), itemCell, cells, amount, f.itemRef && amounts ? h('td.num', l.received ?? 0) : null,
+        readonly ? null : h('td.nowrap',
+          h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
+          h('button.icon-btn.del', { type: 'button', title: 'Remove line', onclick: () => { lines.splice(i, 1); render(); } }, '✕')));
     });
-    wrap.replaceChildren(h('div.table-wrap', h('table.data.lines', h('thead', head), h('tbody', rows))),
-      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push({ description: '', qty: 1, uom: 'No', rate: 0, gst: 18 }); render(); } }, '+ Add line'),
-      totalsBox);
+    wrap.replaceChildren(
+      f.hint && !readonly ? h('div.muted', { style: { fontSize: '12px', marginBottom: '4px' } }, f.hint) : null,
+      h('div.table-wrap', h('table.data.lines', h('thead', head), h('tbody', rows))),
+      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push({ description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); } }, '+ Add line'),
+      amounts ? totalsBox : null);
     totals();
   }
   if (f.itemRef) refOptions('items').then(o => { items = o; render(); }).catch(fail); else render();
   return { el: wrap, get: () => lines };
+}
+
+// ---------------------------------------------------------------- approval progress (PO: technical → commercial → GM)
+function approvalStrip(docType, row) {
+  const flow = APPROVAL_FLOWS[docType];
+  if (!flow || flow.length < 2) return null;
+  return h('div.card', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', padding: '10px 16px' } },
+    h('b', 'Approvals:'), h('span.badge.good', `Prepared: ${row.prepared_by || row.created_by || '-'}`),
+    flow.map(s => {
+      const who = row[s.field];
+      const waiting = row.approval_stage === s.stage;
+      return [h('span.muted', '→'), h('span.badge' + (who ? '.good' : waiting ? '.warn' : ''), `${s.stage}: ${who || (waiting ? 'waiting' : '—')}`)];
+    }));
 }
 
 // ---------------------------------------------------------------- actions per module
@@ -70,6 +108,8 @@ function actionsFor(entity, row, reload) {
   const post = (path, body) => api(path, { method: 'POST', body });
   const go = (p, then) => async () => { try { const r = await p(); then?.(r); } catch (e) { fail(e); } };
   const can = e => canWrite(e, state.user.role);
+  const status = (s, confirmText) => go(async () => { if (confirmText && !(await confirmBox(confirmText))) return; await post(`/${entity}/${id}/status`, { status: s }); reload(); });
+  const submit = go(() => post(`/${entity}/${id}/submit`), () => { toast('Sent for approval'); window.dispatchEvent(new Event('approvals-changed')); reload(); });
   const A = [];
   switch (entity) {
     case 'customers':
@@ -90,13 +130,13 @@ function actionsFor(entity, row, reload) {
         }) }, '🏥 Save hospital as Customer'));
       }
       break;
-    case 'approvals':
-      if (row.doc_type === 'Quotation') A.push(h('a.btn', { href: `#/quotation/${row.doc_id}` }, 'Open quotation'));
-      if (row.doc_type === 'Purchase Order') A.push(h('a.btn', { href: `#/view/purchase_orders/${row.doc_id}` }, 'Open PO'));
-      if (row.status === 'Pending' && isManager()) {
+    case 'approvals': {
+      const link = { Quotation: `#/quotation/${row.doc_id}`, 'Purchase Order': `#/view/purchase_orders/${row.doc_id}`, Requisition: `#/view/requisitions/${row.doc_id}` }[row.doc_type];
+      if (link) A.push(h('a.btn', { href: link }, `Open ${row.doc_type}`));
+      if (row.status === 'Pending' && canApprove(row.doc_type, row.stage)) {
         const decide = decision => go(async () => {
           const c = h('textarea', { placeholder: 'Comments (optional)' });
-          const ok = await modal(`${decision === 'Approved' ? 'Approve' : 'Reject'} ${row.doc_ref}`, h('label', 'Comments', c),
+          const ok = await modal(`${decision === 'Approved' ? 'Approve' : 'Reject'} ${row.doc_ref}${row.stage ? ' – ' + row.stage : ''}`, h('label', 'Comments', c),
             [{ label: 'Cancel', value: false }, { label: decision === 'Approved' ? 'Approve' : 'Reject', cls: decision === 'Approved' ? 'good' : 'danger solid', value: true }]);
           if (!ok) return;
           await post(`/approvals/${id}/decide`, { decision, comments: c.value });
@@ -105,8 +145,12 @@ function actionsFor(entity, row, reload) {
           reload();
         });
         A.push(h('button.btn.good', { onclick: decide('Approved') }, '✔ Approve'), h('button.btn.danger.solid', { onclick: decide('Rejected') }, '✖ Reject'));
+      } else if (row.status === 'Pending') {
+        const step = (APPROVAL_FLOWS[row.doc_type] || []).find(s => s.stage === row.stage);
+        A.push(h('span.muted', `Waiting for: ${(step?.roles || ['manager']).join(' / ')}`));
       }
       break;
+    }
     case 'sales_orders':
       if (row.quotation_id) A.push(h('a.btn', { href: `#/quotation/${row.quotation_id}` }, 'Quotation'));
       if (can('projects')) A.push(h('button.btn', { onclick: go(() => post(`/sales_orders/${id}/project`), p => (location.hash = `#/view/projects/${p.id}`)) }, '🏗️ Create Project'));
@@ -124,19 +168,40 @@ function actionsFor(entity, row, reload) {
       }) }, '💳 Create Invoice'));
       break;
     case 'projects':
-      if (can('material_approvals')) A.push(h('button.btn', { onclick: () => newRecord('material_approvals', { project_id: id }) }, '🧱 Material / Drawing Submittal'));
-      if (can('stock_moves')) A.push(h('button.btn', { onclick: () => newRecord('stock_moves', { project_id: id, type: 'OUT' }) }, '🔁 Issue Material'));
+      if (can('requisitions')) A.push(h('button.btn', { onclick: () => newRecord('requisitions', { project_id: id }) }, '📝 Requisition'));
+      if (can('stock_moves')) A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&project=${id}` }, '📤 Issue Material'));
       if (can('purchase_orders')) A.push(h('button.btn', { onclick: () => newRecord('purchase_orders', { project_id: id }) }, '🛒 Purchase Order'));
+      if (can('material_approvals')) A.push(h('button.btn', { onclick: () => newRecord('material_approvals', { project_id: id }) }, '🧱 Submittal'));
       if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { project_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '🛠️ Service Ticket'));
       break;
+    case 'requisitions': {
+      const st = row.status;
+      A.push(h('a.btn', { href: `#/print/requisition/${id}`, target: '_blank' }, '🖨 Print'));
+      if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit to Purchase Head'));
+      if (can('purchase_orders') && st === 'Approved') A.push(h('button.btn.good', { onclick: go(async () => {
+        const vendors = await refOptions('vendors');
+        let vendorId = null;
+        const picker = itemPicker(vendors, null, { onPick: v => { vendorId = v; } });
+        const ok = await modal(`Create PO from ${row.req_no}`, h('div.grid', h('p.muted', 'Lines and quantities are copied; prices come from the item master. You can edit the PO before submitting it.'), h('label', 'Vendor', picker)),
+          [{ label: 'Cancel', value: false }, { label: 'Create PO', cls: 'good', value: true }]);
+        if (!ok) return;
+        if (!vendorId) throw new Error('Pick a vendor from the list');
+        const po = await post(`/requisitions/${id}/convert`, { vendor_id: vendorId });
+        location.hash = `#/view/purchase_orders/${po.id}`;
+      }) }, '🛒 Convert to PO'));
+      if (can(entity) && st === 'Rejected') A.push(h('button.btn', { onclick: status('Draft') }, 'Back to Draft'));
+      if (can(entity) && ['Draft', 'Approved', 'Converted to PO', 'Rejected'].includes(st)) A.push(h('button.btn.danger', { onclick: status('Closed', 'Close this requisition?') }, 'Close'));
+      break;
+    }
     case 'purchase_orders': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/po/${id}`, target: '_blank' }, '🖨 Print PO'));
-      if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: go(() => post(`/purchase_orders/${id}/submit`), () => { toast('Submitted for approval'); window.dispatchEvent(new Event('approvals-changed')); reload(); }) }, 'Submit for Approval'));
-      if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: go(() => post(`/purchase_orders/${id}/status`, { status: 'Sent' }), reload) }, 'Mark as Sent'));
-      if (can(entity) && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('button.btn.good', { onclick: go(() => receiveDialog(row), reload) }, '📦 Receive Goods (GRN)'));
-      if (can(entity) && st === 'Rejected') A.push(h('button.btn', { onclick: go(() => post(`/purchase_orders/${id}/status`, { status: 'Draft' }), reload) }, 'Back to Draft'));
-      if (can(entity) && ['Draft', 'Approved', 'Sent', 'Rejected'].includes(st)) A.push(h('button.btn.danger', { onclick: go(async () => { if (await confirmBox('Cancel this PO?')) { await post(`/purchase_orders/${id}/status`, { status: 'Cancelled' }); reload(); } }) }, 'Cancel PO'));
+      if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval'));
+      if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
+      if (can('stock_moves') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('a.btn.good', { href: `#/stock-entry?type=INWARD&po=${id}` }, '📦 Receive Goods (GRN)'));
+      if (can(entity) && st === 'Partially Received') A.push(h('button.btn', { onclick: status('Closed', 'Close this PO even though some quantity is still pending?') }, 'Short-close'));
+      if (can(entity) && st === 'Rejected') A.push(h('button.btn', { onclick: status('Draft') }, 'Back to Draft'));
+      if (can(entity) && ['Draft', 'Approved', 'Sent', 'Rejected'].includes(st)) A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this PO?') }, 'Cancel PO'));
       break;
     }
     case 'invoices':
@@ -144,25 +209,32 @@ function actionsFor(entity, row, reload) {
       if (can('payments') && row.status !== 'Draft' && row.status !== 'Cancelled' && row.balance > 0) A.push(h('button.btn.primary', { onclick: () => newRecord('payments', { invoice_id: id, customer_id: row.customer_id, amount: round2(row.balance) }) }, '💰 Record Payment'));
       break;
     case 'items':
-      if (can('stock_moves')) A.push(h('button.btn', { onclick: () => newRecord('stock_moves', { item_id: id, type: 'IN' }) }, '🔁 Stock In / Out'));
+      if (can('stock_moves')) {
+        A.push(h('a.btn', { href: `#/stock-entry?type=INWARD&item=${id}` }, '📥 Inward'));
+        A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&item=${id}` }, '📤 Issue'));
+      }
+      break;
+    case 'stock_moves':
+      if (row.doc_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.type}?doc=${encodeURIComponent(row.doc_no)}`, target: '_blank' }, '🖨 Print Slip'));
       break;
   }
   return A;
 }
 
-async function receiveDialog(po) {
-  const lines = po.lines || [];
-  const inputs = lines.map(l => h('input', { type: 'number', step: 'any', value: Math.max(0, (Number(l.qty) || 0) - (Number(l.received) || 0)) }));
-  const challan = h('input', { placeholder: 'Vendor challan / invoice no' });
-  const date = h('input', { type: 'date', value: today() });
-  const body = h('div.grid', h('div.cols-2.grid', h('label', 'Receipt date', date), h('label', 'Challan / Invoice', challan)),
-    h('table.data', h('thead', h('tr', h('th', 'Item'), h('th.num', 'Ordered'), h('th.num', 'Received so far'), h('th.num', 'Receiving now'))),
-      h('tbody', lines.map((l, i) => h('tr', h('td', l.description, l.item_id ? '' : h('div.muted', '(not linked to inventory: no stock entry)')), h('td.num', l.qty), h('td.num', l.received || 0), h('td', inputs[i]))))));
-  const ok = await modal(`Goods receipt against ${po.po_no}`, body, [{ label: 'Cancel', value: false }, { label: 'Save receipt', cls: 'good', value: true }], { wide: true });
-  if (!ok) return;
-  await api(`/purchase_orders/${po.id}/receive`, { method: 'POST', body: { date: date.value, challan: challan.value, receipts: inputs.map((inp, index) => ({ index, qty: Number(inp.value) })).filter(r => r.qty > 0) } });
-  clearRefCache('items');
-  toast('Goods received and stock updated');
+// Opening / in / out / closing for the item this financial year.
+function itemSummary(itemId) {
+  const box = h('div.card', h('div.muted', 'Loading stock summary…'));
+  api(`/stock/summary?item_id=${itemId}`).then(({ from, to, rows }) => {
+    const r = rows[0];
+    if (!r) { box.remove(); return; }
+    const tile = (label, v, sub) => h('div.kpi', h('div.label', label), h('div.value', { style: { fontSize: '20px' } }, v), sub ? h('div.sub', sub) : null);
+    box.replaceChildren(h('h2', `Stock summary ${fmtDate(from)} – ${fmtDate(to)}`), h('div.kpis', { style: { marginBottom: 0 } },
+      tile('Opening', r.opening, r.uom), tile('Inward', r.inward, money(r.inward_value)), tile('Outward', r.outward), tile('Transfer', r.transfer),
+      tile('Return', r.return), tile('Scrap', r.scrap), r.adjust ? tile('Adjust', r.adjust) : null,
+      tile('Closing', h('span', { style: { color: r.closing < 0 ? 'var(--bad)' : r.low ? 'var(--warn)' : '' } }, r.closing), money(r.closing_value)),
+      tile('Class', `${r.abc} · ${r.fsn}`, r.last_out ? `last issued ${fmtDate(r.last_out)}` : 'never issued')));
+  }).catch(() => box.remove());
+  return box;
 }
 
 // ---------------------------------------------------------------- page
@@ -170,14 +242,12 @@ export async function recordView(root, entity, id) {
   const ent = ENTITIES[entity];
   if (!ent) throw new Error('Unknown module');
   if (ent.editor === 'quotation' && id !== 'new') { location.hash = `#/quotation/${id}`; return; }
+  if (entity === 'stock_moves' && id === 'new') { location.hash = '#/stock-entry'; return; }
   const isNew = id === 'new';
   const presets = Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
   let row = {};
   if (isNew) {
-    for (const f of ent.fields) {
-      if (f.default === undefined) continue;
-      row[f.key] = f.default === 'today' ? today() : f.default === 'me' ? state.user.name : f.default;
-    }
+    for (const f of ent.fields) if (f.default !== undefined) row[f.key] = resolveDefault(f.default);
     for (const [k, v] of Object.entries(presets)) row[k] = /_id$/.test(k) || k === 'amount' ? Number(v) : v;
   } else {
     row = await api(`/${entity}/${id}`);
@@ -185,7 +255,7 @@ export async function recordView(root, entity, id) {
   const locked = !isNew && LOCKED[entity]?.includes(row.status);
   const writable = canWrite(entity, state.user.role) && !locked && !(isNew && ent.noCreate);
   const inputs = {};
-  const totalsOut = {};
+  const conditional = [];
 
   const grid = h('div.form-grid');
   for (const f of ent.fields) {
@@ -194,10 +264,11 @@ export async function recordView(root, entity, id) {
     if (f.type === 'lines') {
       const ed = linesEditor(f, row[f.key], {
         readonly: !writable,
-        onTotals: t => { for (const k of ['subtotal', 'tax', 'total']) if (inputs[k]) inputs[k].el.value = t[k]; Object.assign(totalsOut, t); },
+        // POs round the grand total on the server (round-off line), so only the pre-tax figures update live there.
+        onTotals: t => { for (const k of inputs.round_off ? ['subtotal', 'tax'] : ['subtotal', 'tax', 'total']) if (inputs[k]) inputs[k].el.value = t[k]; },
       });
       inputs[f.key] = ed;
-      grid.append(h('div.span-2', h('label', f.label), ed.el));
+      grid.append(h('div.span-all', h('label', f.label), ed.el));
       continue;
     }
     const w = fieldInput(f, row[f.key], { readonly: !writable });
@@ -207,8 +278,18 @@ export async function recordView(root, entity, id) {
     if (f.type === 'ref' && row[f.key] && !isNew) {
       lbl.append(h('a', { href: recordHref(f.ref, row[f.key]), style: { fontWeight: 400 } }, 'open ›'));
     }
+    if (f.showIf) conditional.push([f, lbl]);
     grid.append(lbl);
   }
+  // Fields that only apply to some movement types (e.g. supplier & invoice for Inward).
+  const applyShowIf = () => {
+    for (const [f, lbl] of conditional) {
+      const [ctrl, values] = Object.entries(f.showIf)[0];
+      lbl.style.display = values.includes(inputs[ctrl]?.get() ?? row[ctrl]) ? '' : 'none';
+    }
+  };
+  for (const ctrl of new Set(conditional.map(([f]) => Object.keys(f.showIf)[0]))) inputs[ctrl]?.el.addEventListener('change', applyShowIf);
+  applyShowIf();
 
   async function save() {
     const body = {};
@@ -229,10 +310,10 @@ export async function recordView(root, entity, id) {
       // When created from another record (e.g. follow-up from an enquiry), go back to it.
       const back = Object.entries(presets).find(([k]) => k.endsWith('_id'));
       const parentField = back && ent.fields.find(f => f.key === back[0]);
-      location.hash = parentField && ['followups', 'payments', 'stock_moves', 'contacts', 'material_approvals'].includes(entity)
+      location.hash = parentField && ['followups', 'payments', 'contacts', 'material_approvals'].includes(entity)
         ? recordHref(parentField.ref, back[1])
         : recordHref(entity, saved.id);
-    } else render(saved);
+    } else recordView(root, entity, id);
   }
 
   async function remove() {
@@ -243,42 +324,43 @@ export async function recordView(root, entity, id) {
     location.hash = `#/list/${entity}`;
   }
 
-  function render(r = row) {
-    row = r;
-    const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.invoice_no || r.ticket_no || r.submittal_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}`;
-    const statusVal = ent.statusField && r[ent.statusField];
-    root.replaceChildren(
-      h('div.page-head',
-        h('a.btn.small', { href: `#/list/${entity}` }, '‹ Back'),
-        h('h1', `${ent.icon} ${title}`), statusVal ? badge(statusVal) : null,
-        locked ? h('span.muted', '🔒 locked') : null,
-        h('div.actions',
-          isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id)),
-          writable ? h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save') : null,
-          !isNew && isManager() && !locked ? h('button.btn.danger', { onclick: () => remove().catch(fail) }, 'Delete') : null)),
-      h('div.card', grid),
-      isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
-        `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
-      isNew ? null : related(entity, r),
-      isNew || !isManager() ? null : history(entity, id),
-    );
-  }
-
+  const r = row;
+  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.invoice_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
+  const statusVal = ent.statusField && r[ent.statusField];
+  root.replaceChildren(
+    h('div.page-head',
+      h('a.btn.small', { href: `#/list/${entity}` }, '‹ Back'),
+      h('h1', `${ent.icon} ${title}`), statusVal ? badge(statusVal) : null,
+      r.approval_stage ? h('span.badge.warn', `waiting: ${r.approval_stage}`) : null,
+      locked ? h('span.muted', '🔒 locked') : null,
+      h('div.actions',
+        isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id)),
+        writable ? h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save') : null,
+        !isNew && isManager() && !locked ? h('button.btn.danger', { onclick: () => remove().catch(fail) }, 'Delete') : null)),
+    !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
+    !isNew && entity === 'items' ? itemSummary(r.id) : null,
+    h('div.card', grid),
+    isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
+      `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
+    isNew ? null : related(entity, r),
+    isNew || !isManager() ? null : history(entity, id),
+  );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); save().catch(fail); } };
-  render();
 }
 
 function related(entity, row) {
   const box = h('div');
   for (const [other, key] of ENTITIES[entity].related || []) {
+    const addBtn = other === 'stock_moves'
+      ? h('a.btn.small', { href: `#/stock-entry?${entity === 'items' ? 'item' : entity === 'projects' ? 'type=OUTWARD&project' : 'type=INWARD&vendor'}=${row.id}` }, '+ Add')
+      : h('button.btn.small', { onclick: () => newRecord(other, { [key]: row.id }).catch(fail) }, '+ Add');
     const sec = h('div.card', h('div.page-head', { style: { marginBottom: '8px' } }, h('h2', `${ENTITIES[other].icon} ${ENTITIES[other].label}`),
-      canWrite(other, state.user.role) && !ENTITIES[other].noCreate
-        ? h('div.actions', h('button.btn.small', { onclick: () => newRecord(other, { [key]: row.id }).catch(fail) }, `+ Add`)) : null),
+      canWrite(other, state.user.role) && !ENTITIES[other].noCreate ? h('div.actions', addBtn) : null),
       h('div.muted', 'Loading…'));
     box.append(sec);
     api(`/${other}?${key}=${row.id}`).then(rows => {
-      sec.lastChild.replaceWith(rows.length ? table(other, rows, { pageSize: 10 }) : h('div.muted', 'None yet'));
+      sec.lastChild.replaceWith(rows.length ? table(other, rows, { pageSize: 15 }) : h('div.muted', 'None yet'));
     }).catch(() => sec.lastChild.replaceWith(h('div.muted', 'Could not load')));
   }
   return box;

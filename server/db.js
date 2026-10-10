@@ -9,7 +9,22 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DATA_DIR = process.env.WIESPL_DATA_DIR || path.join(__dirname, '..', 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
-export const db = new DatabaseSync(path.join(DATA_DIR, 'wiespl.db'));
+export const DB_FILE = path.join(DATA_DIR, 'wiespl.db');
+export const RESTORE_FILE = path.join(DATA_DIR, 'restore-pending.db');
+
+// A backup uploaded through Admin → Backup & Restore is swapped in here, before the database opens.
+// The database it replaces is kept in data/backups/.
+if (fs.existsSync(RESTORE_FILE)) {
+  const dir = path.join(DATA_DIR, 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  if (fs.existsSync(DB_FILE)) fs.renameSync(DB_FILE, path.join(dir, `before-restore-${stamp}.db`));
+  for (const ext of ['-wal', '-shm']) if (fs.existsSync(DB_FILE + ext)) fs.rmSync(DB_FILE + ext);
+  fs.renameSync(RESTORE_FILE, DB_FILE);
+  console.log(`\n  Backup restored. The previous database was saved in ${dir}\n`);
+}
+
+export const db = new DatabaseSync(DB_FILE);
 db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;');
 
 const SQL_TYPE = { number: 'REAL', money: 'REAL', ref: 'INTEGER' };
@@ -44,6 +59,16 @@ export function migrate() {
       db.exec(`CREATE INDEX IF NOT EXISTS ix_${name}_${f.key} ON ${name}(${f.key})`);
     }
   }
+  // Stock: older versions used IN / OUT; the store module now uses the Smart Store movement types.
+  db.exec(`
+    UPDATE stock_moves SET type = 'INWARD' WHERE type = 'IN';
+    UPDATE stock_moves SET type = 'OUTWARD' WHERE type = 'OUT';
+    CREATE INDEX IF NOT EXISTS ix_stock_item_date ON stock_moves(item_id, type, date);
+    CREATE INDEX IF NOT EXISTS ix_stock_doc ON stock_moves(type, doc_no);
+    CREATE INDEX IF NOT EXISTS ix_items_code ON items(code);
+    CREATE TABLE IF NOT EXISTS import_batches (
+      id INTEGER PRIMARY KEY, at TEXT DEFAULT (datetime('now','localtime')), user TEXT, kind TEXT, file_hash TEXT, summary TEXT);
+  `);
 }
 
 // Re-entrant: nested calls join the outer transaction.

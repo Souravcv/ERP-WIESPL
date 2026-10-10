@@ -1,4 +1,4 @@
-import { db, audit, tx } from './db.js';
+import { db, audit, tx, getSettings } from './db.js';
 import { ENTITIES } from '../public/js/schema.js';
 import { beforeSave, afterSave } from './hooks.js';
 
@@ -131,7 +131,10 @@ function insertRowTx(name, data, user, opts) {
   let row = clean(name, data, opts);
   for (const f of ENTITIES[name].fields) {
     if (f.computed || f.default === undefined || (row[f.key] !== undefined && row[f.key] !== null)) continue;
-    row[f.key] = f.default === 'today' ? now().slice(0, 10) : f.default === 'me' ? (user?.name || null) : coerce(f, f.default);
+    row[f.key] = f.default === 'today' ? now().slice(0, 10)
+      : f.default === 'me' ? (user?.name || null)
+      : String(f.default).startsWith('setting:') ? coerce(f, getSettings()[f.default.slice(8)] ?? null)
+      : coerce(f, f.default);
   }
   row = beforeSave(name, row, null, user) || row;
   for (const f of ENTITIES[name].fields) {

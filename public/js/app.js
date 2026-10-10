@@ -6,11 +6,17 @@ import { recordView } from './views/form.js';
 import { quotationView } from './views/quotation.js';
 import { printView } from './views/print.js';
 import { usersView, settingsView, auditView, importView, searchView } from './views/admin.js';
+import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 
 const $ = id => document.getElementById(id);
 
+// Screens that are not a single module list, shown at the top of their menu group.
+const EXTRA_LINKS = {
+  Purchase: [['#/po-tracker', '🔎', 'PO Tracker']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)'], ['#/stock-summary', '📊', 'Stock Summary']],
+};
 const ADMIN_LINKS = [
-  ['#/import', '📥', 'Import Enquiry Register', ['admin', 'manager', 'sales']],
+  ['#/import', '📥', 'Import from Excel / Backup', ['admin', 'manager', 'sales', 'store', 'purchase', 'purchase_head', 'accounts']],
   ['#/users', '👥', 'Users & Roles', ['admin']],
   ['#/settings', '⚙️', 'Company & Quotation Settings', ['admin']],
   ['#/audit', '🕘', 'Activity Log', ['admin', 'manager']],
@@ -21,6 +27,7 @@ function buildNav(pending = 0) {
   nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'));
   for (const g of GROUPS) {
     nav.append(h('div.grp', g));
+    for (const [href, icon, label] of EXTRA_LINKS[g] || []) nav.append(h('a', { href }, `${icon} ${label}`));
     for (const [key, e] of Object.entries(ENTITIES).filter(([, e]) => e.group === g)) {
       nav.append(h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null));
     }
@@ -34,7 +41,7 @@ function buildNav(pending = 0) {
 }
 
 function highlightNav() {
-  const hash = location.hash.replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/\/(new|\d+)$/, '');
+  const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/\/(new|\d+)$/, '');
   for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('active', a.getAttribute('href') === hash);
 }
 
@@ -64,6 +71,9 @@ async function route() {
       case 'settings': await settingsView(view); break;
       case 'audit': await auditView(view); break;
       case 'import': await importView(view); break;
+      case 'stock-entry': await stockEntryView(view); break;
+      case 'stock-summary': await stockSummaryView(view); break;
+      case 'po-tracker': await poTrackerView(view); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }

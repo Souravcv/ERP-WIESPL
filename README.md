@@ -33,15 +33,18 @@ All data is in `data/wiespl.db` (plus `-wal` / `-shm` files while running). Stop
 | **Sales Orders** | Created from a won quotation (client PO no / date). Buttons create the Project and milestone invoices (e.g. 50% / 45% / 5%). |
 | **Projects** | Stage (drawing → material approval → procurement → dispatch → installation → validation → handover), progress, engineer, warranty, plus linked submittals, POs, material issues and service tickets. |
 | **Invoices & Payments** | Tax and proforma invoices with CGST+SGST or IGST by place of supply. Payments update Paid / Partially Paid automatically. |
-| **Purchase** | Vendors and POs with approval, print, and goods receipt (GRN) that adds stock. |
-| **Inventory** | Items, stock in/out/adjust, issue to project, reorder-level alerts. |
+| **Material Requisitions** | Project, Req No (REQ-001/2026-27), lines (description, specification, qty, UOM, remark). Draft → Submitted → approved by Purchase Head → converted to a PO. Prints in the WIESPL requisition format. |
+| **Purchase Orders** | PO No 008/2026-27 (restarts every April). Vendor details, delivery address, contact, terms (payment, delivery, warranty, freight, validity, invoice copies, jurisdiction) from a saved template. Item lines with size sub-lines. CGST+SGST or IGST from the vendor's state, round-off, amount in words, project note. Four-step approval: Prepared (Purchase Executive) → Technical (Technical Manager) → Commercial (Account Manager) → GM. Prints in the WIESPL/PUR./02/R0 format. **PO Tracker** shows ordered / approved / received / pending per line. |
+| **Vendors** | GSTIN (state and PAN filled automatically), address, city, emails, phones, other contacts, payment terms, "complete later" flag, purchase history. |
+| **Store** | Item Master (category, internal code 1001…, UOM, current price, GST, HSN, minimum level, preferred vendor). **Stock Entry** slips with many items: Inward (GRN, price per piece required), Outward (issue to project / site), Transfer (to Production / job-work vendor), Return (against issue no), Scrap, Opening Stock, Adjustment. Closing = Opening + Inward − Outward − Transfer + Return − Scrap. **Stock Summary** with values, ABC and FSN classes, Excel export, and **1 April opening stock** carry-forward. Receiving against a PO updates the PO. |
+| **Import / Backup** | Admin → Import from Excel: templates for items, opening stock, movements, vendors, projects, POs and requisitions, plus automatic recognition of the Smart Store workbook, the vendor address list and WIESPL-format POs. Preview with errors and duplicates first; already-imported rows are skipped, so a newer workbook only adds new rows. Full database backup download and restore. |
 | **Service / Complaints** | Breakdown, PM, warranty and AMC tickets. |
 | **Dashboard** | FY KPIs, enquiries per month, win rate, pipeline, receivables, follow-ups due, pending approvals, low stock, projects by stage. |
 | **Admin** | Users & roles, company / quotation defaults (USP, terms, client scope, letter text), activity log of every change. |
 
 ### Roles
 
-`admin` everything · `manager` everything + approvals + delete · `sales` CRM & quotations · `accounts` orders, invoices, payments, purchase · `store` inventory & purchase · `engineer` projects, submittals, service, material issue.
+`admin` everything · `manager` (General Manager) everything + final PO approval + delete · `sales` CRM & quotations · `accounts` (Account Manager) commercial PO approval, orders, invoices, payments · `store` item master & stock · `engineer` projects, submittals, service, material issue · `purchase` (Purchase Executive) vendors, requisitions, POs · `purchase_head` approves requisitions · `technical` (Technical Manager) technical PO approval.
 
 ## First steps after install
 

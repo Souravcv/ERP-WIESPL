@@ -90,6 +90,19 @@ export function linesTotals(lines = []) {
   return { subtotal, tax, total: round2(subtotal + tax) };
 }
 
+// PO totals as printed on the WIESPL PO: CGST + SGST within the company's state, IGST otherwise,
+// then rounded to whole rupees with the difference shown as "Round off".
+export function gstTotals(lines = [], intraState = true) {
+  const { subtotal, tax } = linesTotals(lines);
+  const exact = subtotal + tax;
+  const total = Math.round(exact);
+  return {
+    subtotal, tax,
+    cgst: intraState ? round2(tax / 2) : 0, sgst: intraState ? round2(tax / 2) : 0, igst: intraState ? 0 : tax,
+    round_off: round2(total - exact), total,
+  };
+}
+
 export function inr(v, decimals = 2) {
   return num(v).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }

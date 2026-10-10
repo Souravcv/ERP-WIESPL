@@ -1,14 +1,17 @@
-import { h, api, state, toast, fail, modal, badge } from '../ui.js';
+import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRefCache, fmtDate } from '../ui.js';
 import { ROLES, ENTITIES } from '../schema.js';
 import { table } from './list.js';
 
 const ROLE_HELP = {
-  admin: 'Everything, incl. users & settings',
-  manager: 'Everything + approves quotations / POs, deletes records',
+  admin: 'Everything, incl. users, settings, backup',
+  manager: 'General Manager: everything + final (GM) approval of POs, quotation approval, deletes records',
   sales: 'Customers, enquiries, follow-ups, quotations, catalog',
-  accounts: 'Sales orders, invoices, payments, purchase, vendors',
-  store: 'Inventory, stock in/out, purchase orders, vendors',
-  engineer: 'Projects, material/drawing approvals, service tickets, stock issue',
+  accounts: 'Account Manager: commercial approval of POs, sales orders, invoices, payments, vendors',
+  store: 'Store: item master, stock inward / issue / transfer / return / scrap, opening stock',
+  engineer: 'Projects, material/drawing approvals, service tickets, material issue',
+  purchase: 'Purchase Executive: vendors, requisitions, prepares purchase orders',
+  purchase_head: 'Purchase Head: approves material requisitions, purchase and store',
+  technical: 'Technical Manager: technical approval of POs, projects',
 };
 
 export async function usersView(root) {
@@ -49,6 +52,10 @@ const SETTINGS_FORM = [
   ['Company', [['company_name', 'Company name'], ['company_short', 'Short name'], ['tagline', 'Tagline'], ['reg_address', 'Registered address', 'ta'], ['works_address', 'Works address', 'ta'],
     ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['cin', 'CIN'], ['gstin', 'GSTIN'], ['state', 'State (for CGST/SGST vs IGST)'], ['bank_details', 'Bank details (printed on invoices)', 'ta']]],
   ['Numbering & approvals', [['quote_prefix', 'Document prefix (WIESPL/…)'], ['require_quote_approval', 'Quotations need manager approval', 'yn'], ['require_po_approval', 'Purchase orders need manager approval', 'yn']]],
+  ['Purchase order defaults (printed on every PO)', [['pan', 'Company PAN'], ['po_doc_no', 'Document No (footer)'], ['po_delivery_address', 'Delivery & billing address', 'ta'], ['po_contact_person', 'Our contact person'],
+    ['po_contact_phone', 'Contact number'], ['po_contact_emails', 'Purchase email(s)'], ['po_greeting', 'Opening line', 'ta'], ['po_term_advance', 'Payment – Advance'], ['po_term_balance', 'Payment – Balance'],
+    ['po_term_delivery', 'Delivery'], ['po_term_warranty', 'Warranty'], ['po_term_freight', 'Freight'], ['po_term_validity', 'Validity', 'ta'], ['po_term_invoice', 'Invoice copies'],
+    ['po_term_jurisdiction', 'Jurisdiction', 'ta'], ['po_term_extra', 'Additional terms', 'ta']]],
   ['Quotation defaults', [['default_subject', 'Default subject'], ['letter_greeting', 'Greeting'], ['letter_intro', 'Opening paragraph', 'ta'], ['letter_body', 'Body paragraph', 'ta'], ['letter_closing', 'Closing lines', 'ta'],
     ['usp_title', 'USP heading'], ['usp', 'USP points (one per line)', 'list'], ['terms', 'Default terms (one per line)', 'list'], ['client_scope', 'Default client scope', 'ta'], ['boq_note', 'Note under BOQ'], ['invoice_terms', 'Invoice terms', 'ta']]],
 ];
@@ -84,21 +91,107 @@ export async function auditView(root) {
     }, h('td.nowrap', a.at), h('td', a.user), h('td', ENTITIES[a.entity]?.label || a.entity), h('td', a.record_id ?? ''), h('td', a.action), h('td.clip', a.summary || ''))))))));
 }
 
+const IMPORT_KINDS = [
+  ['items', 'Item Master / Smart Store workbook', 'Items with category, UOM, price, GST, HSN. Upload the whole “WIESPL Smart Store ERP” workbook to bring in items, 1 April opening stock and all Inward, Outward, Transfer, Return, Scrap and FG entries in one go.'],
+  ['opening', 'Opening stock (1 April)', 'One row per item: code, quantity and price as on 1 April.'],
+  ['stock', 'Stock movements', 'Inward / Outward / Transfer / Return / Scrap / Adjust rows.'],
+  ['vendors', 'Vendors', 'Template, or your “Purchase Address with GST Details” sheet (name, address, email and GSTIN in one cell are split automatically; state comes from the GSTIN).'],
+  ['purchase_orders', 'Past purchase orders', 'Template (one row per line), or a PO saved in the WIESPL PO format (e.g. “008 Venti-Tron … .xlsx”).'],
+  ['requisitions', 'Material requisitions', 'Template, one row per material line.'],
+  ['projects', 'Projects / work orders', 'Project / work order no, name, client, site, work order date.'],
+  ['enquiries', 'Sales Enquiry Register', 'The SALES ENQUIRY REGISTER sheet. Imported directly; duplicates are skipped by enquiry number.'],
+];
+
 export async function importView(root) {
+  const isAdmin = state.user.role === 'admin';
+  const kindSel = h('select', { style: { width: 'auto' } }, IMPORT_KINDS.map(([k, label]) => h('option', { value: k }, label)));
+  kindSel.value = new URLSearchParams(location.hash.split('?')[1] || '').get('kind') || 'items';
+  const help = h('p.muted');
+  const tplBtn = h('button.btn', { onclick: () => download(`/api/import/template/${kindSel.value}`) }, '⬇ Download template');
   const file = h('input', { type: 'file', accept: '.xlsx' });
   const out = h('div');
-  const run = async () => {
-    if (!file.files[0]) throw new Error('Choose the Sales Enquiry Register .xlsx file');
-    out.replaceChildren(h('div.muted', 'Importing…'));
-    const r = await api('/import/enquiries', { method: 'POST', raw: await file.files[0].arrayBuffer() });
-    out.replaceChildren(h('div.card', h('h2', 'Import finished'),
-      h('p', `${r.imported} enquiries imported · ${r.duplicates} already existed · ${r.skipped} empty rows skipped`),
-      r.errors.length ? h('ul', r.errors.map(e => h('li', e))) : null, h('a.btn.primary', { href: '#/list/enquiries' }, 'Open Enquiry Register')));
+  const syncKind = () => {
+    help.textContent = IMPORT_KINDS.find(k => k[0] === kindSel.value)[2];
+    tplBtn.style.display = kindSel.value === 'enquiries' ? 'none' : '';
+    out.replaceChildren();
   };
-  root.replaceChildren(h('div.page-head', h('h1', '📥 Import Sales Enquiry Register')),
-    h('div.card', h('p', 'Upload the existing “Sales Enquiry Register” Excel (same columns as SALES ENQUIRY REGISTER-2025-26). Rows with only a number and no details are skipped; ',
-      'the running enquiry number continues after the highest number imported. Carried-forward enquiries without a number get a CF/… number. Importing the same file twice does not create duplicates.'),
-    h('div.toolbar', file, h('button.btn.primary', { onclick: () => run().catch(e => { out.replaceChildren(); fail(e); }) }, 'Import'))), out);
+  kindSel.onchange = syncKind;
+  syncKind();
+
+  async function previewFile() {
+    if (!file.files[0]) throw new Error('Choose an .xlsx file first');
+    out.replaceChildren(h('div.card', h('div.muted', 'Reading the file…')));
+    const raw = await file.files[0].arrayBuffer();
+    if (kindSel.value === 'enquiries') {
+      const r = await api('/import/enquiries', { method: 'POST', raw });
+      out.replaceChildren(h('div.card', h('h2', 'Import finished'),
+        h('p', `${r.imported} enquiries imported · ${r.duplicates} already existed · ${r.skipped} empty rows skipped`),
+        r.errors.length ? h('ul', r.errors.map(e => h('li', e))) : null, h('a.btn.primary', { href: '#/list/enquiries' }, 'Open Enquiry Register')));
+      return;
+    }
+    const p = await api(`/import/preview/${kindSel.value}`, { method: 'POST', raw });
+    const mode = h('select', { style: { width: 'auto' } }, h('option', { value: 'skip' }, 'Skip them (keep what is in the CRM)'), h('option', { value: 'update' }, 'Update the CRM records from the file'), h('option', { value: 'add' }, 'Add them anyway as new records'));
+    const createMissing = h('input', { type: 'checkbox', style: { width: 'auto' } });
+    const c = p.counts;
+    const filter = h('select', { style: { width: 'auto' } }, h('option', { value: 'error' }, `Errors (${c.error})`), h('option', { value: 'new' }, 'New'), h('option', { value: 'duplicate' }, 'Duplicates'), h('option', { value: '' }, 'All shown'));
+    const rowsBox = h('div');
+    const drawRows = () => {
+      const rows = p.rows.filter(r => !filter.value || r.status === filter.value);
+      rowsBox.replaceChildren(rows.length ? h('div.table-wrap', { style: { maxHeight: '420px', overflow: 'auto' } }, h('table.data',
+        h('thead', h('tr', h('th', 'Sheet'), h('th', 'Row'), h('th', 'Record'), h('th', 'Status'), h('th', 'Problem'))),
+        h('tbody', rows.map(r => h('tr', h('td', r.sheet), h('td', r.row ?? ''), h('td.clip', { title: r.label }, r.label),
+          h('td', badge(r.status === 'error' ? 'Rejected' : r.status === 'duplicate' ? 'Pending' : 'New'), r.status === 'duplicate' ? ' already in CRM' : ''), h('td', { style: { color: 'var(--bad)' } }, r.errors.join('; '))))))) : h('div.muted', 'Nothing to show'));
+    };
+    filter.onchange = drawRows;
+    if (!c.error) filter.value = '';
+    drawRows();
+    out.replaceChildren(h('div.card',
+      h('h2', `Preview: ${p.detected}`),
+      p.warning ? h('p', { style: { color: 'var(--warn)' } }, '⚠ ', p.warning) : null,
+      p.openingDate ? h('p.muted', `Opening stock from the Item Master is entered as on ${fmtDate(p.openingDate)}.`) : null,
+      h('table.data', { style: { maxWidth: '760px', marginBottom: '12px' } },
+        h('thead', h('tr', h('th', 'Sheet'), h('th.num', 'Rows'), h('th.num', 'New'), h('th.num', 'Already in CRM'), h('th.num', 'Errors'))),
+        h('tbody', p.sheets.map(s => h('tr', h('td', s.sheet), h('td.num', s.total), h('td.num', s.new), h('td.num', s.duplicate), h('td.num', { style: { color: s.error ? 'var(--bad)' : '' } }, s.error))))),
+      c.noCodeItems ? h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontWeight: 400, margin: '8px 0' } }, createMissing,
+        h('span', `${c.noCodeRows} movement rows refer to items that are not in the Item Master (${c.noCodeItems} different items: no item code, or a code that is not in the master). Your Excel stock summary ignores these rows, so by default they are skipped. Tick to create these items instead.`)) : null,
+      c.duplicate ? h('label', { style: { margin: '8px 0' } }, `${c.duplicate} records already exist in the CRM (matched by item code, GSTIN, PO no …). What should happen to them?`, mode) : null,
+      h('p.muted', 'Stock movement rows already in the CRM (same type, date, document no, item, quantity and party) are skipped automatically, so you can import a newer copy of the same workbook later and only the new rows are added.'),
+      h('div.toolbar', h('b', 'Rows:'), filter),
+      rowsBox,
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+        h('button.btn.primary', { onclick: async e => {
+          e.target.disabled = true;
+          try {
+            const r = await api('/import/commit', { method: 'POST', body: { token: p.token, mode: mode.value, createMissing: createMissing.checked } });
+            clearRefCache();
+            out.replaceChildren(h('div.card', h('h2', '✅ Import finished'),
+              h('p', `${r.created} records created · ${r.updated} updated · ${r.moves} stock movements added · ${r.skipped} skipped as duplicates${r.noCode ? ` · ${r.noCode} rows without item code skipped` : ''} · ${r.errors} rows with errors not imported`),
+              r.failed?.length ? h('ul', r.failed.map(x => h('li', x))) : null,
+              h('div.toolbar', h('a.btn', { href: '#/stock-summary' }, 'Stock Summary'), h('a.btn', { href: '#/list/items' }, 'Items'), h('a.btn', { href: '#/list/vendors' }, 'Vendors'), h('a.btn', { href: '#/list/purchase_orders' }, 'Purchase Orders'))));
+          } catch (err) { e.target.disabled = false; fail(err); }
+        } }, `Import ${c.total - c.error} rows`),
+        h('button.btn', { onclick: () => out.replaceChildren() }, 'Cancel'))));
+  }
+
+  const backup = isAdmin ? h('div.card', h('h2', '💾 Backup & Restore'),
+    h('p', 'Download a complete copy of the CRM database (all modules). Keep it on another drive or cloud folder; take one every day or before big imports.'),
+    h('div.toolbar', h('button.btn.primary', { onclick: () => download('/api/admin/backup') }, '⬇ Download full backup'),
+      (() => {
+        const f = h('input', { type: 'file', accept: '.db' });
+        return [f, h('button.btn.danger', { onclick: async () => {
+          try {
+            if (!f.files[0]) throw new Error('Choose a backup .db file');
+            if (!(await confirmBox('Restore this backup? ALL current data will be replaced by the backup after the CRM restarts. The current data is kept in data/backups.', 'Restore'))) return;
+            const r = await api('/admin/restore', { method: 'POST', raw: await f.files[0].arrayBuffer() });
+            await modal('Restore scheduled', h('p', r.message), [{ label: 'OK', cls: 'primary' }]);
+          } catch (e) { fail(e); }
+        } }, '⬆ Restore from backup')];
+      })())) : null;
+
+  root.replaceChildren(h('div.page-head', h('h1', '📥 Import from Excel')),
+    h('div.card', h('div.toolbar', h('b', 'What are you importing?'), kindSel, tplBtn), help,
+      h('div.toolbar', file, h('button.btn.primary', { onclick: () => previewFile().catch(e => { out.replaceChildren(); fail(e); }) }, kindSel.value === 'enquiries' ? 'Import' : 'Preview'))),
+    out, backup);
 }
 
 export async function searchView(root, q) {

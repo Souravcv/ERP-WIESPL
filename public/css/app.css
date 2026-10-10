@@ -78,6 +78,7 @@ label .hint { font-weight: 400; color: var(--muted); }
 .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px 16px; }
 .form-grid .span-2 { grid-column: span 2; }
+.form-grid .span-all { grid-column: 1 / -1; }
 .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
 .toolbar input, .toolbar select { width: auto; }
 .toolbar .grow { flex: 1; min-width: 180px; }

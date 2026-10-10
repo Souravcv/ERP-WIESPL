@@ -1,8 +1,12 @@
 import express from 'express';
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { db, migrate, getSettings, setSettings, audit } from './db.js';
+import { db, migrate, getSettings, setSettings, audit, RESTORE_FILE } from './db.js';
+import * as stock from './stock.js';
+import * as importer from './importer.js';
 import { seed } from './seed.js';
 import {
   authenticate, requireRole, createSession, destroySession, verifyPassword, hashPassword, publicUser,
@@ -11,7 +15,7 @@ import {
 import { listRows, getRow, insertRow, updateRow, deleteRow, options, entityOr404, HttpError } from './crud.js';
 import * as wf from './workflows.js';
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, ROLES, canWrite } from '../public/js/schema.js';
+import { ENTITIES, ROLES, canWrite, STOCK_SQL } from '../public/js/schema.js';
 import { fyOf } from '../public/js/calc.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -139,9 +143,11 @@ api.get('/dashboard', wrap(req => {
         FROM followups f LEFT JOIN enquiries e ON e.id = f.enquiry_id WHERE f.status = 'Open' AND f.next_date IS NOT NULL AND f.next_date <= date(?, '+7 day')
       ORDER BY due LIMIT 30`, today, today),
     approvals: all("SELECT id, doc_type, doc_ref, title, amount, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id DESC LIMIT 20"),
-    low_stock: all(`SELECT * FROM (SELECT i.id, i.code, i.name, i.uom, i.reorder_level,
-        COALESCE(i.opening_stock,0) + (SELECT COALESCE(SUM(CASE m.type WHEN 'OUT' THEN -m.qty ELSE m.qty END),0) FROM stock_moves m WHERE m.item_id = i.id) stock
-        FROM items i) WHERE reorder_level > 0 AND stock <= reorder_level ORDER BY name LIMIT 20`),
+    low_stock: all(`SELECT * FROM (SELECT t.id, t.code, t.name, t.uom, t.reorder_level, ${STOCK_SQL.replaceAll('{t}', 't')} AS stock
+        FROM items t) WHERE reorder_level > 0 AND stock <= reorder_level ORDER BY name LIMIT 20`),
+    stock_value: one(`SELECT COALESCE(SUM(v), 0) v FROM (SELECT ${STOCK_SQL.replaceAll('{t}', 't')} * COALESCE(t.rate, 0) AS v FROM items t)`).v,
+    pending_po: one("SELECT COUNT(*) n FROM purchase_orders WHERE status IN ('Pending Approval')").n,
+    pending_req: one("SELECT COUNT(*) n FROM requisitions WHERE status = 'Submitted'").n,
     projects: all("SELECT stage, COUNT(*) n FROM projects WHERE status = 'Active' GROUP BY stage"),
     recent: all('SELECT id, enquiry_no, date, hospital_name, doctor_name, place, type_of_work, status FROM enquiries ORDER BY id DESC LIMIT 8'),
     today,
@@ -156,7 +162,75 @@ api.post('/quotations/:id/submit', need('quotations'), wrap(req => wf.submitForA
 api.post('/quotations/:id/revise', need('quotations'), wrap(req => wf.reviseQuotation(req.params.id, req.user)));
 api.post('/quotations/:id/convert', need('sales_orders'), wrap(req => wf.convertToSalesOrder(req.params.id, req.body, req.user)));
 api.post('/purchase_orders/:id/submit', need('purchase_orders'), wrap(req => wf.submitForApproval('Purchase Order', req.params.id, req.user)));
-api.post('/purchase_orders/:id/receive', need('purchase_orders'), wrap(req => wf.receivePurchaseOrder(req.params.id, req.body, req.user)));
+api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submitForApproval('Requisition', req.params.id, req.user)));
+api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
+
+// ---------------------------------------------------------------- store
+api.post('/stock/entry', need('stock_moves'), wrap(req => stock.stockEntry(req.body, req.user)));
+api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
+api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
+api.post('/stock/opening', requireRole('manager', 'store', 'purchase_head'), wrap(req => stock.carryForwardOpening(req.body?.fy, req.user)));
+api.get('/reports/po-lines', wrap(req => stock.poLines(req.query)));
+api.get('/export/stock-summary', wrap(async (req, res) => {
+  const { from, to, rows } = stock.stockSummary(req.query);
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Stock Summary');
+  const cols = [['code', 'Item Code', 10], ['name', 'Item Name', 40], ['category', 'Category', 16], ['abc', 'ABC', 5], ['fsn', 'FSN', 7], ['rate', 'Price', 10], ['uom', 'UOM', 7],
+    ['opening', 'Opening', 9], ['inward', 'Inward', 9], ['outward', 'Outward', 9], ['transfer', 'Transfer', 9], ['return', 'Return', 9], ['scrap', 'Scrap', 8], ['adjust', 'Adjust', 8],
+    ['closing', 'Closing', 9], ['closing_value', 'Closing Value', 14], ['inward_value', 'Inward Value', 14], ['consumption_value', 'Consumption Value', 16], ['last_out', 'Last Outward', 12], ['days_since_out', 'Days Since', 9]];
+  ws.addRow([`Stock Summary ${from} to ${to}`]).font = { bold: true, size: 13 };
+  const hdr = ws.addRow(cols.map(c => c[1]));
+  hdr.font = { bold: true };
+  cols.forEach((c, i) => { ws.getColumn(i + 1).width = c[2]; });
+  for (const r of rows) ws.addRow(cols.map(c => r[c[0]] ?? ''));
+  ws.addRow(cols.map(c => c[0] === 'name' ? 'TOTAL' : ['closing_value', 'inward_value', 'consumption_value'].includes(c[0]) ? rows.reduce((s, r) => s + (r[c[0]] || 0), 0) : ''));
+  ws.views = [{ state: 'frozen', ySplit: 2 }];
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="stock-summary-${to}.xlsx"`);
+  res.end(Buffer.from(await wb.xlsx.writeBuffer()));
+}));
+
+// ---------------------------------------------------------------- Excel import (preview → commit) and backup
+api.get('/import/template/:kind', wrap(async (req, res) => {
+  const buf = await importer.templateFile(req.params.kind);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="WIESPL-import-${req.params.kind}.xlsx"`);
+  res.end(Buffer.from(buf));
+}));
+const IMPORT_RIGHTS = { items: 'items', opening: 'stock_moves', stock: 'stock_moves', vendors: 'vendors', projects: 'projects', purchase_orders: 'purchase_orders', requisitions: 'requisitions' };
+api.post('/import/preview/:kind', express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
+  const ent = IMPORT_RIGHTS[req.params.kind];
+  if (!ent) throw new HttpError(404, 'Unknown import type');
+  if (!canWrite(ent, req.user.role)) throw new HttpError(403, 'You do not have permission to import this');
+  if (!req.body?.length) throw new HttpError(400, 'Upload an .xlsx file');
+  return importer.preview(req.params.kind, req.body, req.user);
+}));
+api.post('/import/commit', wrap(req => importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, { createMissing: !!req.body?.createMissing })));
+
+api.get('/admin/backup', requireRole(), wrap(async (req, res) => {
+  const file = path.join(os.tmpdir(), `wiespl-backup-${Date.now()}.db`);
+  db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+  audit(req.user.name, 'backup', null, 'download');
+  res.download(file, `wiespl-crm-backup-${new Date().toISOString().slice(0, 10)}.db`, () => fs.rm(file, { force: true }, () => {}));
+}));
+api.post('/admin/restore', requireRole(), express.raw({ type: () => true, limit: '500mb' }), wrap(req => {
+  const buf = req.body;
+  if (!buf?.length || buf.subarray(0, 16).toString('latin1') !== 'SQLite format 3\u0000') throw new HttpError(400, 'This is not a WIESPL CRM backup (.db) file');
+  const tmp = RESTORE_FILE + '.check';
+  fs.writeFileSync(tmp, buf);
+  try {
+    const check = new DatabaseSync(tmp, { readOnly: true });
+    const ok = check.prepare("SELECT COUNT(*) c FROM sqlite_master WHERE type = 'table' AND name IN ('users', 'enquiries', 'items')").get().c === 3;
+    const admins = ok ? check.prepare("SELECT COUNT(*) c FROM users WHERE role = 'admin' AND active = 1").get().c : 0;
+    check.close();
+    if (!ok) throw new HttpError(400, 'This file is not a WIESPL CRM database');
+    if (!admins) throw new HttpError(400, 'The backup has no active admin user, so nobody could log in after restoring it');
+  } catch (e) { fs.rmSync(tmp, { force: true }); throw e.status ? e : new HttpError(400, 'Could not read the backup: ' + e.message); }
+  fs.renameSync(tmp, RESTORE_FILE);
+  audit(req.user.name, 'backup', null, 'restore scheduled');
+  return { ok: true, message: 'Backup accepted. Close the CRM window and start it again (start-crm.bat) to finish restoring. The current data is kept in data/backups.' };
+}));
 api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user)));
 api.post('/sales_orders/:id/project', need('projects'), wrap(req => wf.projectFromSalesOrder(req.params.id, req.user)));
 api.post('/sales_orders/:id/invoice', need('invoices'), wrap(req => wf.invoiceFromSalesOrder(req.params.id, req.body, req.user)));
@@ -164,7 +238,8 @@ api.post('/sales_orders/:id/invoice', need('invoices'), wrap(req => wf.invoiceFr
 // Status moves that are allowed outside the edit form, per document state.
 const TRANSITIONS = {
   quotations: { Approved: ['Sent', 'Lost'], Sent: ['Won', 'Lost'], Rejected: ['Draft'], Lost: ['Draft'] },
-  purchase_orders: { Draft: ['Cancelled'], Approved: ['Sent', 'Cancelled'], Sent: ['Cancelled'], Rejected: ['Draft', 'Cancelled'] },
+  purchase_orders: { Draft: ['Cancelled'], Approved: ['Sent', 'Cancelled'], Sent: ['Cancelled'], Rejected: ['Draft', 'Cancelled'], 'Partially Received': ['Closed'] },
+  requisitions: { Draft: ['Closed'], Rejected: ['Draft', 'Closed'], Approved: ['Closed'], 'Converted to PO': ['Closed'] },
 };
 api.post('/:entity/:id/status', wrap(req => {
   const { entity, id } = req.params;
@@ -195,7 +270,8 @@ api.post('/import/enquiries', need('enquiries'), express.raw({ type: () => true,
 // Documents locked once they enter approval; changes go through Revise / status actions.
 const LOCKED = {
   quotations: ['Pending Approval', 'Approved', 'Sent', 'Won', 'Lost', 'Superseded'],
-  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Cancelled'],
+  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
+  requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));

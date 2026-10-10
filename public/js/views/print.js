@@ -1,5 +1,5 @@
 import { h, api, state, fmtDate } from '../ui.js';
-import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, round2 } from '../calc.js';
+import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, gstTotals, round2 } from '../calc.js';
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 const lines = s => String(s || '').split('\n');
@@ -150,6 +150,113 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
     sign(s), footer()));
 }
 
+// ---------------------------------------------------------------- WIESPL purchase order (format WIESPL/PUR./02/R0)
+const plainName = s => String(s || '').replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '').replace(/\s*\(auto\)$/, '');
+function companyHead(s, title) {
+  return h('div', { style: { textAlign: 'center', borderBottom: '2px solid #1f4e9a', paddingBottom: '6px', marginBottom: '6px', position: 'relative' } },
+    h('img', { src: 'logo.jpeg', style: { position: 'absolute', left: 0, top: 0, height: '58px' } }),
+    h('div', { style: { fontSize: '17px', fontWeight: 700, color: '#1f4e9a' } }, s.company_name),
+    h('div', { style: { fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`), h('div', { style: { fontSize: '10.5px' } }, `Works : ${s.works_address}`),
+    h('div', { style: { fontSize: '10.5px' } }, `Tel. : ${s.phone}, Email : ${s.email}, Website : ${s.website}`), s.cin ? h('div', { style: { fontSize: '10.5px' } }, `CIN : ${s.cin}`) : null,
+    title ? h('div', { style: { fontSize: '15px', fontWeight: 700, marginTop: '4px', textDecoration: 'underline' } }, title) : null);
+}
+
+function poDoc(po, v, s) {
+  const lines = po.lines || [];
+  const intra = !v.state || v.state === (s.state || 'Maharashtra');
+  const t = gstTotals(lines, intra);
+  const rates = [...new Set(lines.filter(l => Number(l.qty) > 0).map(l => Number(l.gst) || 0))];
+  const pct = rates.length === 1 ? rates[0] : null;
+  let sr = 0;
+  const td = (c, attrs) => h('td', attrs || {}, c);
+  const terms = [
+    ['Payment Terms', null], ['Advance', po.term_advance], ['Balance', po.term_balance], ['Delivery', po.term_delivery],
+    ['Warranty', [po.term_warranty, po.terms].filter(Boolean).join('\n')], ['Freight', po.term_freight], ['Validity', po.term_validity],
+    ['Invoice Copies', po.term_invoice], ['Jurisdiction', po.term_jurisdiction]];
+  let n = 0;
+  return h('div.doc', h('div.page', { style: { fontSize: '11.5px' } },
+    companyHead(s),
+    h('table', h('tbody',
+      h('tr', h('th', { style: { width: '13%' } }, 'P.O. No.'), td(h('b', po.po_no)), h('th', { rowspan: 2, style: { fontSize: '16px', textAlign: 'center' } }, 'PURCHASE ORDER'), h('th', 'GST No.'), td(s.gstin)),
+      h('tr', h('th', 'P.O. Date'), td(fmtDate(po.date).replaceAll('/', '.')), h('th', 'PAN No.'), td(s.pan)))),
+    h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
+      td([h('b', 'To'), h('br'), h('b', v.name), h('br'), ...multiline(v.address || ''), [v.city, v.state, v.pincode].filter(Boolean).length ? [h('br'), [v.city, v.state, v.pincode].filter(Boolean).join(', ')] : null,
+        v.gstin ? [h('br'), `GST No. : ${v.gstin}`] : null, v.emails ? [h('br'), `Email :- ${String(v.emails).split('\n').join(' ')}`] : null], { style: { width: '38%' } }),
+      td([h('b', 'Delivery & Billing Address'), h('br'), ...multiline(po.delivery_address || s.po_delivery_address || '')], { style: { width: '32%' } }),
+      td([h('b', 'Contact person :'), ' ', po.contact_person || '', h('br'), po.contact_phone || '', h('br'), ...String(po.contact_emails || '').split(/[,;]\s*/).filter(Boolean).flatMap(e => [`Email : ${e}`, h('br')])])),
+      h('tr', td(`Contact Person : ${v.contact_person || ''}${v.phone ? '  ·  Contact No : ' + v.phone : ''}`), td(`Contact Person : ${po.contact_person || ''}  ·  Contact No : ${po.contact_phone || ''}`, { colspan: 2 })))),
+    h('p', { style: { margin: '6px 0' } }, `Ref.:- ${po.quotation_ref ? 'Your quotation ' + po.quotation_ref : 'Your quotation'}`),
+    h('p', { style: { margin: '6px 0' } }, ...multiline(s.po_greeting || '')),
+    h('table',
+      h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (INR)', 'GST', 'Amount (INR)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
+      h('tbody', lines.map(l => h('tr',
+        td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(l.hsn || ''), td(h('div.spec', l.spec || '')),
+        td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
+        td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
+      h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', inr(t.subtotal)), { class: 'num' })))),
+    h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
+      td([h('b', 'Terms & conditions :'), h('table', { style: { border: 'none', marginTop: '4px' } }, h('tbody', terms.filter(([, val], i) => i === 0 || val).map(([k, val]) =>
+        h('tr', h('td', { style: { border: 'none', width: '22px', verticalAlign: 'top' } }, ['Advance', 'Balance'].includes(k) ? '' : ++n),
+          h('td', { style: { border: 'none', width: '110px', verticalAlign: 'top' } }, k === 'Payment Terms' ? h('b', k) : `${k}  -`),
+          h('td', { style: { border: 'none', whiteSpace: 'pre-wrap' } }, val || '')))))], { style: { width: '62%' } }),
+      td(h('table', { style: { border: 'none' } }, h('tbody',
+        h('tr', h('td', { style: { border: 'none' } }, 'Sub Total For GST'), h('td.num', { style: { border: 'none' } }, inr(t.subtotal))),
+        intra ? [h('tr', h('td', { style: { border: 'none' } }, `CGST${pct != null ? ` @${pct / 2}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.cgst))),
+          h('tr', h('td', { style: { border: 'none' } }, `SGST${pct != null ? ` @${pct / 2}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.sgst)))]
+          : h('tr', h('td', { style: { border: 'none' } }, `IGST${pct != null ? ` @${pct}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.igst))),
+        h('tr', h('td', { style: { border: 'none' } }, 'Round off'), h('td.num', { style: { border: 'none' } }, inr(t.round_off))),
+        h('tr', h('td', { style: { border: 'none', borderTop: '1px solid #555' } }, h('b', 'Grand Total')), h('td.num', { style: { border: 'none', borderTop: '1px solid #555' } }, h('b', inr(t.total)))))))))),
+    h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
+      td([h('b', 'Note: '), po.project_note || ''], { style: { width: '50%' } }),
+      td([h('b', 'Rupees in words: '), amountInWords(t.total).replace(/^Rupees /, '')])))),
+    h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
+      h('tr', ['Prepared By', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '25%' } }, x))),
+      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.comm_approved_by), plainName(po.approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
+      h('tr', ['Purchase Executive', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x))))),
+    h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
+    po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
+}
+
+function requisitionDoc(r, s) {
+  const lines = (r.lines || []).filter(l => l.description || l.spec || l.qty);
+  const blanks = Math.max(0, 11 - lines.length);
+  return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
+    h('table', h('tbody',
+      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '16px', fontWeight: 700 } }, 'Material Purchase Requisition')),
+      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontWeight: 700, color: '#1f4e9a' } }, s.company_name)),
+      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`, h('br'), `Works : ${s.works_address}`, h('br'), `Tel. : ${s.phone}`)),
+      h('tr', h('td', { colspan: 2 }, h('b', 'Project Name :- '), r.project_name || r.project_id_label || ''), h('td', { colspan: 2 }, h('b', 'Req No - '), r.req_no), h('td', { colspan: 2 }, h('b', 'Date '), fmtDate(r.date))),
+      h('tr', ['Sr. No.', 'Material Description', 'Specification', 'Qty.', 'UOM', 'Remark'].map(x => h('th', x))),
+      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', l.remark || ''))),
+      Array.from({ length: blanks }, () => h('tr', Array.from({ length: 6 }, () => h('td', { style: { height: '22px' } }, '')))),
+      h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: 3 }, 'Sign of Purchase Head')),
+      h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td'), h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? `${r.approved_by} (${r.approved_at || ''})` : r.status))))));
+}
+
+const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
+function stockSlipDoc(type, docNo, moves, s) {
+  const m0 = moves[0] || {};
+  const total = moves.reduce((a, m) => a + (Number(m.value) || 0), 0);
+  const info = [
+    ['No', docNo], ['Date', fmtDate(m0.date)],
+    type === 'INWARD' && ['Supplier', m0.vendor_id_label || m0.supplier], type === 'INWARD' && ['Invoice', [m0.invoice_no, fmtDate(m0.invoice_date)].filter(Boolean).join(' dt. ')],
+    type === 'INWARD' && ['PO No', m0.po_no || m0.po_id_label], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
+    type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
+    ['Reason', m0.reason], ['Purpose', m0.purpose]].filter(x => x && x[1]);
+  return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
+    companyHead(s, SLIP_TITLES[type] || type),
+    h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
+    h('table', { style: { marginTop: '8px' } },
+      h('thead', h('tr', ['Sr', 'Item Code', 'Item Name', 'Qty', 'UOM', 'Rate', 'Value', 'Remark'].map((x, i) => h('th' + ([3, 5, 6].includes(i) ? '.num' : ''), x)))),
+      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]), h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · ')),
+        h('td.num', m.qty), h('td', m.uom || ''), h('td.num', inr(m.rate)), h('td.num', inr(m.value)), h('td', m.remarks || '')))),
+      h('tfoot', h('tr', h('td', { colspan: 6 }, 'Total'), h('td.num', inr(total)), h('td')))),
+    h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
+      h('tr', ['Prepared By (Store)', type === 'INWARD' ? 'Checked By (Quality)' : 'Received By', 'Authorised Signatory'].map(x => h('th', { style: { width: '33%' } }, x))),
+      h('tr', [m0.created_by, '', ''].map(x => h('td', { style: { height: '50px', verticalAlign: 'bottom' } }, x || ''))))),
+    footer()));
+}
+
 export async function printView(root, kind, id) {
   root.classList.remove('hidden');
   root.replaceChildren(h('div.empty', 'Preparing document…'));
@@ -170,9 +277,19 @@ export async function printView(root, kind, id) {
   } else if (kind === 'po') {
     const po = await api(`/purchase_orders/${id}`);
     const v = await api(`/vendors/${po.vendor_id}`);
-    title = po.po_no;
-    doc = taxDoc({ title: 'PURCHASE ORDER', no: po.po_no, date: po.date, party: v, partyLabel: 'To (vendor):',
-      refs: [['Delivery by', fmtDate(po.delivery_date)], ['Project', po.project_id_label], ['Approved by', po.approved_by]], items: po.lines || [], place: v.state, notes: po.terms, s });
+    title = `PO ${po.po_no} ${v.name}`;
+    doc = poDoc(po, v, s);
+  } else if (kind === 'requisition') {
+    const r = await api(`/requisitions/${id}`);
+    title = r.req_no;
+    doc = requisitionDoc(r, s);
+  } else if (kind === 'stockdoc') {
+    const docNo = new URLSearchParams(location.hash.split('?')[1] || '').get('doc');
+    const moves = await api(`/stock_moves?type=${encodeURIComponent(id)}&doc_no=${encodeURIComponent(docNo)}`);
+    if (!moves.length) throw new Error(`No ${id} entries with number ${docNo}`);
+    moves.sort((a, b) => a.id - b.id);
+    title = `${SLIP_TITLES[id] || id} ${docNo}`;
+    doc = stockSlipDoc(id, docNo, moves, s);
   } else throw new Error('Unknown document');
   document.title = title;
   root.replaceChildren(bar(title), doc);

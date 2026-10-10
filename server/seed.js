@@ -97,6 +97,24 @@ c. Payment terms : If there is delay in payments, the work schedule will also ge
   ],
   boq_note: 'Transportation charges will be extra in client scope.',
   invoice_terms: 'Interest @18% p.a. will be charged on payments delayed beyond the due date.\nSubject to Pune jurisdiction.',
+  pan: 'AAACW3993K',
+  // Purchase order defaults (from the WIESPL PO format, WIESPL/PUR./02/R0)
+  po_doc_no: 'WIESPL/PUR./02/R0',
+  po_delivery_address: 'Western India Electromedical Systems Pvt. Ltd.\nPlot No.14, Narsimha Industrial Estate, Near Balaji Law College, Aundh-Rawet BRTS Road,\nTathawade, PUNE - 411 057. (Maharashtra)',
+  po_contact_person: 'Mrs. Vaishnavi',
+  po_contact_phone: '8805008236',
+  po_contact_emails: 'purchase@wiespl.com, ashwin.p@wiespl.com',
+  po_greeting: 'Greetings from Western India !\nWe are pleased to confirm our order for the material as per the details given below :-',
+  po_term_advance: 'Nil',
+  po_term_balance: '100% Against P.I. Prior To Dispatch.',
+  po_term_delivery: 'Dispatch Within 8 Days.',
+  po_term_warranty: '-',
+  po_term_freight: 'Extra',
+  po_term_validity: 'One month from the PO date or till the period of delivery mentioned above, whichever is earlier',
+  po_term_invoice: 'Please send 2 copies of invoice along with material.',
+  po_term_jurisdiction: 'In case of dispute, the matter will be subject to Pimpri-Chinchwad (Pune) Jurisdiction',
+  po_term_extra: 'Test Certificate Required Mandatory For Clearance Of Final Payment.',
+  po_sign_names: { prepared: 'Mrs. Vaishnavi Shinde', technical: 'Mr. Ashwin Pimpale', commercial: '', approved: 'Mrs. Jai Hublikar' },
 };
 
 // [sort, code, name, kind, category, uom, qty_basis, default_qty, install_pct, description]
@@ -392,6 +410,8 @@ export function seed() {
   const current = getSettings();
   const missing = Object.fromEntries(Object.entries(DEFAULT_SETTINGS).filter(([k]) => !(k in current)));
   if (Object.keys(missing).length) setSettings(missing);
+  // Company GSTIN as printed on WIESPL purchase orders, if not entered yet.
+  if (!getSettings().gstin) setSettings({ gstin: '27AAACW3993K1ZR' });
 
   if (!db.prepare('SELECT COUNT(*) c FROM products').get().c) {
     const st = db.prepare(`INSERT INTO products (sort, code, name, kind, category, uom, qty_basis, default_qty, install_pct, description, rate, hsn, gst_rate, active, created_by)

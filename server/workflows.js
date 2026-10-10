@@ -1,51 +1,108 @@
 import { db, tx, getSettings, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
+import { APPROVAL_FLOWS } from '../public/js/schema.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
-const APPROVERS = ['admin', 'manager'];
 
 const DOCS = {
   Quotation: { entity: 'quotations', ref: 'quote_no', amount: 'grand_total', title: r => `${r.subject || 'Quotation'} — ${r.customer_id_label || ''}`, settingKey: 'require_quote_approval' },
   'Purchase Order': { entity: 'purchase_orders', ref: 'po_no', amount: 'total', title: r => `PO to ${r.vendor_id_label || ''}`, settingKey: 'require_po_approval' },
+  Requisition: { entity: 'requisitions', ref: 'req_no', amount: null, title: r => `Requisition – ${r.project_name || r.project_id_label || ''} (${(r.lines || []).length} items)` },
 };
+
+export function canApprove(docType, stage, user) {
+  if (user.role === 'admin') return true;
+  const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
+  return !!step && step.roles.includes(user.role);
+}
+
+function openStep(docType, docId, row, stepIndex, user) {
+  const d = DOCS[docType];
+  const step = APPROVAL_FLOWS[docType][stepIndex];
+  insertRow('approvals', {
+    doc_type: docType, doc_id: Number(docId), doc_ref: row[d.ref], stage: step.stage, title: d.title(row),
+    amount: d.amount ? row[d.amount] : null, requested_by: user.name, requested_at: stamp(), status: 'Pending',
+  }, user, { system: true });
+  return step;
+}
 
 export function submitForApproval(docType, id, user) {
   const d = DOCS[docType];
   const row = getRow(d.entity, id);
   if (!['Draft', 'Rejected'].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
-  if (getSettings()[d.settingKey] === 'No') {
-    return updateRow(d.entity, id, { status: 'Approved', approved_by: `${user.name} (auto)`, ...(d.entity === 'quotations' ? { approved_at: stamp() } : {}) }, user, { system: true });
+  if (docType !== 'Quotation' && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
+  const flow = APPROVAL_FLOWS[docType];
+  if (d.settingKey && getSettings()[d.settingKey] === 'No') {
+    const patch = { status: 'Approved', approved_by: `${user.name} (auto)` };
+    if (d.entity === 'quotations') patch.approved_at = stamp();
+    if (d.entity === 'purchase_orders') patch.approval_stage = null;
+    return updateRow(d.entity, id, patch, user, { system: true });
   }
   return tx(() => {
-    const open = db.prepare("SELECT id FROM approvals WHERE doc_type = ? AND doc_id = ? AND status = 'Pending'").get(docType, Number(id));
-    if (!open) {
-      insertRow('approvals', {
-        doc_type: docType, doc_id: Number(id), doc_ref: row[d.ref], title: d.title(row), amount: row[d.amount],
-        requested_by: user.name, requested_at: stamp(), status: 'Pending',
-      }, user, { system: true });
-    }
-    return updateRow(d.entity, id, { status: 'Pending Approval' }, user, { system: true });
+    db.prepare("UPDATE approvals SET status = 'Rejected', comments = COALESCE(comments, 'Superseded by resubmission') WHERE doc_type = ? AND doc_id = ? AND status = 'Pending'").run(docType, Number(id));
+    const step = openStep(docType, id, row, 0, user);
+    const patch = { status: docType === 'Requisition' ? 'Submitted' : 'Pending Approval' };
+    if (d.entity === 'purchase_orders') Object.assign(patch, { approval_stage: step.stage, tech_approved_by: null, comm_approved_by: null, approved_by: null });
+    return updateRow(d.entity, id, patch, user, { system: true });
   });
 }
 
 export function decide(approvalId, decision, comments, user) {
-  if (!APPROVERS.includes(user.role)) throw new HttpError(403, 'Only a manager or admin can approve');
   if (!['Approved', 'Rejected'].includes(decision)) throw new HttpError(400, 'Decision must be Approved or Rejected');
   const ap = getRow('approvals', approvalId);
   if (ap.status !== 'Pending') throw new HttpError(400, `Already ${ap.status}`);
+  if (!canApprove(ap.doc_type, ap.stage, user)) {
+    const step = (APPROVAL_FLOWS[ap.doc_type] || []).find(s => s.stage === ap.stage);
+    throw new HttpError(403, `“${ap.stage || 'This step'}” must be approved by: ${(step?.roles || ['manager']).join(', ')}`);
+  }
   const d = DOCS[ap.doc_type];
   return tx(() => {
     updateRow('approvals', approvalId, { status: decision, decided_by: user.name, decided_at: stamp(), comments: comments || ap.comments }, user, { system: true });
-    if (d) {
-      const patch = { status: decision };
-      if (decision === 'Approved') {
-        patch.approved_by = user.name;
-        if (d.entity === 'quotations') patch.approved_at = stamp();
-      }
-      updateRow(d.entity, ap.doc_id, patch, user, { system: true });
+    if (!d) return getRow('approvals', approvalId);
+    const flow = APPROVAL_FLOWS[ap.doc_type];
+    const idx = Math.max(0, flow.findIndex(s => s.stage === ap.stage));
+    const step = flow[idx];
+    if (decision === 'Rejected') {
+      updateRow(d.entity, ap.doc_id, { status: 'Rejected', ...(d.entity === 'purchase_orders' ? { approval_stage: null } : {}) }, user, { system: true });
+      return getRow('approvals', approvalId);
     }
+    const patch = {};
+    if (d.entity === 'purchase_orders') patch[step.field] = `${user.name} (${stamp()})`;
+    if (idx + 1 < flow.length) {
+      const row = getRow(d.entity, ap.doc_id);
+      const next = openStep(ap.doc_type, ap.doc_id, row, idx + 1, user);
+      patch.approval_stage = next.stage;
+    } else {
+      patch.status = 'Approved';
+      if (d.entity === 'purchase_orders') patch.approval_stage = null;
+      if (d.entity !== 'purchase_orders') patch.approved_by = user.name;
+      if (d.entity === 'quotations' || d.entity === 'requisitions') patch.approved_at = stamp();
+    }
+    updateRow(d.entity, ap.doc_id, patch, user, { system: true });
     return getRow('approvals', approvalId);
+  });
+}
+
+// Approved requisition → draft PO for the chosen vendor (lines carry over with item prices).
+export function requisitionToPO(id, body, user) {
+  const r = getRow('requisitions', id);
+  if (r.status !== 'Approved') throw new HttpError(400, 'Only an approved requisition can be converted to a PO');
+  if (!body?.vendor_id) throw new HttpError(400, 'Choose a vendor');
+  const itemStmt = db.prepare('SELECT name, code, hsn, rate, gst_rate, uom FROM items WHERE id = ?');
+  const lines = (r.lines || []).filter(l => Number(l.qty) > 0).map(l => {
+    const it = l.item_id ? itemStmt.get(l.item_id) : null;
+    return {
+      item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
+      qty: Number(l.qty), uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18,
+    };
+  });
+  return tx(() => {
+    const po = insertRow('purchase_orders', {
+      vendor_id: Number(body.vendor_id), project_id: r.project_id, requisition_id: r.id, lines, status: 'Draft', prepared_by: user.name,
+    }, user, { system: true });
+    updateRow('requisitions', id, { status: 'Converted to PO' }, user, { system: true });
+    return po;
   });
 }
 
@@ -119,32 +176,4 @@ export function invoiceFromSalesOrder(soId, body, user) {
     place_of_supply: cust.state || 'Maharashtra', notes: getSettings().invoice_terms || '',
     lines: [{ description: body?.description || `${pct}% of order value against ${so.so_no}${so.client_po_no ? ' / PO ' + so.client_po_no : ''}`, hsn: '', qty: 1, uom: 'Lot', rate: round2((so.order_value || 0) * pct / 100), gst: so.gst_rate ?? 18 }],
   }, user, { system: true });
-}
-
-// Goods receipt against a PO: adds stock IN entries for lines linked to inventory items.
-export function receivePurchaseOrder(id, body, user) {
-  const po = getRow('purchase_orders', id);
-  if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, 'PO must be Approved or Sent before receiving goods');
-  const receipts = body?.receipts || [];
-  const lines = po.lines || [];
-  return tx(() => {
-    for (const r of receipts) {
-      const line = lines[r.index];
-      const qty = Number(r.qty);
-      if (!line || !(qty > 0)) continue;
-      line.received = round2((Number(line.received) || 0) + qty);
-      if (line.item_id) {
-        insertRow('stock_moves', {
-          date: body.date || new Date().toLocaleString('sv-SE').slice(0, 10), item_id: line.item_id, type: 'IN', qty,
-          project_id: po.project_id, ref_no: `${po.po_no}${body.challan ? ' / ' + body.challan : ''}`, remarks: `GRN against ${po.po_no}`,
-        }, user, { system: true });
-        db.prepare('UPDATE items SET rate = ? WHERE id = ?').run(Number(line.rate) || null, line.item_id);
-      }
-    }
-    const all = lines.every(l => (Number(l.received) || 0) >= (Number(l.qty) || 0));
-    const any = lines.some(l => (Number(l.received) || 0) > 0);
-    const updated = updateRow('purchase_orders', id, { lines, status: all ? 'Received' : any ? 'Partially Received' : po.status }, user, { system: true });
-    audit(user.name, 'purchase_orders', id, 'receive', receipts.map(r => `line ${r.index + 1}: ${r.qty}`).join(', '));
-    return updated;
-  });
 }

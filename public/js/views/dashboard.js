@@ -53,6 +53,8 @@ export async function dashboardView(root) {
       kpi('Pending approvals', k.pending_approvals, `${k.pending_material} client submittals awaiting`, '#/list/approvals?status=Pending'),
       kpi('Active projects', k.active_projects, null, '#/list/projects?status=Active'),
       kpi('Open service tickets', k.open_tickets, null, '#/list/service_tickets'),
+      kpi('Stock value', money(d.stock_value).replace('.00', ''), `${d.low_stock.length} items below minimum`, '#/stock-summary'),
+      kpi('Purchase pipeline', d.pending_po, `POs waiting for approval · ${d.pending_req} requisitions`, '#/list/approvals?status=Pending'),
     ),
     h('div.grid.cols-2',
       h('div.card', h('h2', 'Enquiries per month'), monthly(d.monthly, d.fy)),
