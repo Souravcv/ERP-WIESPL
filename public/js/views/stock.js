@@ -47,6 +47,8 @@ export async function stockEntryView(root) {
   let boq = null;
   let bom = null;
   let makeChallan = false;
+  // Pending material of the chosen work order / BOQ: offered as suggestions on each line, nothing is filled in by itself.
+  const pendingOpts = [];
   const ch = {}; // delivery challan details (ship-to address, vehicle …)
 
   if (p.po) {
@@ -68,9 +70,10 @@ export async function stockEntryView(root) {
     const boqRows = (await api(`/boq_items?boq_id=${boq.id}&limit=20000`)).sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
     for (const b of boqRows) {
       if (b.kind === 'Heading' || ['Dispatched', 'Delivered'].includes(b.delivery_status)) continue;
-      lines.push({ boq_item_id: b.id, item_id: b.item_id || null, qty: b.pending ?? '', boqNote: `${b.section} ${b.sr_no || ''} – ${[b.heading, String(b.description).split('\n')[0]].filter(Boolean).join(' › ').slice(0, 110)}`, boqPending: b.pending, uom: b.uom });
+      const note = `${b.section} ${b.sr_no || ''} – ${[b.heading, String(b.description).split('\n')[0]].filter(Boolean).join(' › ').slice(0, 110)}`;
+      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending ?? 'qty TBD'} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note });
     }
-    if (!lines.length) toast('Everything in this BOQ has already been sent');
+    if (!pendingOpts.length) toast('Everything in this work order has already been sent');
   }
   if (p.bom) {
     type = 'OUTWARD';
@@ -78,14 +81,29 @@ export async function stockEntryView(root) {
     Object.assign(header, { bom_id: bom.id, project_id: bom.project_id });
     for (const b of bomRows(await api(`/bom_items?bom_id=${bom.id}&limit=20000`))) {
       if (!(b.pending > 0)) continue;
-      lines.push({ bom_item_id: b.id, item_id: b.item_id || null, qty: b.pending, boqNote: `${b.section || ''} ${b.sr_no || ''} – ${[b.component_name, b.dimensions].filter(Boolean).join(' ').slice(0, 110)}`, boqPending: b.pending, uom: b.uom });
+      const note = `${b.section || ''} ${b.sr_no || ''} – ${[b.component_name, b.dimensions].filter(Boolean).join(' ').slice(0, 110)}`;
+      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note });
     }
-    if (!lines.length) toast('Everything in this BOQ has already been sent');
+    if (!pendingOpts.length) toast('Everything in this BOQ has already been sent');
   }
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
   if (p.vendor) header.vendor_id = Number(p.vendor);
   if (!lines.length) lines.push({ item_id: null, qty: '' });
+
+  // Line picker: type part of the material and choose from what is still pending on the BOQ / work order.
+  const linkKey = () => (bom ? 'bom_item_id' : 'boq_item_id');
+  function materialPicker(l) {
+    const used = new Set(lines.filter(x => x !== l).map(x => x[linkKey()]).filter(Boolean));
+    const opts = pendingOpts.filter(o => !used.has(o.id));
+    return h('span', { style: { display: 'contents' } }, itemPicker(opts, l[linkKey()] || null, { onPick: id => {
+      const o = pendingOpts.find(x => x.id === id);
+      l[linkKey()] = o ? o.id : null;
+      if (o) Object.assign(l, { item_id: l.item_id || o.item_id, qty: o.pending ?? l.qty, uom: o.uom, boqPending: o.pending });
+      render();
+    } }), l[linkKey()] && l.boqPending != null ? h('div.muted', { style: { fontSize: '12px' } }, `pending ${l.boqPending} ${l.uom || ''}`) : null,
+    !pendingOpts.length ? h('div.muted', 'nothing pending') : null);
+  }
 
   function headerFields() {
     const v = (k, el) => { el.value = header[k] ?? ''; el.oninput = el.onchange = () => { header[k] = el.value; }; return el; };
@@ -149,9 +167,10 @@ export async function stockEntryView(root) {
       upd();
       return h('tr',
         h('td.muted', i + 1),
+        (boq || bom) ? h('td', { style: { minWidth: '280px' } }, materialPicker(l)) : null,
         h('td', itemPicker(itemOpts, l.item_id, { onPick: id => { l.item_id = id; if (!priced) l.rate = null; render(); } }),
           l.note ? h('div.muted', { style: { fontSize: '12px' } }, `PO: ${l.note} (ordered ${l.ordered}, received ${l.received})`) : null,
-          l.boqNote ? h('div.muted', { style: { fontSize: '12px' } }, `BOQ: ${l.boqNote}${l.boqPending != null ? ` (pending ${l.boqPending} ${l.uom || ''})` : ''}`) : null),
+          null),
         stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
@@ -160,7 +179,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), h('th', 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, h('th', (boq || bom) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
@@ -172,6 +191,7 @@ export async function stockEntryView(root) {
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
+    if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');
     if (type === 'TRANSFER' && !header.to_location) throw new Error('Enter where the material is transferred to');
     try {
