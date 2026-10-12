@@ -41,6 +41,17 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_notify_v1', '\"1\"')").run();
   }
+  // The store does not work in the CRM: hide CRM modules from the built-in Store role once.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_store_crm_v1'").get()) {
+    const r = db.prepare("SELECT perms FROM roles WHERE name = 'store'").get();
+    if (r) {
+      const p = parse(r.perms);
+      p.modules ||= {};
+      for (const [k, e] of Object.entries(ENTITIES)) if (e.group === 'CRM') p.modules[k] = 'none';
+      db.prepare("UPDATE roles SET perms = ? WHERE name = 'store'").run(JSON.stringify(p));
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_store_crm_v1', '\"1\"')").run();
+  }
   loadRoles();
 }
 

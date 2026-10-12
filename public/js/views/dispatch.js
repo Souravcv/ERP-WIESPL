@@ -136,22 +136,25 @@ export async function boqView(root, boqId) {
     if (!picks.size) throw new Error('Tick the material you are sending');
     const chosen = rows.filter(r => picks.has(r.id));
     const f = {
-      ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the project site address' }),
-      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'), lr_no: h('input'),
-      driver: h('input', { placeholder: 'name / phone' }), eway_bill: h('input'), site_contact: h('input'), remarks: h('input'),
+      ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the vendor / project site address' }),
+      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'),
+      driver: h('input', { placeholder: 'name / phone' }), remarks: h('input'),
     };
+    let vendorId = null;
+    const vendors = await refOptions('vendors');
     // Optional store item per line: if set, that quantity is issued from store stock.
     const itemCells = chosen.map(r => h('tr', h('td', `${r.sr_no || ''} ${firstLine(r.description).slice(0, 60)}`), h('td.num', picks.get(r.id).qty ?? ''),
       h('td', itemPicker(items, picks.get(r.id).item_id, { onPick: id => { picks.get(r.id).item_id = id; } }))));
     const ok = await modal(`Dispatch ${chosen.length} item(s) – a delivery challan is created automatically`, h('div.grid',
+      h('label', 'Vendor (if the material goes to a vendor)', itemPicker(vendors, null, { onPick: id => { vendorId = id; } })),
       h('label', 'Ship to (address on the challan)', f.ship_to),
-      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', driver: 'Driver', eway_bill: 'E-way Bill No', site_contact: 'Site contact', remarks: 'Remarks' })
+      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', driver: 'Driver', remarks: 'Remarks' })
         .map(([k, l]) => h('label', l, f[k]))),
       h('details', h('summary', 'Issue from store stock (optional) – pick the store item for lines that come from the store'),
         h('table.data', h('thead', h('tr', h('th', 'Material'), h('th.num', 'Qty'), h('th', 'Store item'))), h('tbody', itemCells)))),
       [{ label: 'Cancel', value: false }, { label: '🚚 Dispatch & make challan', cls: 'good', value: true }], { wide: true });
     if (!ok) return;
-    const body = { picks: [...picks].map(([boq_item_id, p]) => ({ boq_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])) };
+    const body = { picks: [...picks].map(([boq_item_id, p]) => ({ boq_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), vendor_id: vendorId };
     let r;
     try { r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body }); }
     catch (e) {

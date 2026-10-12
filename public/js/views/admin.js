@@ -24,13 +24,21 @@ export async function usersView(root) {
     await modal(u.id ? `Edit ${u.name}` : 'New user', h('div.form-grid',
       h('label', 'Username (for login)', f.username), h('label', 'Full name', f.name), h('label.span-2', 'Role', f.role, roleHelp),
       h('label', 'Email', f.email), h('label', 'Phone', f.phone), h('label', u.id ? 'Reset password' : 'Initial password', f.password), h('label', 'Status', f.active)),
-      [{ label: 'Cancel' }, { label: 'Save', cls: 'primary', action: async () => {
+      [{ label: 'Cancel' },
+        u.id && u.id !== state.user.id ? { label: '🗑 Delete user', cls: 'danger', action: async () => {
+          if (!(await confirmBox(`Delete the login of ${u.name} (${u.username})? Records they made keep their name. To only block the login for now, set Status to Disabled instead.`, 'Delete'))) return false;
+          await api(`/users/${u.id}`, { method: 'DELETE' });
+          toast('User deleted');
+          usersView(root);
+          return true;
+        } } : null,
+        { label: 'Save', cls: 'primary', action: async () => {
         const body = { username: f.username.value, name: f.name.value, role: f.role.value, email: f.email.value, phone: f.phone.value, active: f.active.value === '1' };
         if (f.password.value) body.password = f.password.value;
         await api(u.id ? `/users/${u.id}` : '/users', { method: u.id ? 'PUT' : 'POST', body });
         toast('User saved');
         usersView(root);
-      } }]);
+      } }].filter(Boolean));
   };
   root.replaceChildren(
     h('div.page-head', h('h1', '👥 Users'), h('div.actions', h('a.btn', { href: '#/roles' }, '🛡️ Roles & Permissions'), h('button.btn.primary', { onclick: () => edit() }, '+ New user'))),

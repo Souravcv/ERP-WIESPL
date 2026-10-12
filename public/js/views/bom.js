@@ -123,21 +123,24 @@ export async function bomView(root, bomId) {
     if (!picks.size) throw new Error('Tick the components you are sending');
     const chosen = rows.filter(r => picks.has(r.id));
     const f = {
-      ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the project site address' }),
-      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'), lr_no: h('input'),
-      driver: h('input', { placeholder: 'name / phone' }), eway_bill: h('input'), site_contact: h('input'), remarks: h('input'),
+      ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the vendor / project site address' }),
+      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'),
+      driver: h('input', { placeholder: 'name / phone' }), remarks: h('input'),
     };
+    let vendorId = null;
+    const vendors = await refOptions('vendors');
     const itemRows = chosen.map(r => h('tr', h('td', `${r.sr_no || ''} ${r.component_name} ${r.dimensions || ''}`.slice(0, 70)), h('td.num', picks.get(r.id).qty ?? ''),
       h('td', itemPicker(items, picks.get(r.id).item_id, { onPick: id => { picks.get(r.id).item_id = id; } }))));
     const ok = await modal(`Dispatch ${chosen.length} component(s) – a delivery challan is created automatically`, h('div.grid',
+      h('label', 'Vendor (if the material goes to a vendor)', itemPicker(vendors, null, { onPick: id => { vendorId = id; } })),
       h('label', 'Ship to (address on the challan)', f.ship_to),
-      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', driver: 'Driver', eway_bill: 'E-way Bill No', site_contact: 'Site contact', remarks: 'Remarks' })
+      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', driver: 'Driver', remarks: 'Remarks' })
         .map(([k, l]) => h('label', l, f[k]))),
       h('details', h('summary', 'Issue from store stock (optional) – pick the store item for components that come from the store'),
         h('table.data', h('thead', h('tr', h('th', 'Component'), h('th.num', 'Qty'), h('th', 'Store item'))), h('tbody', itemRows)))),
     [{ label: 'Cancel', value: false }, { label: '🚚 Dispatch & make challan', cls: 'good', value: true }], { wide: true });
     if (!ok) return;
-    const body = { picks: [...picks].map(([bom_item_id, p]) => ({ bom_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])) };
+    const body = { picks: [...picks].map(([bom_item_id, p]) => ({ bom_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), vendor_id: vendorId };
     let r;
     try { r = await api(`/boms/${bomId}/dispatch`, { method: 'POST', body }); } catch (e) {
       if (!/Not enough stock|More than the BOQ/.test(e.message)) throw e;

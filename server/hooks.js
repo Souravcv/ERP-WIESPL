@@ -3,8 +3,12 @@ import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES } from '../public/js/schema.js';
 
-// Item codes continue the Smart Store numbering (1001, 1002 ...): next = highest numeric code + 1.
-export function nextItemCode() {
+// Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
+export function nextItemCode(category) {
+  if (category === 'Finished Goods') {
+    const max = db.prepare("SELECT MAX(CAST(substr(code, 3) AS INTEGER)) m FROM items WHERE code GLOB 'FG[0-9]*' AND substr(code, 3) NOT GLOB '*[^0-9]*'").get().m;
+    return 'FG' + String((Number(max) || 0) + 1).padStart(3, '0');
+  }
   const max = db.prepare("SELECT MAX(CAST(code AS INTEGER)) m FROM items WHERE code GLOB '[0-9]*' AND code NOT GLOB '*[^0-9]*'").get().m;
   return String(Math.max(Number(max) || 1000, 1000) + 1);
 }
@@ -122,6 +126,11 @@ export function beforeSave(name, row, existing, user) {
       break;
     case 'challans': {
       if (!existing && !row.challan_no) row.challan_no = docNo('challan', date, (n, fy) => `DC-${n}/20${fy}`);
+      const vid = row.vendor_id ?? existing?.vendor_id;
+      if (vid && !(row.ship_to ?? existing?.ship_to)) {
+        const v = db.prepare('SELECT name, address, city, state, pincode, phone FROM vendors WHERE id = ?').get(vid);
+        if (v) row.ship_to = [v.name, v.address, [v.city, v.state, v.pincode].filter(Boolean).join(', '), v.phone && `Ph: ${v.phone}`].filter(Boolean).join('\n');
+      }
       const mid = row.bom_id ?? existing?.bom_id;
       if (mid && !(row.project_id ?? existing?.project_id)) row.project_id = db.prepare('SELECT project_id FROM boms WHERE id = ?').get(mid)?.project_id || null;
       if (mid && !(row.ship_to ?? existing?.ship_to) && !(row.project_id ?? existing?.project_id)) {
@@ -151,7 +160,7 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     case 'items':
-      if (!existing && !row.code) row.code = nextItemCode();
+      if (!existing && !String(row.code ?? '').trim()) row.code = nextItemCode(row.category);
       if (row.code && db.prepare('SELECT 1 FROM items WHERE code = ? AND id <> ?').get(row.code, existing?.id ?? 0)) {
         throw Object.assign(new Error(`Item code ${row.code} is already used`), { status: 409 });
       }

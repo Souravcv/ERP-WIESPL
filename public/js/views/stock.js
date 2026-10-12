@@ -148,10 +148,10 @@ export async function stockEntryView(root) {
     }
     if (boq || bom || makeChallan) {
       const cv = (k, el) => { el.value = ch[k] ?? ''; el.oninput = el.onchange = () => { ch[k] = el.value; }; return el; };
-      F.push(h('label.span-2', 'Ship to (address on the challan)', h('span.hint', 'leave blank to use the project site address'), cv('ship_to', h('textarea', { rows: 3, placeholder: 'Hospital / site name\nAddress\nCity' }))),
-        field('Site contact / phone', cv('site_contact', h('input'))), field('Vehicle No', cv('vehicle_no', h('input', { placeholder: 'MH14 AB 1234' }))),
-        field('Transporter', cv('transporter', h('input'))), field('LR / Docket No', cv('lr_no', h('input'))), field('Driver', cv('driver', h('input', { placeholder: 'name / phone' }))),
-        field('E-way Bill No', cv('eway_bill', h('input'))));
+      F.push(field('Vendor (if the material goes to a vendor)', itemPicker(vendors, ch.vendor_id ?? null, { onPick: id => { ch.vendor_id = id; } }), 'ship-to is taken from the vendor'),
+        h('label.span-2', 'Ship to (address on the challan)', h('span.hint', 'leave blank to use the vendor / project site address'), cv('ship_to', h('textarea', { rows: 3, placeholder: 'Hospital / site / vendor name\nAddress\nCity' }))),
+        field('Vehicle No', cv('vehicle_no', h('input', { placeholder: 'MH14 AB 1234' }))), field('Transporter', cv('transporter', h('input'))),
+        field('Driver', cv('driver', h('input', { placeholder: 'name / phone' }))));
       if (makeChallan) F.push(field('Challan type', cv('challan_type', h('select', ['Non-Returnable', 'Returnable'].map(x => h('option', x))))));
     }
     if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
@@ -270,6 +270,7 @@ export async function stockSummaryView(root) {
     only: h('select', h('option', { value: '' }, 'All items'), h('option', { value: 'instock' }, 'In stock'), h('option', { value: 'low' }, 'Below minimum'), h('option', { value: 'negative' }, 'Negative stock')),
     q: h('input.grow', { type: 'search', placeholder: 'Search code or name…', value: p.q || '' }),
   };
+  if (p.only) f.only.value = p.only;
   const out = h('div');
   const query = () => new URLSearchParams(Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]).filter(([, v]) => v))).toString();
   let page = 0, data = null, sort = null;

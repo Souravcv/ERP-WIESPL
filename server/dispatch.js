@@ -161,7 +161,7 @@ function challanLines(boq, picks, user, force) {
   return lines;
 }
 
-const CHALLAN_KEYS = ['date', 'ship_to', 'site_contact', 'vehicle_no', 'transporter', 'lr_no', 'driver', 'eway_bill', 'challan_type', 'remarks'];
+const CHALLAN_KEYS = ['date', 'vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type', 'remarks'];
 
 // Dispatch from the BOQ window: the challan is created automatically (status Dispatched),
 // store items on it are issued from stock, and the BOQ shows them as sent.
@@ -468,7 +468,7 @@ export function challanForIssue(body, issue, user) {
   });
   const c = body.challan || {};
   const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => c[k]).map(k => [k, c[k]]));
-  if (!extra.ship_to && body.type === 'TRANSFER' && body.to_location) extra.ship_to = body.to_location;
+  if (!extra.ship_to && !extra.vendor_id && body.type === 'TRANSFER' && body.to_location) extra.ship_to = body.to_location;
   const ch = insertRow('challans', {
     ...extra, date: body.date || undefined, project_id: body.project_id || null, issue_no: issue.doc_no, issue_type: body.type, status: 'Dispatched',
     challan_type: c.challan_type || (body.type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'),

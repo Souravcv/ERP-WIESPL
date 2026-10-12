@@ -16,6 +16,7 @@ import {
 import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
 import * as notify from './notify.js';
 import { tx } from './db.js';
+import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -111,6 +112,18 @@ api.put('/users/:id', requireRole(), wrap(req => {
   if (!active) db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
   audit(req.user.name, 'users', u.id, 'update', `${role}${active ? '' : ' (disabled)'}${password ? ' + password reset' : ''}`);
   return publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(u.id));
+}));
+api.delete('/users/:id', requireRole(), wrap(req => {
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(Number(req.params.id));
+  if (!u) throw new HttpError(404, 'User not found');
+  if (u.id === req.user.id) throw new HttpError(400, 'You cannot delete your own login');
+  if (u.role === 'admin' && db.prepare("SELECT COUNT(*) n FROM users WHERE role = 'admin' AND active = 1 AND id <> ?").get(u.id).n === 0) throw new HttpError(400, 'This is the last administrator; make someone else admin first');
+  // Records they made keep their name (created by / prepared by); only the login goes.
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(u.id);
+  db.prepare('DELETE FROM notifications WHERE user_id = ?').run(u.id);
+  db.prepare('DELETE FROM users WHERE id = ?').run(u.id);
+  audit(req.user.name, 'users', u.id, 'delete', `${u.username} (${u.name})`);
+  return { ok: true };
 }));
 api.get('/settings', wrap(() => getSettings()));
 api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
@@ -232,6 +245,8 @@ api.post('/stock/entry', need('stock_moves'), wrap(req => {
 }));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
 api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
+api.get('/dashboard/store', wrap(req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); return stock.storeDashboard(req.query); }));
+api.get('/items/next-code', wrap(req => ({ code: nextItemCode(req.query.category) })));
 api.post('/stock/opening', wrap(req => {
   if (!hasFunction(req.user.role, 'stock_opening')) throw new HttpError(403, 'You do not have permission to create opening stock');
   return stock.carryForwardOpening(req.body?.fy, req.user);

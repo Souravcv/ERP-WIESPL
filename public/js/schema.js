@@ -485,8 +485,8 @@ export const ENTITIES = {
   challans: {
     label: 'Delivery Challans', singular: 'Delivery Challan', group: 'Sales & Projects', icon: '🚚', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "{t}.challan_no",
-    search: ['challan_no', 'issue_no', 'ship_to', 'vehicle_no', 'transporter', 'lr_no', 'eway_bill', 'received_by', 'remarks'],
-    list: ['challan_no', 'date', 'bom_id', 'boq_id', 'project_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
+    search: ['challan_no', 'issue_no', 'ship_to', 'vehicle_no', 'transporter', 'received_by', 'remarks'],
+    list: ['challan_no', 'date', 'bom_id', 'boq_id', 'project_id', 'vendor_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
     statusField: 'status', print: 'challan',
     fields: [
       { key: 'challan_no', label: 'Challan No', type: 'text', readonly: true, hint: 'Auto: DC-001/2026-27' },
@@ -496,16 +496,17 @@ export const ENTITIES = {
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'issue_no', label: 'Stock Issue / Transfer No', type: 'text', readonly: true },
       { key: 'issue_type', label: 'Stock Slip Type', type: 'text', hidden: true },
-      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
+      { key: 'vendor_id', label: 'Vendor (material sent to)', type: 'ref', ref: 'vendors', hint: 'Ship-to address is filled from the vendor' },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', hidden: true },
       { key: 'challan_type', label: 'Challan Type', type: 'select', options: ['Non-Returnable', 'Returnable'], default: 'Non-Returnable' },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Dispatched', 'Delivered', 'Cancelled'], default: 'Draft', readonly: true },
       { key: 'ship_to', label: 'Ship To (site address)', type: 'textarea', span: 2 },
-      { key: 'site_contact', label: 'Site Contact / Phone', type: 'text' },
+      { key: 'site_contact', label: 'Site Contact / Phone', type: 'text', hidden: true },
       { key: 'vehicle_no', label: 'Vehicle No', type: 'text' },
       { key: 'transporter', label: 'Transporter', type: 'text' },
-      { key: 'lr_no', label: 'LR / Docket No', type: 'text' },
+      { key: 'lr_no', label: 'LR / Docket No', type: 'text', hidden: true },
       { key: 'driver', label: 'Driver Name / Phone', type: 'text' },
-      { key: 'eway_bill', label: 'E-way Bill No', type: 'text' },
+      { key: 'eway_bill', label: 'E-way Bill No', type: 'text', hidden: true },
       { key: 'lines', label: 'Material', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
         { key: 'description', label: 'Description', type: 'textarea', width: 320 },
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
@@ -768,7 +769,7 @@ export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
 export function defaultPermissions(role) {
   const modules = {};
   for (const [name, ent] of Object.entries(ENTITIES)) {
-    modules[name] = role === 'manager' ? 'full' : (ent.write || []).includes(role) ? 'edit' : 'view';
+    modules[name] = role === 'manager' ? 'full' : (ent.write || []).includes(role) ? 'edit' : role === 'store' && ent.group === 'CRM' ? 'none' : 'view';
   }
   return { modules, functions: DEFAULT_FUNCTIONS[role] || [] };
 }

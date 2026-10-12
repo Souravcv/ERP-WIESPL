@@ -204,3 +204,53 @@ export function carryForwardOpening(fy, user) {
   audit(user.name, 'stock_moves', null, 'opening carry-forward', `FY 20${fy}: ${created} items, ${skipped} already had an opening entry`);
   return { date, created, skipped };
 }
+
+// ---------------------------------------------------------------- store dashboard
+// FY totals (opening / inward / outward / closing in qty and value), the last 6 months month by month,
+// document counts, ABC / FSN and what needs attention.
+export function storeDashboard(q = {}) {
+  const to = today();
+  const from = fyStart(fyOf(to));
+  const { rows } = stockSummary({ from, to });
+  const sum = (k, f = r => r[k]) => round2(rows.reduce((s, r) => s + (Number(f(r)) || 0), 0));
+  const totals = {
+    items: rows.length, in_stock: rows.filter(r => r.closing > 0).length,
+    opening_qty: sum('opening'), opening_value: sum(null, r => r.opening * r.rate),
+    inward_qty: sum('inward'), inward_value: sum('inward_value'),
+    outward_qty: round2(sum('outward') + sum('transfer')), outward_value: sum('consumption_value'),
+    return_qty: sum('return'), scrap_qty: sum('scrap'),
+    closing_qty: sum('closing'), closing_value: sum('closing_value'),
+  };
+  // last 6 months, including this one
+  const months = [];
+  const d = new Date(to.slice(0, 7) + '-01T00:00:00');
+  for (let i = 5; i >= 0; i--) { const x = new Date(d.getFullYear(), d.getMonth() - i, 1); months.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
+  const flows = db.prepare(`SELECT substr(m.date, 1, 7) mo, CASE WHEN m.type = 'INWARD' THEN 'in' ELSE 'out' END k,
+      SUM(m.qty) q, SUM(m.qty * COALESCE(m.rate, i.rate, 0)) v
+    FROM stock_moves m JOIN items i ON i.id = m.item_id
+    WHERE m.date >= ? AND m.date <= ? AND m.type IN ('INWARD', 'OUTWARD', 'TRANSFER') GROUP BY 1, 2`).all(months[0] + '-01', to);
+  const monthly = months.map(mo => {
+    const f = k => flows.find(x => x.mo === mo && x.k === k) || {};
+    return { month: mo, in_qty: round2(f('in').q || 0), in_value: round2(f('in').v || 0), out_qty: round2(f('out').q || 0), out_value: round2(f('out').v || 0) };
+  });
+  const byStatus = t => db.prepare(`SELECT COALESCE(status, '') status, COUNT(*) n FROM ${t} GROUP BY 1 ORDER BY n DESC`).all();
+  const count = (k, v) => rows.filter(r => r[k] === v).length;
+  const nonMoving = rows.filter(r => r.fsn === 'NON-M' && r.closing > 0);
+  return {
+    from, to, totals, monthly,
+    challans: byStatus('challans'), requisitions: byStatus('requisitions'), purchase_orders: byStatus('purchase_orders'),
+    pending_grn: db.prepare("SELECT COUNT(*) n FROM purchase_orders WHERE status IN ('Approved', 'Sent', 'Partially Received')").get().n,
+    abc: ['A', 'B', 'C'].map(c => ({ cls: c, n: count('abc', c), value: round2(rows.filter(r => r.abc === c).reduce((s, r) => s + r.consumption_value, 0)) })),
+    fsn: ['FAST', 'SLOW', 'NON-M'].map(c => ({ cls: c, n: count('fsn', c), value: round2(rows.filter(r => r.fsn === c).reduce((s, r) => s + r.closing_value, 0)) })),
+    attention: {
+      low: rows.filter(r => r.low).length, negative: rows.filter(r => r.closing < 0).length,
+      non_moving: nonMoving.length, non_moving_value: round2(nonMoving.reduce((s, r) => s + r.closing_value, 0)),
+      no_price: rows.filter(r => r.closing > 0 && !r.rate).length,
+      no_min_level: rows.filter(r => r.fsn === 'FAST' && !r.reorder_level).length,
+    },
+    top_consumed: [...rows].filter(r => r.consumption_value > 0).sort((a, b) => b.consumption_value - a.consumption_value).slice(0, 8)
+      .map(r => ({ id: r.id, code: r.code, name: r.name, qty: round2(r.outward + r.transfer), uom: r.uom, value: r.consumption_value })),
+    top_stock: [...rows].filter(r => r.closing_value > 0).sort((a, b) => b.closing_value - a.closing_value).slice(0, 8)
+      .map(r => ({ id: r.id, code: r.code, name: r.name, qty: r.closing, uom: r.uom, value: r.closing_value, fsn: r.fsn })),
+  };
+}

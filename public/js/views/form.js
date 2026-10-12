@@ -21,7 +21,7 @@ export async function quickItem(preset = {}) {
   f.description.value = preset.spec || '';
   if (preset.uom && UOMS.includes(preset.uom)) f.uom.value = preset.uom;
   const it = await modal('Add new item to the item master', h('div.grid',
-    h('p.muted', 'The next item code is given automatically. Opening stock is 0 until it is received (GRN).'),
+    h('p.muted', 'The item code is given automatically (finished goods FG…, everything else the next number). Opening stock is 0 until it is received (GRN).'),
     h('div.form-grid', h('label.span-2', 'Item name *', f.name), h('label', 'Category', f.category), h('label', 'UOM', f.uom), h('label', 'Price (₹)', f.rate), h('label', 'HSN', f.hsn),
       h('label.span-2', 'Specification', f.description))),
   [{ label: 'Cancel', value: null }, { label: 'Add item', cls: 'primary', action: async () => {
@@ -429,6 +429,11 @@ export async function recordView(root, entity, id) {
   };
   for (const ctrl of new Set(conditional.map(([f]) => Object.keys(f.showIf)[0]))) inputs[ctrl]?.el.addEventListener('change', applyShowIf);
   applyShowIf();
+  if (entity === 'items' && isNew && inputs.code && inputs.category) {
+    const showNext = () => api(`/items/next-code?category=${encodeURIComponent(inputs.category.get() || '')}`).then(r => { inputs.code.el.placeholder = `${r.code} (given automatically)`; }).catch(() => {});
+    inputs.category.el.addEventListener('change', showNext);
+    showNext();
+  }
   if (entity === 'purchase_orders' && writable && inputs.requisition_id) {
     inputs.requisition_id.el.addEventListener('change', () => fillFromRequisition(inputs.requisition_id.get(), inputs).catch(fail));
     // Opened as "new PO" from a requisition link: fill straight away.
@@ -465,7 +470,7 @@ export async function recordView(root, entity, id) {
     if (isNew) {
       // From here on this page edits the saved record, so saving again never makes a copy.
       isNew = false; id = saved.id;
-      history.replaceState(null, '', recordHref(entity, saved.id));
+      window.history.replaceState(null, '', recordHref(entity, saved.id));
       if (newFiles.pending().length) await newFiles.uploadTo(saved.id).catch(e => fail(new Error(`Saved, but a file could not be uploaded: ${e.message}`)));
     }
     if (quiet) return saved;
@@ -512,7 +517,7 @@ export async function recordView(root, entity, id) {
       `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
     isNew ? (writable ? newFiles.el : null) : attachments(entity, r.id, canWrite(entity, state.user.role)),
     isNew ? null : related(entity, r),
-    isNew || !hasFunction(state.user.role, 'view_audit') ? null : history(entity, id),
+    isNew || !hasFunction(state.user.role, 'view_audit') ? null : changeHistory(entity, id),
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
@@ -599,7 +604,7 @@ function related(entity, row) {
   return box;
 }
 
-function history(entity, id) {
+function changeHistory(entity, id) {
   const box = h('details.card', h('summary', 'Change history'), h('div.timeline', 'Loading…'));
   box.addEventListener('toggle', async () => {
     if (!box.open) return;

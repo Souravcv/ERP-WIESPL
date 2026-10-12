@@ -1,5 +1,7 @@
-import { h, api, money, fmtDate, badge, tip } from '../ui.js';
+import { h, api, money, fmtDate, badge, tip, state, fail } from '../ui.js';
 import { fyOf } from '../calc.js';
+import { canView } from '../schema.js';
+import { storeDashboard } from './storedash.js';
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
@@ -28,7 +30,25 @@ function monthly(rows, fy) {
   return h('div', chart, h('div.collabels', data.map(d => h('span', d.m))));
 }
 
+// Each person sees the dashboard of their work: sales / CRM, store, or both (as tabs).
 export async function dashboardView(root) {
+  const role = state.user.role;
+  const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store']].filter(Boolean);
+  if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
+  let tab = sessionStorage.getItem('dash-tab');
+  if (!views.some(v => v[0] === tab)) tab = role === 'store' || !views.some(v => v[0] === 'crm') ? 'store' : views[0][0];
+  if (tab === 'crm') return crmDashboard(root, views);
+  const box = h('div', h('div.muted', 'Loading…'));
+  root.replaceChildren(h('div.page-head', h('h1', '📊 Store Dashboard'), h('div.actions', h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn.primary', { href: '#/stock-entry' }, '🔁 Stock Entry'))),
+    tabsOf(views, 'store', root), box);
+  await storeDashboard(box).catch(e => { box.replaceChildren(h('div.card', e.message)); fail(e); });
+}
+function tabsOf(views, active, root) {
+  if (views.length < 2) return null;
+  return h('div.tabs', views.map(([k, label]) => h('button', { class: k === active ? 'active' : '', onclick: () => { sessionStorage.setItem('dash-tab', k); dashboardView(root); } }, label)));
+}
+
+async function crmDashboard(root, views) {
   const cur = fyOf();
   const fySel = h('select', { style: { width: 'auto' } }, [0, 1, 2].map(n => {
     const [a] = cur.split('-').map(Number);
@@ -44,6 +64,7 @@ export async function dashboardView(root) {
   root.replaceChildren(
     h('div.page-head', h('h1', '📊 Dashboard'), h('div.actions', fySel,
       h('a.btn.primary', { href: '#/edit/enquiries/new' }, '+ New Enquiry'))),
+    tabsOf(views, 'crm', root),
     h('div.kpis',
       kpi('Enquiries this FY', k.enquiries, `${k.won} won · ${k.lost} lost/regret`, '#/list/enquiries'),
       kpi('Win rate', k.conversion == null ? '—' : `${k.conversion}%`, 'won ÷ (won + lost)', '#/list/enquiries?status=Won'),
