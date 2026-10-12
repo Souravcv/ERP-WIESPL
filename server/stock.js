@@ -51,6 +51,10 @@ export function stockEntry(body, user) {
         .get(typed, typed.replace(/^(\d{1,3})\//, (m, d) => d.padStart(3, '0') + '/'));
       if (hit) header.po_id = hit.id;
     }
+    // Goods are only received against a purchase order.
+    if (type === 'INWARD' && !header.po_id && !body.allowWithoutPo) {
+      throw new HttpError(400, header.po_no ? `PO ${header.po_no} is not an approved PO in the CRM (approved / sent / partly received). Check the number or approve the PO first.` : 'Inward needs a purchase order: choose it under “Against PO” (or type its PO number)');
+    }
     if (type === 'INWARD' && header.po_id) {
       po = getRow('purchase_orders', header.po_id);
       if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, `PO ${po.po_no} is ${po.status}; only approved POs can be received`);

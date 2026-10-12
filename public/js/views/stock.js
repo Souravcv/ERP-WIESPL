@@ -49,6 +49,7 @@ export async function stockEntryView(root) {
   let makeChallan = false;
   // Pending material of the chosen work order / BOQ: offered as suggestions on each line, nothing is filled in by itself.
   const pendingOpts = [];
+  const poOpts = []; // lines of the chosen PO, offered on each GRN line
   const ch = {}; // delivery challan details (ship-to address, vehicle …)
 
   if (p.po) {
@@ -59,9 +60,11 @@ export async function stockEntryView(root) {
     po.lines.forEach((l, i) => {
       if (l.description) heading = l.description;
       const pending = round2((Number(l.qty) || 0) - (Number(l.received) || 0));
-      if (!(Number(l.qty) > 0) || pending <= 0) return;
-      lines.push({ item_id: l.item_id || null, qty: pending, rate: l.rate, po_line: i, note: [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – '), ordered: l.qty, received: l.received || 0, gst: l.gst, hsn: l.hsn });
+      if (!(Number(l.qty) > 0)) return;
+      const note = [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – ');
+      poOpts.push({ id: i + 1, label: `${note} · ordered ${l.qty} ${l.uom || ''}, received ${l.received || 0}, pending ${Math.max(0, pending)}`, item_id: l.item_id || null, pending: Math.max(0, pending), rate: l.rate, gst: l.gst, hsn: l.hsn, uom: l.uom });
     });
+    if (!poOpts.some(o => o.pending > 0)) toast(`Everything on PO ${po.po_no} has been received`);
   }
   if (p.boq) {
     type = 'OUTWARD';
@@ -93,6 +96,24 @@ export async function stockEntryView(root) {
 
   // Line picker: type part of the material and choose from what is still pending on the BOQ / work order.
   const linkKey = () => (bom ? 'bom_item_id' : 'boq_item_id');
+  function poPicker(l) {
+    const cur = Number.isInteger(l.po_line) ? l.po_line + 1 : null;
+    const used = new Set(lines.filter(x => x !== l && Number.isInteger(x.po_line)).map(x => x.po_line + 1));
+    return h('span', { style: { display: 'contents' } }, itemPicker(poOpts.filter(o => !used.has(o.id)), cur, { onPick: id => {
+      const o = poOpts.find(x => x.id === id);
+      if (o) Object.assign(l, { po_line: o.id - 1, item_id: l.item_id || o.item_id, qty: o.pending || l.qty, rate: o.rate, gst: o.gst, hsn: o.hsn, uom: o.uom, poPending: o.pending });
+      else delete l.po_line;
+      render();
+    } }), cur && l.poPending != null ? h('div.muted', { style: { fontSize: '12px' } }, `pending on PO: ${l.poPending} ${l.uom || ''}`) : null);
+  }
+  // "All pending" fills one line per pending PO / BOQ / work order material, for when everything has arrived.
+  function addAllPending() {
+    lines = lines.filter(l => l.item_id || Number(l.qty));
+    if (po) for (const o of poOpts) { if (o.pending > 0 && !lines.some(l => l.po_line === o.id - 1)) lines.push({ po_line: o.id - 1, item_id: o.item_id, qty: o.pending, rate: o.rate, gst: o.gst, hsn: o.hsn, uom: o.uom, poPending: o.pending }); }
+    else for (const o of pendingOpts) { if (o.pending > 0 && !lines.some(l => l[linkKey()] === o.id)) lines.push({ [linkKey()]: o.id, item_id: o.item_id, qty: o.pending, uom: o.uom, boqPending: o.pending }); }
+    if (!lines.length) lines.push({ item_id: null, qty: '' });
+    render();
+  }
   function materialPicker(l) {
     const used = new Set(lines.filter(x => x !== l).map(x => x[linkKey()]).filter(Boolean));
     const opts = pendingOpts.filter(o => !used.has(o.id));
@@ -114,10 +135,10 @@ export async function stockEntryView(root) {
     const F = [field('Date *', date), field({ INWARD: 'GRN No', OUTWARD: 'Issue No', TRANSFER: 'Transfer No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
-      F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
+      F.push(field('Against PO *', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
-      if (!po) F.push(field('PO No (text)', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27 or Verbal' }))));
+      if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'must be an approved PO in the CRM'));
     }
     if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
     if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
@@ -168,8 +189,8 @@ export async function stockEntryView(root) {
       return h('tr',
         h('td.muted', i + 1),
         (boq || bom) ? h('td', { style: { minWidth: '280px' } }, materialPicker(l)) : null,
+        po && type === 'INWARD' ? h('td', { style: { minWidth: '280px' } }, poPicker(l)) : null,
         h('td', itemPicker(itemOpts, l.item_id, { onPick: id => { l.item_id = id; if (!priced) l.rate = null; render(); } }),
-          l.note ? h('div.muted', { style: { fontSize: '12px' } }, `PO: ${l.note} (ordered ${l.ordered}, received ${l.received})`) : null,
           null),
         stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
@@ -179,10 +200,11 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, h('th', (boq || bom) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
+          (po && type === 'INWARD' && poOpts.some(o => o.pending > 0)) || ((boq || bom) && pendingOpts.some(o => o.pending > 0)) ? h('button.btn.small', { onclick: addAllPending, title: 'One line for every material still pending' }, '+ All pending') : null,
           priced ? h('span', { style: { marginLeft: 'auto' } }, 'Total value: ', totalValue) : null)));
     recalc();
   }
@@ -192,6 +214,8 @@ export async function stockEntryView(root) {
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
+    if (type === 'INWARD' && !po && !String(header.po_no || '').trim()) throw new Error('Inward needs a purchase order: choose it under “Against PO” (or type its PO number)');
+    if (type === 'INWARD' && po && lines.some(l => Number(l.qty) && !Number.isInteger(l.po_line))) throw new Error('Pick the PO material on every line (type part of its name and choose it)');
     if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');
     if (type === 'TRANSFER' && !header.to_location) throw new Error('Enter where the material is transferred to');
     try {

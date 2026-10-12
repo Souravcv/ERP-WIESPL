@@ -212,9 +212,9 @@ function poDoc(po, v, s) {
       td([h('b', 'Note: '), po.project_note || ''], { style: { width: '50%' } }),
       td([h('b', 'Rupees in words: '), amountInWords(t.total).replace(/^Rupees /, '')])))),
     h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
-      h('tr', ['Prepared By', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '25%' } }, x))),
-      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.comm_approved_by), plainName(po.approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
-      h('tr', ['Purchase Executive', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x))))),
+      h('tr', ['Prepared By', 'Technical Approval', 'Approved By'].map(x => h('th', { style: { width: '33%' } }, x))),
+      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
+      h('tr', ['Purchase Executive', 'Technical Manager', 'General Manager'].map(x => h('td', x))))),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
 }

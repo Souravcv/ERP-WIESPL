@@ -210,7 +210,7 @@ api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliver
 
 // ---------------------------------------------------------------- store
 api.post('/stock/entry', need('stock_moves'), wrap(req => {
-  const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
+  const body = { ...req.body, allowWithoutPo: false, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
   // Outward against a BOQ: the delivery challan is created automatically with the issue.
   const challanOk = () => { if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans'); };
   if (body.type === 'OUTWARD' && (body.boq_id || body.bom_id)) {
