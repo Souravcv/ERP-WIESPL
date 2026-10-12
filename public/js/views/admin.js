@@ -184,7 +184,6 @@ export async function importView(root) {
     }
     const p = await api(`/import/preview/${kindSel.value}`, { method: 'POST', raw });
     const mode = h('select', { style: { width: 'auto' } }, h('option', { value: 'skip' }, 'Skip them (keep what is in the CRM)'), h('option', { value: 'update' }, 'Update the CRM records from the file'), h('option', { value: 'add' }, 'Add them anyway as new records'));
-    const createMissing = h('input', { type: 'checkbox', style: { width: 'auto' } });
     const c = p.counts;
     const filter = h('select', { style: { width: 'auto' } }, h('option', { value: 'error' }, `Errors (${c.error})`), h('option', { value: 'new' }, 'New'), h('option', { value: 'duplicate' }, 'Duplicates'), h('option', { value: '' }, 'All shown'));
     const rowsBox = h('div');
@@ -205,8 +204,7 @@ export async function importView(root) {
       h('table.data', { style: { maxWidth: '760px', marginBottom: '12px' } },
         h('thead', h('tr', h('th', 'Sheet'), h('th.num', 'Rows'), h('th.num', 'New'), h('th.num', 'Already in CRM'), h('th.num', 'Errors'))),
         h('tbody', p.sheets.map(s => h('tr', h('td', s.sheet), h('td.num', s.total), h('td.num', s.new), h('td.num', s.duplicate), h('td.num', { style: { color: s.error ? 'var(--bad)' : '' } }, s.error))))),
-      c.noCodeItems ? h('label', { style: { display: 'flex', gap: '8px', alignItems: 'flex-start', fontWeight: 400, margin: '8px 0' } }, createMissing,
-        h('span', `${c.noCodeRows} movement rows refer to items that are not in the Item Master (${c.noCodeItems} different items: no item code, or a code that is not in the master). Your Excel stock summary ignores these rows, so by default they are skipped. Tick to create these items instead.`)) : null,
+      c.noCodeItems ? h('p', { style: { color: 'var(--warn)' } }, `⚠ ${c.noCodeRows} movement rows refer to ${c.noCodeItems} items that are not in the Item Master (no item code, or a code with a blank row in the master). Your Excel stock summary ignores these rows, so they are not imported. To bring them in, add the item to the Item Master sheet first (code + name), then import again.`) : null,
       c.duplicate ? h('label', { style: { margin: '8px 0' } }, `${c.duplicate} records already exist in the CRM (matched by item code, GSTIN, PO no …). What should happen to them?`, mode) : null,
       h('p.muted', 'Stock movement rows already in the CRM (same type, date, document no, item, quantity and party) are skipped automatically, so you can import a newer copy of the same workbook later and only the new rows are added.'),
       h('div.toolbar', h('b', 'Rows:'), filter),
@@ -215,7 +213,7 @@ export async function importView(root) {
         h('button.btn.primary', { onclick: async e => {
           e.target.disabled = true;
           try {
-            const r = await api('/import/commit', { method: 'POST', body: { token: p.token, mode: mode.value, createMissing: createMissing.checked } });
+            const r = await api('/import/commit', { method: 'POST', body: { token: p.token, mode: mode.value } });
             clearRefCache();
             out.replaceChildren(h('div.card', h('h2', '✅ Import finished'),
               h('p', `${r.created} records created · ${r.updated} updated · ${r.moves} stock movements added · ${r.skipped} skipped as duplicates${r.noCode ? ` · ${r.noCode} rows without item code skipped` : ''} · ${r.errors} rows with errors not imported`),

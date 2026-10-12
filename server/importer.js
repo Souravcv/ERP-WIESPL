@@ -51,7 +51,9 @@ const CATEGORY_MAP = { electricalpart: 'Electrical (BGM)', electrical: 'Electric
 const category = v => { const s = str(v); return CATEGORY_MAP[norm(s)] || (ITEM_CATEGORIES.includes(s) ? s : s ? s : 'Bought-out'); };
 const GSTIN_RE = /\b(\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]{3})\b/;
 // Summary rows at the bottom of a sheet ("Total", "Total Names", "Grand Total").
-const isTotalRow = (c, name) => /^(grand\s*)?total\b/i.test(String(name || '').trim()) || /^(grand\s*)?total$/i.test(String(c || '').trim());
+// Total lines and repeated header lines ("FG Code | FG Name") are not items.
+const isTotalRow = (c, name) => /^(grand\s*)?total\b/i.test(String(name || '').trim()) || /^(grand\s*)?total$/i.test(String(c || '').trim())
+  || /^(fg\s*)?(part\s*)?(item\s*)?code$/i.test(String(c || '').trim()) || /^(fg\s*)?(part\s*)?(item\s*)?name$/i.test(String(name || '').trim());
 
 function headerIndex(ws, mustHave, maxRow = 15) {
   for (let r = 1; r <= Math.min(maxRow, ws.rowCount); r++) {
@@ -206,7 +208,7 @@ function parseStoreWorkbook(wb, plan) {
     const h = headerIndex(fgp, ['fgpartcode', 'fgpartname']);
     if (h) for (const [r, row] of dataRows(fgp, h.row + 1)) {
       const c = code(pick(row, h.cols, 'fgpartcode')), name = str(pick(row, h.cols, 'fgpartname'));
-      if (!c || !name || masterRef.has(c)) continue;
+      if (!c || !name || masterRef.has(c) || isTotalRow(c, name)) continue;
       const op = { sheet: 'FG Part Summary', n: r, kind: 'item', label: `${c} · ${name}`, data: { code: c, name, category: 'Finished Goods', uom: 'Nos', rate: 0, gst_rate: 18, description: str(pick(row, h.cols, 'sizeremark')) || null }, dupId: L.itemByCode.get(c) || null, errors: [] };
       addOp(plan, op);
       masterRef.set(c, op);
@@ -523,7 +525,8 @@ export async function preview(kind, buffer, user) {
   };
 }
 
-export function commit(token, mode, user, { createMissing = false } = {}) {
+export function commit(token, mode, user) {
+  const createMissing = false;
   const entry = plans.get(token);
   if (!entry) throw new HttpError(410, 'This preview has expired. Upload the file again.');
   if (!['skip', 'update', 'add'].includes(mode)) throw new HttpError(400, 'Choose skip, update or add for duplicates');
