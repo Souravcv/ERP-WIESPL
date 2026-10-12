@@ -2,6 +2,7 @@ import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, 
 import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS } from '../schema.js';
 import { linesTotals, inr, round2 } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
+import { newBoqDialog } from './dispatch.js';
 
 const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
@@ -191,12 +192,12 @@ function actionsFor(entity, row, reload) {
       }) }, '💳 Create Invoice'));
       break;
     case 'boq_items':
-      if (row.project_id) A.push(h('a.btn', { href: `#/project-boq/${row.project_id}` }, '📑 Project BOQ & Dispatch'));
+      if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
       break;
     case 'challans': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/challan/${id}`, target: '_blank' }, '🖨 Print Challan'));
-      if (row.project_id) A.push(h('a.btn', { href: `#/project-boq/${row.project_id}` }, '📑 BOQ status'));
+      if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 BOQ status'));
       if (can(entity) && st === 'Draft') A.push(h('button.btn.good', { onclick: go(async () => {
         const stockLines = (row.lines || []).filter(l => l.item_id).length;
         if (!(await confirmBox(`Dispatch ${row.challan_no}? The material is marked as sent against the work order${stockLines ? ` and ${stockLines} store item(s) are issued from stock` : ''}. The challan cannot be edited afterwards.`, 'Dispatch'))) return;
@@ -224,7 +225,7 @@ function actionsFor(entity, row, reload) {
       break;
     }
     case 'projects':
-      A.push(h('a.btn.primary', { href: `#/project-boq/${id}` }, '📑 Work Order BOQ & Dispatch'));
+      if (can('boqs')) A.push(h('button.btn.primary', { onclick: go(() => newBoqDialog({ project_id: id })) }, '📑 New BOQ (upload work order)'));
       if (can('requisitions')) A.push(h('button.btn', { onclick: () => newRecord('requisitions', { project_id: id }) }, '📝 Requisition'));
       if (can('stock_moves')) A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&project=${id}` }, '📤 Issue Material'));
       if (can('purchase_orders')) A.push(h('button.btn', { onclick: () => newRecord('purchase_orders', { project_id: id }) }, '🛒 Purchase Order'));
@@ -299,6 +300,7 @@ export async function recordView(root, entity, id) {
   const ent = ENTITIES[entity];
   if (!ent) throw new Error('Unknown module');
   if (ent.editor === 'quotation' && id !== 'new') { location.hash = `#/quotation/${id}`; return; }
+  if (ent.editor === 'boq' && id !== 'new' && !/details=1/.test(location.hash)) { location.hash = `#/boq/${id}`; return; }
   if (entity === 'stock_moves' && id === 'new') { location.hash = '#/stock-entry'; return; }
   const isNew = id === 'new';
   const presets = Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
@@ -367,6 +369,7 @@ export async function recordView(root, entity, id) {
       ? await api(`/${entity}`, { method: 'POST', body })
       : await api(`/${entity}/${id}`, { method: 'PUT', body });
     clearRefCache(entity);
+    if (isNew && newFiles.pending().length) await newFiles.uploadTo(saved.id);
     toast('Saved');
     if (isNew) {
       // When created from another record (e.g. follow-up from an enquiry), go back to it.
@@ -386,6 +389,7 @@ export async function recordView(root, entity, id) {
     location.hash = `#/list/${entity}`;
   }
 
+  const newFiles = pendingAttachments(entity);
   const r = row;
   const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.invoice_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
@@ -404,7 +408,7 @@ export async function recordView(root, entity, id) {
     h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
       `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
-    isNew ? null : attachments(entity, r.id, canWrite(entity, state.user.role)),
+    isNew ? (writable ? newFiles.el : null) : attachments(entity, r.id, canWrite(entity, state.user.role)),
     isNew ? null : related(entity, r),
     isNew || !hasFunction(state.user.role, 'view_audit') ? null : history(entity, id),
   );
@@ -413,11 +417,34 @@ export async function recordView(root, entity, id) {
 }
 
 // ---------------------------------------------------------------- files: work orders, drawings, CAD (dwg/dxf), PDFs, photos …
-const ATTACH_TITLES = { challans: 'Signed challan / proof of delivery', projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
+const ATTACH_TITLES = { boqs: 'Work order files, drawings & documents', challans: 'Signed challan / proof of delivery', projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
 const fileSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 const PREVIEWABLE = /\.(pdf|png|jpe?g|gif|webp|txt)$/i;
 
-function attachments(entity, recordId, writable) {
+// Files picked while creating a record (e.g. a drawing on a new material approval); uploaded on Save.
+function pendingAttachments(entity) {
+  const files = [];
+  const list = h('div.muted', 'No files chosen');
+  const input = h('input', { type: 'file', multiple: true });
+  const note = h('input', { placeholder: 'Note (optional), e.g. "Layout Rev 2"', style: { flex: 1, minWidth: '200px' } });
+  const draw = () => list.replaceChildren(...(files.length ? files.map((f, i) => h('div', '📎 ', f.name, ' ', h('span.muted', `(${fileSize(f.size)})`), ' ',
+    h('button.icon-btn.del', { title: 'Remove', onclick: () => { files.splice(i, 1); draw(); } }, '✕'))) : [h('span', 'No files chosen')]));
+  input.onchange = () => { for (const f of input.files) { if (f.size > 200 * 1048576) { fail(new Error(`${f.name} is larger than 200 MB`)); continue; } files.push(f); } input.value = ''; draw(); };
+  return {
+    pending: () => files,
+    async uploadTo(recordId) {
+      for (const f of files) {
+        const res = await fetch(`/api/attachments/${entity}/${recordId}?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(note.value)}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Type': f.type || 'application/octet-stream' }, body: f });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `Upload of ${f.name} failed`);
+      }
+    },
+    el: h('div.card', h('h2', `📎 ${ATTACH_TITLES[entity] || 'Files'}`), h('div.toolbar', input, note),
+      h('p.muted', { style: { fontSize: '12px', margin: '0 0 8px' } }, 'Drawings, AutoCAD (.dwg / .dxf), PDF, photos, Word / Excel … up to 200 MB each. They are uploaded when you click Save.'), list),
+  };
+}
+
+export function attachments(entity, recordId, writable) {
   const list = h('div', h('div.muted', 'Loading…'));
   const file = h('input', { type: 'file', multiple: true });
   const note = h('input', { placeholder: 'Note (optional), e.g. "Work order R3", "Approved layout Rev 2"', style: { flex: 1, minWidth: '200px' } });

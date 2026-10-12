@@ -26,6 +26,7 @@ const PORT = Number(process.env.PORT) || 3000;
 migrate();
 seed();
 roles.seedRoles();
+dispatch.migrateProjectBoqs();
 purgeExpiredSessions();
 
 const app = express();
@@ -173,16 +174,29 @@ api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submit
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- work order BOQ & delivery challans
-api.post('/projects/:id/boq/import', need('boq_items'), express.raw({ type: () => true, limit: '60mb' }), wrap(req => {
+api.post('/boqs/upload', need('boqs'), express.raw({ type: () => true, limit: '60mb' }), wrap(req =>
+  dispatch.createBoqFromFile({ title: req.query.title, project_id: req.query.project_id, filename: req.query.name, mime: req.headers['x-file-type'] }, req.body, req.user)));
+api.post('/boqs/:id/import', need('boqs'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
   if (!req.body?.length) throw new HttpError(400, 'Upload the work order .xlsx');
-  return dispatch.importBoq(req.params.id, req.body, req.query.mode, req.user);
+  const r = await dispatch.importBoq(req.params.id, req.body, req.query.mode, req.user);
+  roles.saveAttachment('boqs', req.params.id, { filename: req.query.name || 'Work order.xlsx', mime: req.headers['x-file-type'], note: 'Work order (imported)' }, req.body, req.user);
+  return r;
 }));
-api.post('/projects/:id/challan', need('challans'), wrap(req => dispatch.challanFromBoq(req.params.id, req.body?.picks, req.user)));
+api.post('/boqs/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBoq(req.params.id, req.body, req.user)));
 api.post('/challans/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchChallan(req.params.id, req.body, req.user)));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- store
-api.post('/stock/entry', need('stock_moves'), wrap(req => stock.stockEntry({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user)));
+api.post('/stock/entry', need('stock_moves'), wrap(req => {
+  const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
+  // Outward against a BOQ: the delivery challan is created automatically with the issue.
+  if (body.type === 'OUTWARD' && body.boq_id) {
+    if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans');
+    const r = dispatch.issueAgainstBoq(body, req.user);
+    return { doc_no: r.challan.challan_no, challan: r.challan, count: r.challan.lines.length, type: 'OUTWARD' };
+  }
+  return stock.stockEntry(body, req.user);
+}));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
 api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
 api.post('/stock/opening', wrap(req => {

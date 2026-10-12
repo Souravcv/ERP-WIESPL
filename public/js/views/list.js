@@ -2,7 +2,7 @@ import { h, api, state, display, fail, download } from '../ui.js';
 import { ENTITIES, fieldMap, canWrite } from '../schema.js';
 import { inr } from '../calc.js';
 
-export const recordHref = (entity, id) => (ENTITIES[entity].editor === 'quotation' ? `#/quotation/${id}` : `#/view/${entity}/${id}`);
+export const recordHref = (entity, id) => (ENTITIES[entity].editor === 'quotation' ? `#/quotation/${id}` : ENTITIES[entity].editor === 'boq' ? `#/boq/${id}` : `#/view/${entity}/${id}`);
 
 const NUMERIC = ['money', 'number'];
 
@@ -49,6 +49,7 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true } = 
 }
 
 export async function newRecord(entity, preset = {}) {
+  if (ENTITIES[entity].editor === 'boq') { const { newBoqDialog } = await import('./dispatch.js'); return newBoqDialog(preset); }
   if (ENTITIES[entity].editor === 'quotation') {
     const q = preset.enquiry_id ? await api(`/enquiries/${preset.enquiry_id}/quotation`, { method: 'POST' }) : await api('/quotations', { method: 'POST', body: { status: 'Draft', ...preset, data: { rooms: [], lines: [], optionals: [], terms: state.settings.terms, client_scope: state.settings.client_scope, scope_matrix: state.settings.scope_matrix, letter_intro: state.settings.letter_intro, boq_title: 'WIESPL ESTIMATE FOR LAMINAR AIR FLOW, CONTROL PANEL WITH MODULAR OT - PPGL' }, subject: state.settings.default_subject } });
     location.hash = `#/quotation/${q.id}`;
@@ -79,6 +80,8 @@ export async function listView(root, entity) {
     if (statusSel?.value) p.set(ent.statusField, statusSel.value);
     if (from?.value) p.set('from', from.value);
     if (to?.value) p.set('to', to.value);
+    // other filters from the link, e.g. #/list/boqs?project_id=3
+    for (const [k, v] of params) if (fm[k] && !p.has(k) && k !== ent.statusField && k !== 'q') p.set(k, v);
     return p.toString();
   };
   let timer;

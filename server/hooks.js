@@ -91,8 +91,19 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
+    case 'boqs':
+      if (!existing && !row.boq_no) row.boq_no = docNo('boq', date, (n, fy) => `BOQ-${n}/20${fy}`);
+      if ((row.project_id ?? existing?.project_id) && !(row.customer_id ?? existing?.customer_id)) {
+        row.customer_id = db.prepare('SELECT customer_id FROM projects WHERE id = ?').get(row.project_id ?? existing.project_id)?.customer_id || null;
+      }
+      break;
     case 'challans': {
       if (!existing && !row.challan_no) row.challan_no = docNo('challan', date, (n, fy) => `DC-${n}/20${fy}`);
+      const bid = row.boq_id ?? existing?.boq_id;
+      if (bid && !(row.ship_to ?? existing?.ship_to)) {
+        const bq = db.prepare('SELECT b.title, b.project_id, c.name cname, c.address caddr FROM boqs b LEFT JOIN customers c ON c.id = b.customer_id WHERE b.id = ?').get(bid);
+        if (bq && !bq.project_id) row.ship_to = [bq.cname || bq.title, bq.caddr].filter(Boolean).join('\n');
+      }
       const pid = row.project_id ?? existing?.project_id;
       if (pid && (!(row.ship_to ?? existing?.ship_to) || !(row.customer_id ?? existing?.customer_id))) {
         const p = db.prepare('SELECT p.name, p.site, p.site_address, p.customer_id, c.name cname, c.address caddr FROM projects p LEFT JOIN customers c ON c.id = p.customer_id WHERE p.id = ?').get(pid);

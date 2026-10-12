@@ -5,7 +5,7 @@ import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
-const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'OPENING', 'ADJUST'];
+const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST'];
 const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment' };
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const suggest = (list, attrs = {}) => {
@@ -34,14 +34,16 @@ function poStatus(po) {
 export async function stockEntryView(root) {
   const p = qs();
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
-  const [items, vendors, projects, allPos] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
-    canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : []]);
+  const [items, vendors, projects, allPos, boqOpts] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
+    canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : [],
+    canView('boqs', state.user.role) ? api('/boqs?status=Open').then(r => r.map(b => ({ id: b.id, label: `${b.boq_no} · ${b.title}` }))).catch(() => []) : []]);
   const openPos = allPos.filter(x => ['Approved', 'Sent', 'Partially Received'].includes(x.status)).map(x => ({ id: x.id, label: `${x.po_no} · ${x.vendor_id_label || ''}` }));
   const itemById = new Map(items.map(i => [i.id, i]));
   const itemOpts = items.map(i => ({ id: i.id, label: `${i.code} · ${i.name}` }));
   const header = {};
   let lines = [];
   let po = null;
+  let boq = null;
 
   if (p.po) {
     po = await api(`/purchase_orders/${p.po}`);
@@ -54,6 +56,17 @@ export async function stockEntryView(root) {
       if (!(Number(l.qty) > 0) || pending <= 0) return;
       lines.push({ item_id: l.item_id || null, qty: pending, rate: l.rate, po_line: i, note: [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – '), ordered: l.qty, received: l.received || 0, gst: l.gst, hsn: l.hsn });
     });
+  }
+  if (p.boq) {
+    type = 'OUTWARD';
+    boq = await api(`/boqs/${p.boq}`);
+    Object.assign(header, { boq_id: boq.id, project_id: boq.project_id });
+    const boqRows = (await api(`/boq_items?boq_id=${boq.id}&limit=20000`)).sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
+    for (const b of boqRows) {
+      if (b.kind === 'Heading' || ['Dispatched', 'Delivered'].includes(b.delivery_status)) continue;
+      lines.push({ boq_item_id: b.id, item_id: b.item_id || null, qty: b.pending ?? '', boqNote: `${b.section} ${b.sr_no || ''} – ${[b.heading, String(b.description).split('\n')[0]].filter(Boolean).join(' › ').slice(0, 110)}`, boqPending: b.pending, uom: b.uom });
+    }
+    if (!lines.length) toast('Everything in this BOQ has already been sent');
   }
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
@@ -74,6 +87,8 @@ export async function stockEntryView(root) {
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('PO No (text)', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27 or Verbal' }))));
     }
+    if (type === 'OUTWARD') F.push(field('Against BOQ (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending BOQ material is listed below'));
+    if (boq) F.push(...['vehicle_no', 'transporter', 'lr_no', 'eway_bill'].map(k => field({ vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', eway_bill: 'E-way Bill No' }[k], v(k, h('input')))));
     if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
     if (['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
@@ -109,7 +124,8 @@ export async function stockEntryView(root) {
       return h('tr',
         h('td.muted', i + 1),
         h('td', itemPicker(itemOpts, l.item_id, { onPick: id => { l.item_id = id; if (!priced) l.rate = null; render(); } }),
-          l.note ? h('div.muted', { style: { fontSize: '12px' } }, `PO: ${l.note} (ordered ${l.ordered}, received ${l.received})`) : null),
+          l.note ? h('div.muted', { style: { fontSize: '12px' } }, `PO: ${l.note} (ordered ${l.ordered}, received ${l.received})`) : null,
+          l.boqNote ? h('div.muted', { style: { fontSize: '12px' } }, `BOQ: ${l.boqNote}${l.boqPending != null ? ` (pending ${l.boqPending} ${l.uom || ''})` : ''}`) : null),
         stockCell, h('td', qty), h('td', rate), value,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
@@ -133,9 +149,14 @@ export async function stockEntryView(root) {
     try {
       const r = await api('/stock/entry', { method: 'POST', body: payload });
       clearRefCache('items');
-      await modal('Saved', h('div.grid', h('p', `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).`)), [
-        { label: '🖨 Print slip', action: () => { window.open(`#/print/stockdoc/${type}?doc=${encodeURIComponent(r.doc_no)}`, '_blank'); return true; } },
-        { label: 'New entry', cls: 'primary', value: true }]);
+      await modal('Saved', h('div.grid', h('p', r.challan
+        ? `Issued ${r.count} item(s) against ${boq.boq_no}. Delivery challan ${r.challan.challan_no} was created automatically and the BOQ now shows this material as sent.`
+        : `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).`)), [
+        r.challan ? { label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return true; } }
+          : { label: '🖨 Print slip', action: () => { window.open(`#/print/stockdoc/${type}?doc=${encodeURIComponent(r.doc_no)}`, '_blank'); return true; } },
+        r.challan ? { label: '📑 Open BOQ', action: () => { location.hash = `#/boq/${boq.id}`; return true; } } : null,
+        { label: 'New entry', cls: 'primary', value: true }].filter(Boolean));
+      if (r.challan && location.hash.startsWith('#/boq/')) return;
       location.hash = `#/stock-entry?type=${type}&t=${Date.now()}`;
     } catch (e) {
       if (/Not enough stock/.test(e.message) && !allowNegative) {

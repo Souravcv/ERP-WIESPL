@@ -1,122 +1,207 @@
-// Project work order BOQ: what is dispatched, delivered and still pending; make delivery challans from it.
-import { h, api, state, toast, fail, modal, badge, fmtDate } from '../ui.js';
+// BOQ window: upload a work order, see each section's material, what is sent and what is pending,
+// and dispatch (the delivery challan is created automatically).
+import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache } from '../ui.js';
 import { canWrite } from '../schema.js';
-import { round2 } from '../calc.js';
+import { itemPicker, attachments } from './form.js';
 
 const firstLine = s => String(s || '').split('\n')[0];
 
-export async function projectBoqView(root, projectId) {
-  const [project, rows, challans] = await Promise.all([
-    api(`/projects/${projectId}`), api(`/boq_items?project_id=${projectId}&limit=20000`), api(`/challans?project_id=${projectId}`),
+async function readFile(file) {
+  return { raw: await file.arrayBuffer(), name: file.name, type: file.type || 'application/octet-stream' };
+}
+async function upload(path, f) {
+  const res = await fetch(`/api${path}${path.includes('?') ? '&' : '?'}name=${encodeURIComponent(f.name)}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'X-File-Type': f.type }, body: f.raw });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Upload failed (${res.status})`);
+  return data;
+}
+
+// "New BOQ": upload the work order Excel; the BOQ is created and opened.
+export async function newBoqDialog(preset = {}) {
+  const projects = await refOptions('projects');
+  let projectId = preset.project_id ? Number(preset.project_id) : null;
+  const title = h('input', { placeholder: 'e.g. Lokmanya Hospital – Electrical & HVAC Work Order 1' });
+  const file = h('input', { type: 'file', accept: '.xlsx,.xls' });
+  file.onchange = () => { if (!title.value && file.files[0]) title.value = file.files[0].name.replace(/\.[^.]+$/, ''); };
+  const ok = await modal('New BOQ from work order', h('div.grid',
+    h('p', 'Upload the work order / BOQ Excel. Every sheet with "Sr. No." and "Particulars" / "Description" becomes a section (MOT, Passage, MGPS, Electrical …) and its material is listed line by line.'),
+    h('label', 'Work order file *', file), h('label', 'BOQ title', title),
+    h('label', 'Project (optional)', itemPicker(projects, projectId, { onPick: id => { projectId = id; } }))),
+    [{ label: 'Cancel', value: false }, { label: 'Create BOQ', cls: 'primary', value: true }]);
+  if (!ok) return;
+  if (!file.files[0]) throw new Error('Choose the work order file');
+  const f = await readFile(file.files[0]);
+  const r = await upload(`/boqs/upload?title=${encodeURIComponent(title.value)}${projectId ? `&project_id=${projectId}` : ''}`, f);
+  clearRefCache('boqs');
+  toast(`BOQ ${r.boq.boq_no} created: ${r.sections.map(s => `${s.section} ${s.items}`).join(', ')}`);
+  location.hash = `#/boq/${r.boq.id}`;
+}
+
+export async function boqView(root, boqId) {
+  const [boq, rows, challans, items] = await Promise.all([
+    api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), api(`/challans?boq_id=${boqId}`), refOptions('items'),
   ]);
-  const canBoq = canWrite('boq_items', state.user.role), canChallan = canWrite('challans', state.user.role);
+  const canEdit = canWrite('boqs', state.user.role), canSend = canWrite('challans', state.user.role);
   rows.sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
-  const items = rows.filter(r => r.kind !== 'Heading');
-  const filter = h('select', { style: { width: 'auto' } }, ['All lines', 'Pending only', 'Delivered ✓', 'Qty TBD'].map(t => h('option', t)));
-  const search = h('input.grow', { type: 'search', placeholder: 'Search description, Sr. no …' });
-  const picks = new Map(); // boq id → qty
+  const sections = [...new Set(rows.map(r => r.section || 'BOQ'))];
+  let tab = sessionStorage.getItem(`boq-tab-${boqId}`);
+  if (tab !== 'All' && !sections.includes(tab)) tab = sections.length > 1 ? 'All' : sections[0] || 'All';
+  const filter = h('select', { style: { width: 'auto' } }, ['All material', 'Pending', 'Sent / in transit', 'Delivered ✓', 'Qty TBD'].map(t => h('option', t)));
+  const search = h('input.grow', { type: 'search', placeholder: 'Search material, Sr. no …' });
+  const picks = new Map(); // boq line id → { qty, item_id }
+  const pickCount = h('b', '0');
   const out = h('div');
-  const pickCount = h('b');
 
-  const totals = list => {
-    const it = list.filter(r => r.kind !== 'Heading');
-    return { lines: it.length, delivered: it.filter(r => r.delivery_status === 'Delivered').length, dispatched: it.filter(r => ['Dispatched', 'Delivered'].includes(r.delivery_status)).length,
-      pending: it.filter(r => ['Pending', 'Partly Dispatched'].includes(r.delivery_status)).length };
+  const isItem = r => r.kind !== 'Heading';
+  const stats = list => {
+    const it = list.filter(isItem);
+    return { lines: it.length, delivered: it.filter(r => r.delivery_status === 'Delivered').length,
+      sent: it.filter(r => ['Dispatched', 'Delivered'].includes(r.delivery_status)).length,
+      partly: it.filter(r => r.delivery_status === 'Partly Dispatched').length,
+      pending: it.filter(r => !['Dispatched', 'Delivered'].includes(r.delivery_status)).length };
   };
-  const all = totals(rows);
 
-  function draw() {
-    const q = search.value.toLowerCase().trim();
-    const keep = r => {
-      if (r.kind === 'Heading') return !q && filter.value === 'All lines';
-      if (q && !`${r.sr_no} ${r.heading} ${r.description}`.toLowerCase().includes(q)) return false;
-      if (filter.value === 'Pending only') return ['Pending', 'Partly Dispatched'].includes(r.delivery_status) || (r.qty == null && r.delivery_status !== 'Delivered');
-      if (filter.value === 'Delivered ✓') return r.delivery_status === 'Delivered';
-      if (filter.value === 'Qty TBD') return r.qty == null;
-      return true;
-    };
-    const sections = [...new Set(rows.map(r => r.section || 'BOQ'))];
-    out.replaceChildren(...sections.map(sec => {
-      const secRows = rows.filter(r => (r.section || 'BOQ') === sec);
-      const t = totals(secRows);
-      const shown = secRows.filter(keep);
-      if (!shown.length && q) return null;
-      const pct = t.lines ? Math.round((t.delivered / t.lines) * 100) : 0;
-      return h('div.card.flush', { style: { marginBottom: '16px' } },
-        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', flexWrap: 'wrap' } },
-          h('h2', { style: { margin: 0 } }, sec), secRows[0]?.wo_no ? h('span.muted', `WO ${secRows[0].wo_no}`) : null,
-          h('span', { style: { marginLeft: 'auto' } }, `${t.delivered} of ${t.lines} lines delivered ✓ · ${t.pending} pending`),
-          h('div', { style: { width: '160px', height: '8px', background: 'var(--neutral-bg)', borderRadius: '4px', overflow: 'hidden' } },
-            h('div', { style: { width: pct + '%', height: '100%', background: 'var(--good)' } }))),
-        h('div.table-wrap', h('table.data',
-          h('thead', h('tr', canChallan ? h('th', '') : null, ['', 'Sr', 'Description', 'UOM', 'WO Qty', 'Per area', 'Dispatched', 'Delivered', 'Pending', 'Status'].map((x, i) => h('th' + (i >= 4 && i <= 8 && i !== 5 ? '.num' : ''), x)),
-            canChallan ? h('th.num', 'Send now') : null)),
-          h('tbody', shown.map(r => {
-            if (r.kind === 'Heading') return h('tr', h('td', { colspan: canChallan ? 12 : 10, style: { background: 'var(--surface-2)', fontWeight: 600 } }, `${r.sr_no ? r.sr_no + '  ' : ''}${firstLine(r.description)}`));
-            const done = r.delivery_status === 'Delivered';
-            const sendable = !done && (r.qty == null || r.pending > 0);
-            const qtyIn = h('input', { type: 'number', step: 'any', min: 0, style: { width: '80px' }, value: picks.get(r.id) ?? (r.pending ?? ''), placeholder: r.qty == null ? 'qty' : '' });
-            const chk = h('input', { type: 'checkbox', checked: picks.has(r.id), disabled: !sendable, style: { width: 'auto' } });
-            const sync = () => { if (chk.checked) picks.set(r.id, qtyIn.value === '' ? null : Number(qtyIn.value)); else picks.delete(r.id); pickCount.textContent = picks.size; };
-            chk.onchange = sync;
-            qtyIn.oninput = () => { if (!chk.checked && qtyIn.value) chk.checked = true; sync(); };
-            const desc = h('td', { style: { maxWidth: '520px' } },
-              r.heading ? h('div.muted', { style: { fontSize: '11px' } }, r.heading) : null,
-              h('a', { href: `#/view/boq_items/${r.id}` }, firstLine(r.description)),
-              r.description.includes('\n') ? h('details', h('summary.muted', { style: { fontSize: '11px' } }, 'full specification'), h('div.spec', { style: { fontSize: '12px', whiteSpace: 'pre-wrap' } }, r.description)) : null,
-              r.item_id_label ? h('div.muted', { style: { fontSize: '11px' } }, `store item: ${r.item_id_label}`) : null,
-              r.remarks ? h('div.muted', { style: { fontSize: '11px' } }, r.remarks) : null);
-            return h('tr', { style: { opacity: done ? 0.75 : 1 } },
-              canChallan ? h('td', chk) : null,
-              h('td', { style: { fontSize: '18px', color: done ? 'var(--good)' : 'var(--muted)' } }, done ? '✓' : r.delivery_status === 'Dispatched' ? '🚚' : ''),
-              h('td.nowrap', r.sr_no || ''), desc, h('td', r.uom || ''), h('td.num', r.qty ?? h('span.muted', 'TBD')), h('td.muted', { style: { fontSize: '12px' } }, r.area_qty || ''),
-              h('td.num', r.dispatched || ''), h('td.num', r.delivered || ''), h('td.num', { style: { fontWeight: 600 } }, r.pending ?? ''), h('td', badge(r.delivery_status)),
-              canChallan ? h('td.num', sendable ? qtyIn : '') : null);
-          })))));
+  const tabs = h('div.tabs');
+  function drawTabs() {
+    tabs.replaceChildren(...['All', ...sections].map(s => {
+      const st = stats(s === 'All' ? rows : rows.filter(r => (r.section || 'BOQ') === s));
+      return h('button', { class: s === tab ? 'active' : '', onclick: () => { tab = s; sessionStorage.setItem(`boq-tab-${boqId}`, s); drawTabs(); draw(); } },
+        `${s === 'All' ? 'All sections' : s}  `, h('span.muted', `${st.sent}/${st.lines} sent`));
     }));
   }
 
-  async function makeChallan() {
-    if (!picks.size) throw new Error('Tick the BOQ lines to send');
-    const body = { picks: [...picks].map(([boq_item_id, qty]) => ({ boq_item_id, qty })) };
-    const ch = await api(`/projects/${projectId}/challan`, { method: 'POST', body });
-    toast(`Challan ${ch.challan_no} created as Draft: add vehicle / transporter, then Dispatch.`);
-    location.hash = `#/view/challans/${ch.id}`;
+  function draw() {
+    const q = search.value.toLowerCase().trim();
+    const f = filter.value;
+    const keep = r => {
+      if (!isItem(r)) return !q && f === 'All material';
+      if (q && !`${r.sr_no} ${r.heading} ${r.description}`.toLowerCase().includes(q)) return false;
+      if (f === 'Pending') return !['Dispatched', 'Delivered'].includes(r.delivery_status);
+      if (f === 'Sent / in transit') return ['Dispatched', 'Partly Dispatched'].includes(r.delivery_status);
+      if (f === 'Delivered ✓') return r.delivery_status === 'Delivered';
+      if (f === 'Qty TBD') return r.qty == null;
+      return true;
+    };
+    const secs = tab === 'All' ? sections : [tab];
+    out.replaceChildren(...secs.map(sec => {
+      const secRows = rows.filter(r => (r.section || 'BOQ') === sec);
+      const shown = secRows.filter(keep);
+      if (!shown.length) return null;
+      const st = stats(secRows);
+      const pct = st.lines ? Math.round((st.sent / st.lines) * 100) : 0;
+      return h('div.card.flush', { style: { marginBottom: '16px' } },
+        h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', flexWrap: 'wrap' } },
+          h('h2', { style: { margin: 0 } }, sec), secRows[0]?.wo_no ? h('span.muted', `WO ${secRows[0].wo_no}`) : null,
+          h('span', { style: { marginLeft: 'auto' } }, `${st.sent} of ${st.lines} sent · ${st.delivered} delivered ✓ · ${st.pending} pending`),
+          h('div', { style: { width: '160px', height: '8px', background: 'var(--neutral-bg)', borderRadius: '4px', overflow: 'hidden' }, title: `${pct}% sent` },
+            h('div', { style: { width: pct + '%', height: '100%', background: 'var(--good)' } }))),
+        h('div.table-wrap', h('table.data',
+          h('thead', h('tr', canSend ? h('th') : null, h('th'), h('th', 'Sr'), h('th', 'Material'), h('th', 'UOM'), h('th.num', 'WO Qty'), h('th.num', 'Sent'), h('th.num', 'Delivered'), h('th.num', 'Pending'), h('th', 'Status'),
+            canSend ? h('th.num', 'Send now') : null)),
+          h('tbody', shown.map(r => {
+            if (!isItem(r)) return h('tr', h('td', { colspan: canSend ? 11 : 9, style: { background: 'var(--surface-2)', fontWeight: 600 } }, `${r.sr_no ? r.sr_no + '  ' : ''}${firstLine(r.description)}`));
+            const done = ['Dispatched', 'Delivered'].includes(r.delivery_status);
+            const sendable = !done && (r.qty == null || r.pending > 0);
+            const pick = picks.get(r.id);
+            const qtyIn = h('input', { type: 'number', step: 'any', min: 0, style: { width: '76px' }, value: pick?.qty ?? (r.pending ?? ''), placeholder: r.qty == null ? 'qty' : '' });
+            const chk = h('input', { type: 'checkbox', checked: !!pick, disabled: !sendable, style: { width: 'auto' } });
+            const sync = () => {
+              if (chk.checked) picks.set(r.id, { qty: qtyIn.value === '' ? null : Number(qtyIn.value), item_id: picks.get(r.id)?.item_id ?? r.item_id ?? null });
+              else picks.delete(r.id);
+              pickCount.textContent = picks.size;
+            };
+            chk.onchange = sync;
+            qtyIn.oninput = () => { if (!chk.checked && qtyIn.value) chk.checked = true; sync(); };
+            const icon = r.delivery_status === 'Delivered' ? '✓' : r.delivery_status === 'Dispatched' ? '🚚' : r.delivery_status === 'Partly Dispatched' ? '◐' : '';
+            return h('tr', { style: { opacity: done ? 0.78 : 1 } },
+              canSend ? h('td', chk) : null,
+              h('td', { style: { fontSize: '17px', color: r.delivery_status === 'Delivered' ? 'var(--good)' : 'var(--text-2)' }, title: r.delivery_status }, icon),
+              h('td.nowrap', r.sr_no || ''),
+              h('td', { style: { maxWidth: '560px' } },
+                r.heading ? h('div.muted', { style: { fontSize: '11px' } }, r.heading) : null,
+                h('a', { href: `#/view/boq_items/${r.id}` }, firstLine(r.description)),
+                r.description.includes('\n') ? h('details', h('summary.muted', { style: { fontSize: '11px' } }, 'full specification'), h('div', { style: { fontSize: '12px', whiteSpace: 'pre-wrap' } }, r.description)) : null,
+                r.area_qty ? h('div.muted', { style: { fontSize: '11px' } }, r.area_qty) : null,
+                r.item_id_label ? h('div.muted', { style: { fontSize: '11px' } }, `📦 store item: ${r.item_id_label}`) : null),
+              h('td', r.uom || ''), h('td.num', r.qty ?? h('span.muted', 'TBD')), h('td.num', r.dispatched || ''), h('td.num', r.delivered || ''),
+              h('td.num', { style: { fontWeight: 600, color: r.pending > 0 ? 'var(--warn)' : '' } }, r.pending ?? ''), h('td', badge(r.delivery_status)),
+              canSend ? h('td.num', sendable ? qtyIn : '') : null);
+          })))));
+    }));
+    if (!out.children.length) out.append(h('div.empty', 'Nothing matches this filter'));
   }
 
-  async function importWo() {
-    const file = h('input', { type: 'file', accept: '.xlsx' });
-    const mode = h('select', h('option', { value: 'append' }, 'Add to the existing BOQ'), h('option', { value: 'replace' }, 'Replace the existing BOQ (only if nothing dispatched yet)'));
-    const ok = await modal('Import work order BOQ', h('div.grid',
-      h('p', 'Upload the work order Excel (e.g. "Electrical & HVAC - Work Order 1 - Lokmany Hospital.xlsx"). Every sheet with "Sr. No." and "Particulars"/"Description" columns becomes a section: MOT, Passage, MGPS, Electrical …'),
-      h('label', 'Work order file', file), rows.length ? h('label', 'This project already has a BOQ', mode) : null),
+  async function dispatchSelected() {
+    if (!picks.size) throw new Error('Tick the material you are sending');
+    const chosen = rows.filter(r => picks.has(r.id));
+    const f = {
+      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'), lr_no: h('input'),
+      driver: h('input', { placeholder: 'name / phone' }), eway_bill: h('input'), site_contact: h('input'), remarks: h('input'),
+    };
+    // Optional store item per line: if set, that quantity is issued from store stock.
+    const itemCells = chosen.map(r => h('tr', h('td', `${r.sr_no || ''} ${firstLine(r.description).slice(0, 60)}`), h('td.num', picks.get(r.id).qty ?? ''),
+      h('td', itemPicker(items, picks.get(r.id).item_id, { onPick: id => { picks.get(r.id).item_id = id; } }))));
+    const ok = await modal(`Dispatch ${chosen.length} item(s) – a delivery challan is created automatically`, h('div.grid',
+      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', driver: 'Driver', eway_bill: 'E-way Bill No', site_contact: 'Site contact', remarks: 'Remarks' })
+        .map(([k, l]) => h('label', l, f[k]))),
+      h('details', h('summary', 'Issue from store stock (optional) – pick the store item for lines that come from the store'),
+        h('table.data', h('thead', h('tr', h('th', 'Material'), h('th.num', 'Qty'), h('th', 'Store item'))), h('tbody', itemCells)))),
+      [{ label: 'Cancel', value: false }, { label: '🚚 Dispatch & make challan', cls: 'good', value: true }], { wide: true });
+    if (!ok) return;
+    const body = { picks: [...picks].map(([boq_item_id, p]) => ({ boq_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])) };
+    let r;
+    try { r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body }); }
+    catch (e) {
+      if (!/Not enough stock|More than the work order/.test(e.message)) throw e;
+      const again = await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]);
+      if (!again) return;
+      r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true } });
+    }
+    await modal('Dispatched', h('p', `Challan ${r.challan.challan_no} created and marked Dispatched${r.stock_lines ? `; ${r.stock_lines} store item(s) issued from stock` : ''}. The BOQ now shows this material as sent.`),
+      [{ label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return true; } }, { label: 'OK', cls: 'primary', value: true }]);
+    boqView(root, boqId);
+  }
+
+  async function addFile() {
+    const file = h('input', { type: 'file', accept: '.xlsx,.xls' });
+    const mode = h('select', h('option', { value: 'append' }, 'Add its material to this BOQ'), h('option', { value: 'replace' }, 'Replace all lines (only if nothing sent yet)'));
+    const ok = await modal('Add work order file', h('div.grid', h('label', 'Work order / BOQ Excel', file), rows.length ? h('label', 'This BOQ already has material', mode) : null),
       [{ label: 'Cancel', value: false }, { label: 'Import', cls: 'primary', value: true }]);
     if (!ok) return;
-    if (!file.files[0]) throw new Error('Choose the work order file');
-    const r = await api(`/projects/${projectId}/boq/import${rows.length ? '?mode=' + mode.value : ''}`, { method: 'POST', raw: await file.files[0].arrayBuffer() });
+    if (!file.files[0]) throw new Error('Choose a file');
+    const r = await upload(`/boqs/${boqId}/import?mode=${rows.length ? mode.value : 'append'}`, await readFile(file.files[0]));
     toast(`Imported: ${r.sections.map(s => `${s.section} ${s.items}`).join(', ')}`);
-    projectBoqView(root, projectId);
+    boqView(root, boqId);
   }
 
   filter.onchange = draw;
   search.oninput = draw;
+  const all = stats(rows);
   root.replaceChildren(
-    h('div.page-head', h('a.btn.small', { href: `#/view/projects/${projectId}` }, '‹ Project'),
-      h('h1', `📑 Work Order & Dispatch`), h('span.muted', `${project.project_no || project.code} · ${project.name}`),
+    h('div.page-head', h('a.btn.small', { href: '#/list/boqs' }, '‹ BOQs'),
+      h('h1', `📑 ${boq.boq_no} · ${boq.title}`), badge(boq.status),
       h('div.actions',
-        canBoq ? h('button.btn', { onclick: () => importWo().catch(fail) }, '📥 Import work order') : null,
-        canBoq ? h('a.btn', { href: `#/edit/boq_items/new?project_id=${projectId}` }, '+ BOQ line') : null,
-        canChallan && rows.length ? h('button.btn.primary', { onclick: () => makeChallan().catch(fail) }, '🚚 Make challan (', pickCount, ')') : null)),
+        canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
+        canEdit ? h('a.btn', { href: `#/edit/boq_items/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '+ Line') : null,
+        canEdit ? h('a.btn', { href: `#/edit/boqs/${boqId}?details=1` }, '✏️ Details') : null,
+        canSend && rows.length ? h('button.btn.primary', { onclick: () => dispatchSelected().catch(fail) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
+    h('div.muted', { style: { marginBottom: '10px' } }, [boq.project_id_label && `Project: ${boq.project_id_label}`, boq.customer_id_label && `Customer: ${boq.customer_id_label}`, boq.wo_no && `WO: ${boq.wo_no}`].filter(Boolean).join('   ·   ')),
     rows.length ? h('div.kpis',
-      h('div.kpi', h('div.label', 'BOQ lines'), h('div.value', all.lines)),
-      h('div.kpi', h('div.label', 'Delivered ✓'), h('div.value', all.delivered), h('div.sub', `${all.lines ? Math.round(all.delivered / all.lines * 100) : 0}% of lines`)),
-      h('div.kpi', h('div.label', 'Dispatched / in transit'), h('div.value', all.dispatched - all.delivered)),
-      h('div.kpi', h('div.label', 'Pending'), h('div.value', all.pending), h('div.sub', `${items.filter(r => r.qty == null).length} lines with qty TBD`)),
-      h('div.kpi', h('div.label', 'Challans'), h('div.value', challans.length), h('div.sub', `${challans.filter(c => c.status === 'Draft').length} draft`))) : null,
-    rows.length ? h('div.toolbar', search, filter, h('span.muted', 'Tick lines (quantity defaults to the pending qty) and press “Make challan”.')) : h('div.card', h('p', 'No BOQ yet for this project. Import the work order Excel, or add lines by hand.')),
+      h('div.kpi', h('div.label', 'Material lines'), h('div.value', all.lines), h('div.sub', `${sections.length} section(s)`)),
+      h('div.kpi', h('div.label', 'Sent'), h('div.value', all.sent), h('div.sub', `${all.lines ? Math.round(all.sent / all.lines * 100) : 0}% of lines`)),
+      h('div.kpi', h('div.label', 'Delivered ✓'), h('div.value', all.delivered)),
+      h('div.kpi', h('div.label', 'Partly sent'), h('div.value', all.partly)),
+      h('div.kpi', h('div.label', 'Pending'), h('div.value', all.pending), h('div.sub', `${rows.filter(r => isItem(r) && r.qty == null).length} with qty TBD`)),
+      h('div.kpi', h('div.label', 'Challans'), h('div.value', challans.length))) : h('div.card', h('p', 'No material yet. Use “Add work order file” to import the work order Excel, or add lines by hand.')),
+    rows.length ? tabs : null,
+    rows.length ? h('div.toolbar', search, filter, canSend ? h('span.muted', 'Tick what you are sending (qty defaults to pending) → “Dispatch selected”. The challan is made for you.') : null) : null,
     out,
-    challans.length ? h('div.card', h('h2', '🚚 Challans for this project'), h('table.data', h('thead', h('tr', ['Challan', 'Date', 'Vehicle', 'Lines', 'Status', 'Delivered', 'Received by'].map(x => h('th', x)))),
-      h('tbody', challans.map(c => h('tr.clickable', { onclick: () => (location.hash = `#/view/challans/${c.id}`) },
-        h('td', c.challan_no), h('td', fmtDate(c.date)), h('td', c.vehicle_no || ''), h('td', (c.lines || []).length || ''), h('td', badge(c.status)), h('td', fmtDate(c.delivered_date)), h('td', c.received_by || '')))))) : null);
+    challans.length ? h('div.card', h('h2', '🚚 Challans of this BOQ'), h('table.data', h('thead', h('tr', ['Challan', 'Date', 'Vehicle', 'Items', 'Status', 'Delivered', 'Received by', ''].map(x => h('th', x)))),
+      h('tbody', challans.map(c => h('tr',
+        h('td', h('a', { href: `#/view/challans/${c.id}` }, c.challan_no)), h('td', fmtDate(c.date)), h('td', c.vehicle_no || ''), h('td', (c.lines || []).length), h('td', badge(c.status)),
+        h('td', fmtDate(c.delivered_date)), h('td', c.received_by || ''), h('td', h('a.btn.small', { href: `#/print/challan/${c.id}`, target: '_blank' }, '🖨 Print'))))))) : null,
+    attachments('boqs', Number(boqId), canEdit));
+  drawTabs();
   draw();
 }

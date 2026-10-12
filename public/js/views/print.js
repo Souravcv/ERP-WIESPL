@@ -243,6 +243,7 @@ function challanDoc(c, project, s) {
     h('table', h('tbody',
       h('tr', ...cellInfo('Challan No', h('b', c.challan_no)), ...cellInfo('Date', fmtDate(c.date))),
       h('tr', ...cellInfo('Work Order', project?.project_no || ''), ...cellInfo('Project', project?.name || c.project_id_label)),
+      c.boq_id ? h('tr', ...cellInfo('BOQ', c.boq_id_label || ''), ...cellInfo('Customer', c.customer_id_label || '')) : null,
       h('tr', h('th', 'Consignee / Ship To'), h('td', { colspan: 3 }, ...multiline(c.ship_to || ''), c.site_contact ? [h('br'), `Contact: ${c.site_contact}`] : null)),
       h('tr', ...cellInfo('Vehicle No', c.vehicle_no), ...cellInfo('Transporter', c.transporter)),
       h('tr', ...cellInfo('LR / Docket No', c.lr_no), ...cellInfo('E-way Bill No', c.eway_bill)),

@@ -41,6 +41,7 @@ const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST'
 // Quantity of a BOQ line sent on challans with the given statuses (challan lines carry boq_item_id).
 const BOQ_SENT = statuses => `(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.qty') AS REAL)), 0) FROM challans c, json_each(c.lines) j
   WHERE c.status IN (${statuses}) AND CAST(json_extract(j.value, '$.boq_item_id') AS INTEGER) = {t}.id)`;
+const BOQ_SENT_B = statuses => BOQ_SENT(statuses).replaceAll('{t}', 'b');
 // Current stock: the latest 1-April opening entry (or the legacy opening field) plus every movement since it.
 // Only openings dated today or earlier count, so an opening entered in advance for next April changes nothing yet.
 const OPEN_OK = `o.item_id = {t}.id AND o.type = 'OPENING' AND o.date <= date('now', 'localtime')`;
@@ -330,7 +331,7 @@ export const ENTITIES = {
     search: ['code', 'project_no', 'name', 'site', 'site_address', 'engineer', 'notes'],
     list: ['project_no', 'name', 'customer_id', 'site', 'stage', 'material_cost', 'po_value', 'status'],
     statusField: 'status',
-    related: [['challans', 'project_id'], ['requisitions', 'project_id'], ['purchase_orders', 'project_id'], ['stock_moves', 'project_id'], ['material_approvals', 'project_id'], ['invoices', 'project_id'], ['service_tickets', 'project_id']],
+    related: [['boqs', 'project_id'], ['challans', 'project_id'], ['requisitions', 'project_id'], ['purchase_orders', 'project_id'], ['stock_moves', 'project_id'], ['material_approvals', 'project_id'], ['invoices', 'project_id'], ['service_tickets', 'project_id']],
     fields: [
       { key: 'code', label: 'Internal Code', type: 'text', readonly: true },
       { key: 'project_no', label: 'Project / Work Order No', type: 'text', hint: 'e.g. WIESPL / 1001 / 04/2026-27' },
@@ -354,14 +355,37 @@ export const ENTITIES = {
       { key: 'notes', label: 'Site Notes', type: 'textarea', span: 2 },
     ],
   },
+  boqs: {
+    label: 'BOQ', singular: 'BOQ', group: 'Sales & Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'boq',
+    display: "{t}.boq_no || ' · ' || {t}.title",
+    search: ['boq_no', 'title', 'wo_no', 'remarks'],
+    list: ['boq_no', 'title', 'project_id', 'wo_no', 'lines', 'sent_lines', 'pending_lines', 'progress', 'status'],
+    statusField: 'status',
+    related: [['challans', 'boq_id']],
+    fields: [
+      { key: 'boq_no', label: 'BOQ No', type: 'text', readonly: true },
+      { key: 'title', label: 'BOQ Title', type: 'text', required: true, hint: 'e.g. Lokmanya Hospital – Electrical & HVAC Work Order 1' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
+      { key: 'wo_no', label: 'Work Order No(s)', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Completed', 'On Hold'], default: 'Open' },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+      { key: 'lines', label: 'Items', type: 'number', computed: "(SELECT COUNT(*) FROM boq_items b WHERE b.boq_id = {t}.id AND b.kind = 'Item')" },
+      { key: 'sent_lines', label: 'Fully Sent', type: 'number', computed: `(SELECT COUNT(*) FROM boq_items b WHERE b.boq_id = {t}.id AND b.kind = 'Item' AND b.qty IS NOT NULL AND ${BOQ_SENT_B("'Dispatched','Delivered'")} >= b.qty)` },
+      { key: 'pending_lines', label: 'Pending', type: 'number', computed: `(SELECT COUNT(*) FROM boq_items b WHERE b.boq_id = {t}.id AND b.kind = 'Item' AND (b.qty IS NULL OR ${BOQ_SENT_B("'Dispatched','Delivered'")} < b.qty))` },
+      { key: 'progress', label: '% Sent', type: 'number', computed: `(SELECT CASE WHEN COUNT(*) = 0 THEN 0 ELSE ROUND(100.0 * SUM(CASE WHEN b.qty IS NOT NULL AND ${BOQ_SENT_B("'Dispatched','Delivered'")} >= b.qty THEN 1 ELSE 0 END) / COUNT(*)) END FROM boq_items b WHERE b.boq_id = {t}.id AND b.kind = 'Item')` },
+    ],
+  },
   boq_items: {
-    label: 'Work Order BOQ', singular: 'BOQ Line', group: 'Sales & Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'),
+    label: 'BOQ Lines', singular: 'BOQ Line', group: 'Hidden', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "COALESCE({t}.sr_no || ' ', '') || substr(COALESCE({t}.heading || ' › ', '') || {t}.description, 1, 90)",
     search: ['section', 'wo_no', 'sr_no', 'heading', 'description', 'remarks'],
     list: ['section', 'sr_no', 'description', 'uom', 'qty', 'dispatched', 'delivered', 'pending', 'delivery_status'],
     statusField: 'kind',
     fields: [
-      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true },
+      { key: 'boq_id', label: 'BOQ', type: 'ref', ref: 'boqs', required: true },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'section', label: 'Section / Annexure', type: 'text', hint: 'e.g. MOT PPGL, Passage, MGPS, Electrical' },
       { key: 'wo_no', label: 'Work Order No', type: 'text' },
       { key: 'sr_no', label: 'Sr. No.', type: 'text' },
@@ -388,12 +412,13 @@ export const ENTITIES = {
     label: 'Delivery Challans', singular: 'Delivery Challan', group: 'Sales & Projects', icon: '🚚', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "{t}.challan_no",
     search: ['challan_no', 'ship_to', 'vehicle_no', 'transporter', 'lr_no', 'eway_bill', 'received_by', 'remarks'],
-    list: ['challan_no', 'date', 'project_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
+    list: ['challan_no', 'date', 'boq_id', 'project_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
     statusField: 'status', print: 'challan',
     fields: [
       { key: 'challan_no', label: 'Challan No', type: 'text', readonly: true, hint: 'Auto: DC-001/2026-27' },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
-      { key: 'project_id', label: 'Project / Work Order', type: 'ref', ref: 'projects', required: true },
+      { key: 'boq_id', label: 'BOQ', type: 'ref', ref: 'boqs' },
+      { key: 'project_id', label: 'Project / Work Order', type: 'ref', ref: 'projects' },
       { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
       { key: 'challan_type', label: 'Challan Type', type: 'select', options: ['Non-Returnable', 'Returnable'], default: 'Non-Returnable' },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Dispatched', 'Delivered', 'Cancelled'], default: 'Draft', readonly: true },
@@ -672,6 +697,7 @@ const permsOf = role => PERMS[role] || defaultPermissions(role);
 
 export function moduleAccess(entity, role) {
   if (role === 'admin') return 'full';
+  if (entity === 'boq_items') entity = 'boqs';
   return permsOf(role).modules?.[entity] || 'none';
 }
 export const canView = (entity, role) => moduleAccess(entity, role) !== 'none';
