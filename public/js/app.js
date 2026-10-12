@@ -8,6 +8,7 @@ import { printView } from './views/print.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 import { boqView } from './views/dispatch.js';
+import { bomView } from './views/bom.js';
 
 const $ = id => document.getElementById(id);
 
@@ -47,7 +48,7 @@ function buildNav(pending = 0) {
 }
 
 function highlightNav() {
-  const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/^#\/boq\/.*/, '#/list/boqs').replace(/\/(new|\d+)$/, '');
+  const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/^#\/boq\/.*/, '#/list/boqs').replace(/^#\/bom\/.*/, '#/list/boms').replace(/\/(new|\d+)$/, '');
   for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('active', a.getAttribute('href') === hash);
 }
 
@@ -82,12 +83,50 @@ async function route() {
       case 'stock-summary': await stockSummaryView(view); break;
       case 'po-tracker': await poTrackerView(view); break;
       case 'boq': await boqView(view, a); break;
+      case 'bom': await bomView(view, a); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }
   } catch (e) {
     view.replaceChildren(h('div.card', h('h2', 'Something went wrong'), h('p', e.message)));
   }
+}
+
+// ---------------------------------------------------------------- pop-up notifications (new PO / requisition / BOQ / work order, approvals)
+let notifLast = null, notifTimer = null;
+const bell = h('button.icon-btn.bell', { title: 'Notifications', onclick: () => openNotifications().catch(fail) }, '🔔', h('span.count.hidden'));
+function setUnread(n) { const c = bell.querySelector('.count'); c.textContent = n > 99 ? '99+' : n; c.classList.toggle('hidden', !n); }
+function popup(n) {
+  const box = document.getElementById('popups') || document.body.appendChild(h('div#popups'));
+  const el = h('div.popup', h('button.icon-btn', { title: 'Close', onclick: e => { e.stopPropagation(); el.remove(); } }, '✕'),
+    h('b', n.title), n.body ? h('div', n.body) : null, h('div.muted', n.at));
+  el.onclick = () => { el.remove(); api('/notifications/read', { method: 'POST', body: { ids: [n.id] } }).then(poll).catch(() => {}); if (n.link) location.hash = n.link; };
+  box.prepend(el);
+  setTimeout(() => el.remove(), 15000);
+}
+async function poll() {
+  try {
+    const r = await api(`/notifications?since=${notifLast ?? 0}&limit=${notifLast == null ? 1 : 10}`);
+    setUnread(r.unread);
+    if (notifLast != null) for (const n of [...r.rows].reverse()) popup(n);
+    notifLast = r.last;
+    if (r.rows.some(n => n.kind === 'approval' || n.kind === 'decision')) refreshPending();
+  } catch { /* offline for a moment */ }
+}
+function startNotifications() {
+  document.querySelector('.user-box')?.prepend(bell);
+  clearInterval(notifTimer);
+  notifLast = null;
+  poll();
+  notifTimer = setInterval(poll, 20000);
+}
+async function openNotifications() {
+  const r = await api('/notifications?since=0&limit=40');
+  const list = r.rows.length ? r.rows.map(n => h('div.notif' + (n.read_at ? '' : '.unread'), { onclick: () => { api('/notifications/read', { method: 'POST', body: { ids: [n.id] } }).then(poll).catch(() => {}); document.querySelector('.modal-back')?.remove(); if (n.link) location.hash = n.link; } },
+    h('b', n.title), n.body ? h('div', n.body) : null, h('div.muted', n.at))) : [h('div.muted', 'No notifications yet')];
+  await modal('🔔 Notifications', h('div.notif-list', list), [
+    { label: 'Mark all read', action: async () => { await api('/notifications/read', { method: 'POST', body: { ids: 'all' } }); poll(); return true; } },
+    { label: 'Close', cls: 'primary', value: true }]);
 }
 
 async function changePassword(force = false) {
@@ -123,6 +162,7 @@ async function start() {
   $('user-name').textContent = `${state.user.name} · ${state.user.role_label || state.user.role}`;
   buildNav();
   refreshPending();
+  startNotifications();
   if (state.user.must_change) await changePassword(true);
   if (!location.hash || location.hash === '#/login') location.hash = '#/dashboard';
   else route();

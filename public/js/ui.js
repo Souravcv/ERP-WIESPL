@@ -56,14 +56,29 @@ export function toast(msg, isErr = false) {
 }
 export const fail = e => toast(e.message || String(e), true);
 
+// Run an async action from a button once at a time (double clicks, or holding Ctrl+S, must not save twice).
+export function busy(fn) {
+  let running = false;
+  return async function (e) {
+    if (running) return;
+    running = true;
+    const btn = e?.currentTarget instanceof HTMLButtonElement ? e.currentTarget : null;
+    if (btn) btn.disabled = true;
+    try { return await fn.apply(this, arguments); } catch (err) { fail(err); } finally { running = false; if (btn) btn.disabled = false; }
+  };
+}
+
 export function modal(title, body, buttons = [], { wide = false } = {}) {
   return new Promise(resolve => {
     const close = v => { back.remove(); resolve(v); };
     const back = h('div.modal-back', { onclick: e => e.target === back && close(null) },
       h('div.modal' + (wide ? '.wide' : ''), h('h2', title), body,
-        h('div.foot', buttons.map(b => h('button.btn' + (b.cls ? '.' + b.cls : ''), { type: 'button', onclick: async () => {
+        h('div.foot', buttons.map(b => h('button.btn' + (b.cls ? '.' + b.cls : ''), { type: 'button', onclick: async e => {
           if (!b.action) return close(b.value ?? null);
-          try { const v = await b.action(); if (v !== false) close(v); } catch (e) { fail(e); }
+          const btn = e.currentTarget;
+          if (btn.disabled) return;
+          btn.disabled = true;
+          try { const v = await b.action(); if (v !== false) close(v); } catch (err) { fail(err); } finally { btn.disabled = false; }
         } }, b.label)))));
     document.body.append(back);
     back.querySelector('input, select, textarea')?.focus();
@@ -131,13 +146,27 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
       el.value = value ?? ''; get = () => el.value; break;
     }
     case 'ref': {
-      el = h('select', { ...common, disabled: ro }, h('option', { value: '' }, 'Loading…'));
-      el.dataset.value = value ?? '';
-      refOptions(f.ref).then(list => {
-        el.replaceChildren(h('option', { value: '' }, '— select —'), ...list.map(o => h('option', { value: o.id }, o.label)));
-        el.value = el.dataset.value;
-      }).catch(fail);
-      get = () => (el.value === '' ? null : Number(el.value)); break;
+      // Searchable: type part of the name / number and pick from the list (vendors, projects, POs …).
+      const id = 'dl-' + ++dlCount;
+      let list = [], cur = value ?? null;
+      const inp = h('input', { name: f.key, readOnly: ro, required: !!f.required && !ro, list: ro ? null : id, autocomplete: 'off', placeholder: ro ? '' : 'Type to search…' });
+      const dl = h('datalist', { id });
+      el = h('span.ref-input', inp, dl);
+      const show = () => { inp.value = cur == null ? '' : (list.find(o => o.id === cur)?.label ?? ''); inp.classList.remove('invalid'); };
+      refOptions(f.ref).then(l => { list = l; dl.replaceChildren(...l.map(o => h('option', { value: o.label }))); if (document.activeElement !== inp) show(); }).catch(fail);
+      const resolve = () => {
+        const t = inp.value.trim();
+        if (!t) { cur = null; inp.classList.remove('invalid'); return; }
+        const hit = list.find(o => o.label === t) || (() => { const m = list.filter(o => o.label.toLowerCase().includes(t.toLowerCase())); return m.length === 1 ? m[0] : null; })();
+        if (hit) { cur = hit.id; inp.value = hit.label; inp.classList.remove('invalid'); } else { cur = null; inp.classList.add('invalid'); }
+      };
+      inp.addEventListener('change', () => { resolve(); onChange?.(); });
+      inp.addEventListener('blur', resolve);
+      get = () => cur;
+      el.invalid = () => inp.value.trim() !== '' && cur == null;
+      el.setValue = v => { cur = v == null || v === '' ? null : Number(v); show(); };
+      el.style.display = 'contents';
+      break;
     }
     case 'person': {
       const id = 'dl-' + ++dlCount;
@@ -160,7 +189,7 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
       }
     }
   }
-  return { el, get };
+  return { el, get, set: v => (el.setValue ? el.setValue(v) : (el.value = v ?? '')), invalid: () => !!el.invalid?.() };
 }
 
 // Hover tooltip shared by charts

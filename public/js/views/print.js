@@ -1,4 +1,6 @@
 import { h, api, state, fmtDate } from '../ui.js';
+import { bomDoc } from './bom.js';
+import { bomRows } from './form.js';
 import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, gstTotals, round2 } from '../calc.js';
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
@@ -243,7 +245,8 @@ function challanDoc(c, project, s) {
     h('table', h('tbody',
       h('tr', ...cellInfo('Challan No', h('b', c.challan_no)), ...cellInfo('Date', fmtDate(c.date))),
       h('tr', ...cellInfo('Work Order', project?.project_no || ''), ...cellInfo('Project', project?.name || c.project_id_label)),
-      c.boq_id ? h('tr', ...cellInfo('BOQ', c.boq_id_label || ''), ...cellInfo('Customer', c.customer_id_label || '')) : null,
+      c.bom_id || c.boq_id ? h('tr', ...cellInfo('BOQ', c.bom_id_label || ''), ...cellInfo('Client Work Order', c.boq_id_label || '')) : null,
+      c.issue_no || c.customer_id_label ? h('tr', ...cellInfo('Store Issue No', c.issue_no || ''), ...cellInfo('Customer', c.customer_id_label || '')) : null,
       h('tr', h('th', 'Consignee / Ship To'), h('td', { colspan: 3 }, ...multiline(c.ship_to || ''), c.site_contact ? [h('br'), `Contact: ${c.site_contact}`] : null)),
       h('tr', ...cellInfo('Vehicle No', c.vehicle_no), ...cellInfo('Transporter', c.transporter)),
       h('tr', ...cellInfo('LR / Docket No', c.lr_no), ...cellInfo('E-way Bill No', c.eway_bill)),
@@ -265,6 +268,7 @@ function challanDoc(c, project, s) {
 
 const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
 function stockSlipDoc(type, docNo, moves, s) {
+  if (!['INWARD', 'OPENING'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s);
   const m0 = moves[0] || {};
   const total = moves.reduce((a, m) => a + (Number(m.value) || 0), 0);
   const info = [
@@ -283,6 +287,25 @@ function stockSlipDoc(type, docNo, moves, s) {
       h('tfoot', h('tr', h('td', { colspan: 6 }, 'Total'), h('td.num', inr(total)), h('td')))),
     h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By (Store)', type === 'INWARD' ? 'Checked By (Quality)' : 'Received By', 'Authorised Signatory'].map(x => h('th', { style: { width: '33%' } }, x))),
+      h('tr', [m0.created_by, '', ''].map(x => h('td', { style: { height: '50px', verticalAlign: 'bottom' } }, x || ''))))),
+    footer()));
+}
+
+function stockSlipNoPrice(type, docNo, moves, s) {
+  const m0 = moves[0] || {};
+  const info = [['No', docNo], ['Date', fmtDate(m0.date)], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
+    type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
+    ['Reason', m0.reason], ['Purpose', m0.purpose]].filter(x => x && x[1]);
+  return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
+    companyHead(s, SLIP_TITLES[type] || type),
+    h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
+    h('table', { style: { marginTop: '8px' } },
+      h('thead', h('tr', ['Sr', 'Item Code', 'Item Name', 'Qty', 'UOM', 'Remark'].map((x, i) => h('th' + (i === 3 ? '.num' : ''), x)))),
+      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]), h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · ')),
+        h('td.num', m.qty), h('td', m.uom || ''), h('td', m.remarks || '')))),
+      h('tfoot', h('tr', h('td', { colspan: 3 }, `Total items: ${moves.length}`), h('td.num', round2(moves.reduce((a, m) => a + (Number(m.qty) || 0), 0))), h('td', { colspan: 2 })))),
+    h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
+      h('tr', ['Prepared By (Store)', 'Received By', 'Authorised Signatory'].map(x => h('th', { style: { width: '33%' } }, x))),
       h('tr', [m0.created_by, '', ''].map(x => h('td', { style: { height: '50px', verticalAlign: 'bottom' } }, x || ''))))),
     footer()));
 }
@@ -314,6 +337,11 @@ export async function printView(root, kind, id) {
     const project = c.project_id ? await api(`/projects/${c.project_id}`).catch(() => null) : null;
     title = c.challan_no;
     doc = challanDoc(c, project, s);
+  } else if (kind === 'bom') {
+    const bom = await api(`/boms/${id}`);
+    const rows = bomRows(await api(`/bom_items?bom_id=${id}&limit=20000`));
+    title = `${bom.bom_no} ${bom.client || ''}`;
+    doc = bomDoc(bom, rows, s);
   } else if (kind === 'requisition') {
     const r = await api(`/requisitions/${id}`);
     title = r.req_no;

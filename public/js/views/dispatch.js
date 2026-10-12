@@ -1,4 +1,4 @@
-// BOQ window: upload a work order, see each section's material, what is sent and what is pending,
+// Work order window: upload the client's work order, see each section's material, what is sent and what is pending,
 // and dispatch (the delivery challan is created automatically).
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache } from '../ui.js';
 import { canWrite } from '../schema.js';
@@ -17,30 +17,30 @@ async function upload(path, f) {
   return data;
 }
 
-// "New BOQ": upload the work order Excel; the BOQ is created and opened.
+// "New Work Order": upload the work order Excel; it is created and opened.
 export async function newBoqDialog(preset = {}) {
   const projects = await refOptions('projects');
   let projectId = preset.project_id ? Number(preset.project_id) : null;
   const title = h('input', { placeholder: 'e.g. Lokmanya Hospital – Electrical & HVAC Work Order 1' });
   const file = h('input', { type: 'file', accept: '.xlsx,.xls' });
   file.onchange = () => { if (!title.value && file.files[0]) title.value = file.files[0].name.replace(/\.[^.]+$/, ''); };
-  const ok = await modal('New BOQ from work order', h('div.grid',
+  const ok = await modal('New work order (upload the client work order)', h('div.grid',
     h('p', 'Upload the work order / BOQ Excel. Every sheet with "Sr. No." and "Particulars" / "Description" becomes a section (MOT, Passage, MGPS, Electrical …) and its material is listed line by line.'),
-    h('label', 'Work order file *', file), h('label', 'BOQ title', title),
+    h('label', 'Work order file *', file), h('label', 'Work order title', title),
     h('label', 'Project (optional)', itemPicker(projects, projectId, { onPick: id => { projectId = id; } }))),
-    [{ label: 'Cancel', value: false }, { label: 'Create BOQ', cls: 'primary', value: true }]);
+    [{ label: 'Cancel', value: false }, { label: 'Create work order', cls: 'primary', value: true }]);
   if (!ok) return;
   if (!file.files[0]) throw new Error('Choose the work order file');
   const f = await readFile(file.files[0]);
   const r = await upload(`/boqs/upload?title=${encodeURIComponent(title.value)}${projectId ? `&project_id=${projectId}` : ''}`, f);
   clearRefCache('boqs');
-  toast(`BOQ ${r.boq.boq_no} created: ${r.sections.map(s => `${s.section} ${s.items}`).join(', ')}`);
+  toast(`Work order ${r.boq.boq_no} created: ${r.sections.map(s => `${s.section} ${s.items}`).join(', ')}`);
   location.hash = `#/boq/${r.boq.id}`;
 }
 
 export async function boqView(root, boqId) {
-  const [boq, rows, challans, items] = await Promise.all([
-    api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), api(`/challans?boq_id=${boqId}`), refOptions('items'),
+  const [boq, rows, challans, items, boms] = await Promise.all([
+    api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), api(`/challans?boq_id=${boqId}`), refOptions('items'), api(`/boms?work_order_id=${boqId}`).catch(() => []),
   ]);
   const canEdit = canWrite('boqs', state.user.role), canSend = canWrite('challans', state.user.role);
   rows.sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
@@ -136,6 +136,7 @@ export async function boqView(root, boqId) {
     if (!picks.size) throw new Error('Tick the material you are sending');
     const chosen = rows.filter(r => picks.has(r.id));
     const f = {
+      ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the project site address' }),
       date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'), lr_no: h('input'),
       driver: h('input', { placeholder: 'name / phone' }), eway_bill: h('input'), site_contact: h('input'), remarks: h('input'),
     };
@@ -143,6 +144,7 @@ export async function boqView(root, boqId) {
     const itemCells = chosen.map(r => h('tr', h('td', `${r.sr_no || ''} ${firstLine(r.description).slice(0, 60)}`), h('td.num', picks.get(r.id).qty ?? ''),
       h('td', itemPicker(items, picks.get(r.id).item_id, { onPick: id => { picks.get(r.id).item_id = id; } }))));
     const ok = await modal(`Dispatch ${chosen.length} item(s) – a delivery challan is created automatically`, h('div.grid',
+      h('label', 'Ship to (address on the challan)', f.ship_to),
       h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', driver: 'Driver', eway_bill: 'E-way Bill No', site_contact: 'Site contact', remarks: 'Remarks' })
         .map(([k, l]) => h('label', l, f[k]))),
       h('details', h('summary', 'Issue from store stock (optional) – pick the store item for lines that come from the store'),
@@ -179,14 +181,16 @@ export async function boqView(root, boqId) {
   search.oninput = draw;
   const all = stats(rows);
   root.replaceChildren(
-    h('div.page-head', h('a.btn.small', { href: '#/list/boqs' }, '‹ BOQs'),
+    h('div.page-head', h('a.btn.small', { href: '#/list/boqs' }, '‹ Work Orders'),
       h('h1', `📑 ${boq.boq_no} · ${boq.title}`), badge(boq.status),
       h('div.actions',
         canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
         canEdit ? h('a.btn', { href: `#/edit/boq_items/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '+ Line') : null,
         canEdit ? h('a.btn', { href: `#/edit/boqs/${boqId}?details=1` }, '✏️ Details') : null,
+        canWrite('boms', state.user.role) ? h('button.btn', { onclick: () => import('./bom.js').then(m => m.newBomDialog({ work_order_id: Number(boqId), project_id: boq.project_id })).catch(fail) }, '📑 + BOQ for this work order') : null,
         canSend && rows.length ? h('button.btn.primary', { onclick: () => dispatchSelected().catch(fail) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
-    h('div.muted', { style: { marginBottom: '10px' } }, [boq.project_id_label && `Project: ${boq.project_id_label}`, boq.customer_id_label && `Customer: ${boq.customer_id_label}`, boq.wo_no && `WO: ${boq.wo_no}`].filter(Boolean).join('   ·   ')),
+    h('div.muted', { style: { marginBottom: '10px' } }, [boq.project_id_label && `Project: ${boq.project_id_label}`, boq.customer_id_label && `Customer: ${boq.customer_id_label}`, boq.wo_no && `WO: ${boq.wo_no}`].filter(Boolean).join('   ·   '),
+      boms.length ? h('div', 'BOQs (bill of material): ', boms.map((b, i) => [i ? ', ' : '', h('a', { href: `#/bom/${b.id}` }, `${b.bom_no} ${b.client || ''}`)])) : null),
     rows.length ? h('div.kpis',
       h('div.kpi', h('div.label', 'Material lines'), h('div.value', all.lines), h('div.sub', `${sections.length} section(s)`)),
       h('div.kpi', h('div.label', 'Sent'), h('div.value', all.sent), h('div.sub', `${all.lines ? Math.round(all.sent / all.lines * 100) : 0}% of lines`)),

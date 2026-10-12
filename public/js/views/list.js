@@ -1,12 +1,17 @@
-import { h, api, state, display, fail, download } from '../ui.js';
-import { ENTITIES, fieldMap, canWrite } from '../schema.js';
+import { h, api, state, display, fail, download, toast, confirmBox, clearRefCache, busy } from '../ui.js';
+import { ENTITIES, fieldMap, canWrite, canDelete } from '../schema.js';
 import { inr } from '../calc.js';
 
-export const recordHref = (entity, id) => (ENTITIES[entity].editor === 'quotation' ? `#/quotation/${id}` : ENTITIES[entity].editor === 'boq' ? `#/boq/${id}` : `#/view/${entity}/${id}`);
+export const recordHref = (entity, id) => (ENTITIES[entity].editor === 'quotation' ? `#/quotation/${id}` : ENTITIES[entity].editor === 'boq' ? `#/boq/${id}`
+  : ENTITIES[entity].editor === 'bom' ? `#/bom/${id}` : `#/view/${entity}/${id}`);
+
+// Lists with an Excel import (opens Import with the right kind chosen).
+const IMPORTABLE = { vendors: 'vendors', items: 'items', projects: 'projects', purchase_orders: 'purchase_orders', requisitions: 'requisitions', stock_moves: 'items', enquiries: 'enquiries' };
 
 const NUMERIC = ['money', 'number'];
 
-export function table(entity, rows, { columns, pageSize = 50, totals = true } = {}) {
+// `selected` (a Set of ids) adds tick boxes, e.g. to delete several records at once.
+export function table(entity, rows, { columns, pageSize = 50, totals = true, selected = null, onSelect } = {}) {
   const ent = ENTITIES[entity];
   const fm = fieldMap(entity);
   const cols = (columns || ent.list).map(k => fm[k]).filter(Boolean);
@@ -27,14 +32,16 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true } = 
     page = Math.min(page, pages - 1);
     const slice = data.slice(page * pageSize, (page + 1) * pageSize);
     const moneyCols = cols.filter(c => c.type === 'money');
-    const thead = h('thead', h('tr', cols.map(c => h('th' + (NUMERIC.includes(c.type) ? '.num' : ''), {
+    const tick = (on, change) => h('input', { type: 'checkbox', checked: on, style: { width: 'auto' }, onclick: e => e.stopPropagation(), onchange: e => { change(e.target.checked); onSelect?.(); } });
+    const thead = h('thead', h('tr', selected ? h('th', tick(slice.length > 0 && slice.every(r => selected.has(r.id)), on => { for (const r of slice) on ? selected.add(r.id) : selected.delete(r.id); render(); })) : null, cols.map(c => h('th' + (NUMERIC.includes(c.type) ? '.num' : ''), {
       onclick: () => { dir = sortKey === c.key ? -dir : 1; sortKey = c.key; render(); },
       title: 'Sort',
     }, c.label, sortKey === c.key ? (dir > 0 ? ' ▲' : ' ▼') : ''))));
     const tbody = h('tbody', slice.map(r => h('tr.clickable', { onclick: () => (location.hash = recordHref(entity, r.id)) },
+      selected ? h('td', tick(selected.has(r.id), on => (on ? selected.add(r.id) : selected.delete(r.id)))) : null,
       cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : ''), display(c, r))))));
     const tfoot = totals && moneyCols.length && rows.length > 1
-      ? h('tfoot', h('tr', cols.map((c, i) => h('td' + (c.type === 'money' ? '.num' : ''),
+      ? h('tfoot', h('tr', selected ? h('td') : null, cols.map((c, i) => h('td' + (c.type === 'money' ? '.num' : ''),
         c.type === 'money' ? inr(data.reduce((s, r) => s + (Number(r[c.key]) || 0), 0)) : i === 0 ? `Total (${data.length})` : ''))))
       : null;
     wrap.replaceChildren(
@@ -50,6 +57,7 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true } = 
 
 export async function newRecord(entity, preset = {}) {
   if (ENTITIES[entity].editor === 'boq') { const { newBoqDialog } = await import('./dispatch.js'); return newBoqDialog(preset); }
+  if (ENTITIES[entity].editor === 'bom') { const { newBomDialog } = await import('./bom.js'); return newBomDialog(preset); }
   if (ENTITIES[entity].editor === 'quotation') {
     const q = preset.enquiry_id ? await api(`/enquiries/${preset.enquiry_id}/quotation`, { method: 'POST' }) : await api('/quotations', { method: 'POST', body: { status: 'Draft', ...preset, data: { rooms: [], lines: [], optionals: [], terms: state.settings.terms, client_scope: state.settings.client_scope, scope_matrix: state.settings.scope_matrix, letter_intro: state.settings.letter_intro, boq_title: 'WIESPL ESTIMATE FOR LAMINAR AIR FLOW, CONTROL PANEL WITH MODULAR OT - PPGL' }, subject: state.settings.default_subject } });
     location.hash = `#/quotation/${q.id}`;
@@ -73,6 +81,21 @@ export async function listView(root, entity) {
   const from = hasDate ? h('input', { type: 'date', title: 'From date' }) : null;
   const to = hasDate ? h('input', { type: 'date', title: 'To date' }) : null;
   const body = h('div.card.flush');
+  const full = canDelete(entity, state.user.role);
+  const selected = full ? new Set() : null;
+  const delBtn = h('button.btn.danger', { style: { display: 'none' } });
+  const syncDel = () => { delBtn.style.display = selected?.size ? '' : 'none'; delBtn.textContent = `🗑 Delete ${selected?.size || 0} selected`; };
+  delBtn.onclick = busy(async () => {
+    if (!(await confirmBox(`Delete ${selected.size} ${ent.label.toLowerCase()}? Their approvals and files are removed too. Records that other documents still use are kept and listed.`, 'Delete'))) return;
+    const failed = [];
+    let ok = 0;
+    for (const id of [...selected]) {
+      try { await api(`/${entity}/${id}`, { method: 'DELETE' }); ok++; selected.delete(id); } catch (e) { failed.push(e.message); }
+    }
+    clearRefCache(entity);
+    toast(`${ok} deleted${failed.length ? ` · ${failed.length} not deleted: ${failed[0]}` : ''}`, !!failed.length);
+    load();
+  });
 
   const query = () => {
     const p = new URLSearchParams();
@@ -88,7 +111,9 @@ export async function listView(root, entity) {
   async function load() {
     try {
       const rows = await api(`/${entity}?${query()}`);
-      body.replaceChildren(table(entity, rows));
+      for (const id of selected || []) if (!rows.some(r => r.id === id)) selected.delete(id);
+      body.replaceChildren(table(entity, rows, { selected, onSelect: syncDel }));
+      syncDel();
     } catch (e) { fail(e); }
   }
   const reload = () => { clearTimeout(timer); timer = setTimeout(load, 250); };
@@ -97,7 +122,8 @@ export async function listView(root, entity) {
   root.replaceChildren(
     h('div.page-head', h('h1', `${ent.icon} ${ent.label}`), h('div.actions',
       h('button.btn', { onclick: () => download(`/api/export/${entity}?${query()}`) }, '⬇ Export Excel'),
-      entity === 'enquiries' && canWrite(entity, state.user.role) ? h('a.btn', { href: '#/import' }, '📥 Import Excel') : null,
+      delBtn,
+      IMPORTABLE[entity] && canWrite(entity, state.user.role) ? h('a.btn', { href: `#/import?kind=${IMPORTABLE[entity]}` }, '📥 Import Excel') : null,
       canWrite(entity, state.user.role) && !ent.noCreate ? h('button.btn.primary', { onclick: () => newRecord(entity).catch(fail) }, `+ New ${ent.singular}`) : null)),
     h('div.toolbar', q, statusSel, from ? h('span.muted', 'From') : null, from, to ? h('span.muted', 'to') : null, to),
     body,

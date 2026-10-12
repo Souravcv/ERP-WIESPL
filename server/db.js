@@ -75,7 +75,17 @@ export function migrate() {
     CREATE INDEX IF NOT EXISTS ix_attach_rec ON attachments(entity, record_id);
     CREATE TABLE IF NOT EXISTS import_batches (
       id INTEGER PRIMARY KEY, at TEXT DEFAULT (datetime('now','localtime')), user TEXT, kind TEXT, file_hash TEXT, summary TEXT);
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, at TEXT DEFAULT (datetime('now','localtime')),
+      kind TEXT, title TEXT NOT NULL, body TEXT, link TEXT, by_user TEXT, read_at TEXT);
+    CREATE INDEX IF NOT EXISTS ix_notif_user ON notifications(user_id, id);
+    CREATE INDEX IF NOT EXISTS ix_bom_items_bom ON bom_items(bom_id, sort);
   `);
+  // Client work orders were called "BOQ" before the BOQ / bill of material module existed: BOQ-001/2026-27 → WO-001/2026-27.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migrated_wo_numbers'").get()) {
+    db.exec(`UPDATE boqs SET boq_no = 'WO-' || substr(boq_no, 5) WHERE boq_no LIKE 'BOQ-%';
+      INSERT INTO settings (key, value) VALUES ('migrated_wo_numbers', '"1"')`);
+  }
 }
 
 // Re-entrant: nested calls join the outer transaction.

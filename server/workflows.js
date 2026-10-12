@@ -2,6 +2,7 @@ import { db, tx, getSettings, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
 import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
+import { notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
@@ -16,13 +17,14 @@ export function canApprove(docType, stage, user) {
   return !!step && hasFunction(user.role, step.fn);
 }
 
-function openStep(docType, docId, row, stepIndex, user) {
+function openStep(docType, docId, row, stepIndex, user, requestedBy = user.name) {
   const d = DOCS[docType];
   const step = APPROVAL_FLOWS[docType][stepIndex];
-  insertRow('approvals', {
+  const ap = insertRow('approvals', {
     doc_type: docType, doc_id: Number(docId), doc_ref: row[d.ref], stage: step.stage, title: d.title(row),
-    amount: d.amount ? row[d.amount] : null, requested_by: user.name, requested_at: stamp(), status: 'Pending',
+    amount: d.amount ? row[d.amount] : null, requested_by: requestedBy, requested_at: stamp(), status: 'Pending',
   }, user, { system: true });
+  notifyApprovalRequest(ap, user);
   return step;
 }
 
@@ -64,13 +66,15 @@ export function decide(approvalId, decision, comments, user) {
     const step = flow[idx];
     if (decision === 'Rejected') {
       updateRow(d.entity, ap.doc_id, { status: 'Rejected', ...(d.entity === 'purchase_orders' ? { approval_stage: null } : {}) }, user, { system: true });
+      notifyDecision({ ...ap, comments }, decision, true, user);
       return getRow('approvals', approvalId);
     }
     const patch = {};
     if (d.entity === 'purchase_orders') patch[step.field] = `${user.name} (${stamp()})`;
     if (idx + 1 < flow.length) {
       const row = getRow(d.entity, ap.doc_id);
-      const next = openStep(ap.doc_type, ap.doc_id, row, idx + 1, user);
+      // The next step is still the original requester's request, so the final decision reaches them.
+      const next = openStep(ap.doc_type, ap.doc_id, row, idx + 1, user, ap.requested_by || user.name);
       patch.approval_stage = next.stage;
     } else {
       patch.status = 'Approved';
@@ -79,6 +83,7 @@ export function decide(approvalId, decision, comments, user) {
       if (d.entity === 'quotations' || d.entity === 'requisitions') patch.approved_at = stamp();
     }
     updateRow(d.entity, ap.doc_id, patch, user, { system: true });
+    notifyDecision({ ...ap, comments }, decision, idx + 1 >= flow.length, user);
     return getRow('approvals', approvalId);
   });
 }
@@ -94,13 +99,15 @@ export function requisitionToPO(id, body, user) {
     return {
       item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
       qty: Number(l.qty), uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18,
+      ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}),
     };
   });
   return tx(() => {
     const po = insertRow('purchase_orders', {
-      vendor_id: Number(body.vendor_id), project_id: r.project_id, requisition_id: r.id, lines, status: 'Draft', prepared_by: user.name,
+      vendor_id: Number(body.vendor_id), project_id: r.project_id, requisition_id: r.id, bom_id: r.bom_id || null, lines, status: 'Draft', prepared_by: user.name,
     }, user, { system: true });
     updateRow('requisitions', id, { status: 'Converted to PO' }, user, { system: true });
+    notifyNew('purchase_orders', po, user);
     return po;
   });
 }

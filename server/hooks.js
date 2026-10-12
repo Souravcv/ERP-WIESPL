@@ -25,6 +25,14 @@ export function enquiryNumbers(date) {
   return { seq, fy, enquiry_no: `${pad(seq)}/${mm}/${fy}`, quote_ref: `${prefix()}/${pad(seq)}/${mm}${yy}` };
 }
 
+// "22+22" → 44, "36" → 36, text without numbers → null
+export function qtyFromText(t) {
+  const s = String(t ?? '').replace(/,/g, '').trim();
+  if (!s) return null;
+  if (/^-?\d+(\.\d+)?(\s*\+\s*\d+(\.\d+)?)*$/.test(s)) return s.split('+').reduce((a, x) => a + Number(x), 0);
+  return null;
+}
+
 function docNo(series, date, fmt) {
   const { seq, fy } = nextSeq(series, date);
   return fmt(pad(seq, 3), fy);
@@ -92,13 +100,34 @@ export function beforeSave(name, row, existing, user) {
       break;
     }
     case 'boqs':
-      if (!existing && !row.boq_no) row.boq_no = docNo('boq', date, (n, fy) => `BOQ-${n}/20${fy}`);
+      if (!existing && !row.boq_no) row.boq_no = docNo('boq', date, (n, fy) => `WO-${n}/20${fy}`);
       if ((row.project_id ?? existing?.project_id) && !(row.customer_id ?? existing?.customer_id)) {
         row.customer_id = db.prepare('SELECT customer_id FROM projects WHERE id = ?').get(row.project_id ?? existing.project_id)?.customer_id || null;
       }
       break;
+    case 'boms': {
+      if (!existing && !row.bom_no) row.bom_no = docNo('bom', date, (n, fy) => `BOQ-${n}/20${fy}`);
+      const woId = row.work_order_id ?? existing?.work_order_id;
+      if (woId && !(row.project_id ?? existing?.project_id)) row.project_id = db.prepare('SELECT project_id FROM boqs WHERE id = ?').get(woId)?.project_id || null;
+      const pid = row.project_id ?? existing?.project_id;
+      if (!(row.customer_id ?? existing?.customer_id) && (pid || woId)) {
+        row.customer_id = (pid && db.prepare('SELECT customer_id FROM projects WHERE id = ?').get(pid)?.customer_id)
+          || (woId && db.prepare('SELECT customer_id FROM boqs WHERE id = ?').get(woId)?.customer_id) || null;
+      }
+      break;
+    }
+    case 'bom_items':
+      // "22+22" in the Qty column counts as 44.
+      if ('qty_text' in row && row.qty == null && (existing?.qty == null || 'qty' in row)) row.qty = qtyFromText(row.qty_text);
+      break;
     case 'challans': {
       if (!existing && !row.challan_no) row.challan_no = docNo('challan', date, (n, fy) => `DC-${n}/20${fy}`);
+      const mid = row.bom_id ?? existing?.bom_id;
+      if (mid && !(row.project_id ?? existing?.project_id)) row.project_id = db.prepare('SELECT project_id FROM boms WHERE id = ?').get(mid)?.project_id || null;
+      if (mid && !(row.ship_to ?? existing?.ship_to) && !(row.project_id ?? existing?.project_id)) {
+        const bm = db.prepare('SELECT b.client, c.name cname, c.address caddr FROM boms b LEFT JOIN customers c ON c.id = b.customer_id WHERE b.id = ?').get(mid);
+        if (bm) row.ship_to = [bm.cname || bm.client, bm.caddr].filter(Boolean).join('\n');
+      }
       const bid = row.boq_id ?? existing?.boq_id;
       if (bid && !(row.ship_to ?? existing?.ship_to)) {
         const bq = db.prepare('SELECT b.title, b.project_id, c.name cname, c.address caddr FROM boqs b LEFT JOIN customers c ON c.id = b.customer_id WHERE b.id = ?').get(bid);

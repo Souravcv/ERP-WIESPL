@@ -176,19 +176,52 @@ function updateRowTx(name, id, data, user, opts) {
   return getRow(name, id);
 }
 
+// Lines that belong to a document and go with it when it is deleted.
+const CHILDREN = { boqs: ['boq_items', 'boq_id'], boms: ['bom_items', 'bom_id'] };
+const APPROVAL_DOC = { quotations: 'Quotation', purchase_orders: 'Purchase Order', requisitions: 'Requisition' };
+const lineRefCount = (key, ids) => ids.length ? db.prepare(`SELECT
+    (SELECT COUNT(*) FROM challans c, json_each(c.lines) j WHERE c.status <> 'Cancelled' AND CAST(json_extract(j.value, '$.${key}') AS INTEGER) IN (${ids.join(',')}))
+  + (SELECT COUNT(*) FROM purchase_orders c, json_each(c.lines) j WHERE c.status <> 'Cancelled' AND CAST(json_extract(j.value, '$.${key}') AS INTEGER) IN (${ids.join(',')}))
+  + (SELECT COUNT(*) FROM requisitions c, json_each(c.lines) j WHERE c.status NOT IN ('Rejected', 'Closed') AND CAST(json_extract(j.value, '$.${key}') AS INTEGER) IN (${ids.join(',')})) n`).get().n : 0;
+
 export function deleteRow(name, id, user) {
-  entityOr404(name);
+  const ent0 = entityOr404(name);
   const existing = db.prepare(`SELECT * FROM ${name} WHERE id = ?`).get(Number(id));
   if (!existing) throw new HttpError(404, 'Record not found');
-  // Refuse to orphan linked records.
+  const child = CHILDREN[name];
+  if ((name === 'bom_items' || name === 'boq_items') && lineRefCount(name === 'bom_items' ? 'bom_item_id' : 'boq_item_id', [Number(id)])) {
+    throw new HttpError(409, 'Cannot delete: this line is already on a challan, requisition or PO');
+  }
+  // Refuse to orphan linked records; say which ones, so they can be dealt with first.
   for (const [other, ent] of Object.entries(ENTITIES)) {
+    if (child && other === child[0]) continue;
     for (const f of ent.fields.filter(f => f.type === 'ref' && f.ref === name)) {
-      const c = db.prepare(`SELECT COUNT(*) c FROM ${other} WHERE ${f.key} = ?`).get(Number(id)).c;
-      if (c) throw new HttpError(409, `Cannot delete: ${c} ${ent.label} record(s) are linked to it`);
+      const rows = db.prepare(`SELECT ${ENTITIES[other].display.replaceAll('{t}', 't')} AS label FROM ${other} t WHERE t.${f.key} = ? LIMIT 6`).all(Number(id));
+      if (rows.length) throw new HttpError(409, `Cannot delete: linked ${ent.label}: ${rows.map(r => r.label).join(', ')}${rows.length > 5 ? ' …' : ''}. Delete or change those first.`);
     }
   }
-  db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(Number(id));
-  afterSave(name, null, user, existing);
-  const label = ['name', 'enquiry_no', 'quote_no', 'so_no', 'po_no', 'invoice_no', 'ticket_no', 'code', 'submittal_no'].map(k => existing[k]).find(Boolean);
-  audit(user?.name, name, Number(id), 'delete', label || '');
+  tx(() => {
+    if (child) {
+      const ids = db.prepare(`SELECT id FROM ${child[0]} WHERE ${child[1]} = ?`).all(Number(id)).map(r => r.id);
+      if (lineRefCount(name === 'boms' ? 'bom_item_id' : 'boq_item_id', ids)) throw new HttpError(409, `Cannot delete: material of this ${ent0.singular} is on challans, requisitions or POs`);
+      db.prepare(`DELETE FROM ${child[0]} WHERE ${child[1]} = ?`).run(Number(id));
+    }
+    // A dispatched challan takes the store issue it made with it (stock comes back).
+    let undone = 0;
+    if (name === 'challans' && ['Dispatched', 'Delivered'].includes(existing.status)) {
+      undone = db.prepare("DELETE FROM stock_moves WHERE type = 'OUTWARD' AND doc_no = ? AND purpose LIKE 'Delivery challan%'").run(existing.challan_no).changes;
+    }
+    if (APPROVAL_DOC[name]) db.prepare('DELETE FROM approvals WHERE doc_type = ? AND doc_id = ?').run(APPROVAL_DOC[name], Number(id));
+    db.prepare(`DELETE FROM ${name} WHERE id = ?`).run(Number(id));
+    afterSave(name, null, user, existing);
+    const label = ['name', 'enquiry_no', 'quote_no', 'so_no', 'po_no', 'req_no', 'challan_no', 'bom_no', 'boq_no', 'invoice_no', 'ticket_no', 'code', 'submittal_no', 'doc_no'].map(k => existing[k]).find(Boolean);
+    audit(user?.name, name, Number(id), 'delete', `${label || ''}${existing.status ? ` (${existing.status})` : ''}${undone ? ` – ${undone} stock issue line(s) reversed` : ''}`);
+  });
+  return existing;
+}
+
+// Full access may delete anything; others may delete their own drafts (e.g. a requisition saved twice by mistake).
+export function canRemove(name, row, user, canDeleteFn) {
+  if (canDeleteFn) return true;
+  return !!row && row.created_by === user.name && ['Draft', 'Rejected'].includes(row.status);
 }

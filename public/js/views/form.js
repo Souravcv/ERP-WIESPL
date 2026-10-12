@@ -1,14 +1,36 @@
-import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today } from '../ui.js';
-import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS } from '../schema.js';
+import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy } from '../ui.js';
+import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
 import { linesTotals, inr, round2 } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
+import { newBomDialog } from './bom.js';
 
 const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
   challans: ['Dispatched', 'Delivered', 'Cancelled'],
 };
+// Full access may delete anything (also locked documents); anyone else only their own draft.
+export const mayDelete = (entity, row) => canDelete(entity, state.user.role)
+  || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status));
+
+// New material that is not in the item master yet: add it from the requisition / PO line.
+export async function quickItem(preset = {}) {
+  const f = { name: h('input', { value: preset.name || '' }), category: h('select', ITEM_CATEGORIES.map(c => h('option', c))), uom: h('select', UOMS.map(u => h('option', u))),
+    rate: h('input', { type: 'number', step: 'any', placeholder: 'optional' }), hsn: h('input', { placeholder: 'optional' }), description: h('textarea', { rows: 2 }) };
+  f.description.value = preset.spec || '';
+  if (preset.uom && UOMS.includes(preset.uom)) f.uom.value = preset.uom;
+  const it = await modal('Add new item to the item master', h('div.grid',
+    h('p.muted', 'The next item code is given automatically. Opening stock is 0 until it is received (GRN).'),
+    h('div.form-grid', h('label.span-2', 'Item name *', f.name), h('label', 'Category', f.category), h('label', 'UOM', f.uom), h('label', 'Price (₹)', f.rate), h('label', 'HSN', f.hsn),
+      h('label.span-2', 'Specification', f.description))),
+  [{ label: 'Cancel', value: null }, { label: 'Add item', cls: 'primary', action: async () => {
+    if (!f.name.value.trim()) throw new Error('Enter the item name');
+    return api('/items', { method: 'POST', body: { name: f.name.value.trim(), category: f.category.value, uom: f.uom.value, rate: f.rate.value === '' ? null : Number(f.rate.value), hsn: f.hsn.value || null, description: f.description.value || null } });
+  } }]);
+  if (it) { clearRefCache('items'); toast(`Item ${it.code} · ${it.name} added`); }
+  return it;
+}
 const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
 export const canApprove = (docType, stage) => !!stepOf(docType, stage) && hasFunction(state.user.role, stepOf(docType, stage).fn);
 export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
@@ -64,14 +86,22 @@ function linesEditor(f, value, { readonly, onTotals }) {
       });
       let itemCell = null;
       if (f.itemRef) {
-        itemCell = h('td', itemPicker(items, l.item_id, { readonly, onPick: async itemId => {
+        const addNew = !readonly && canWrite('items', state.user.role) && !l.item_id
+          ? h('button.icon-btn', { type: 'button', title: 'New material: add it to the item master', onclick: busy(async () => {
+            const it = await quickItem({ name: l.description, spec: l.spec, uom: l.uom });
+            if (!it) return;
+            items = await refOptions('items');
+            Object.assign(l, { item_id: it.id, description: l.description || it.name, uom: l.uom || it.uom });
+            render();
+          }) }, '＋') : null;
+        itemCell = h('td.nowrap', addNew, itemPicker(items, l.item_id, { readonly, onPick: async itemId => {
           l.item_id = itemId;
           if (!itemId) return;
           const it = await api(`/items/${itemId}`);
           Object.assign(l, { description: l.description || it.name, uom: it.uom || l.uom, hsn: l.hsn || it.hsn || '' });
           if (amounts) Object.assign(l, { rate: l.rate || it.rate || 0, gst: l.gst ?? it.gst_rate ?? 18 });
           render();
-        } }));
+        } }), l.bom_item_id ? h('div.muted', { style: { fontSize: '11px' } }, '📑 from BOQ') : null);
       }
       const label = l.description ? String(++sr) : '';
       return h('tr', h('td.muted', label), itemCell, cells, amount, f.itemRef && amounts ? h('td.num', l.received ?? 0) : null,
@@ -107,11 +137,50 @@ async function fillFromRequisition(reqId, inputs) {
   const mapped = await Promise.all(reqLines.map(async l => {
     const it = l.item_id ? await api(`/items/${l.item_id}`).catch(() => null) : null;
     return { item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
-      qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18 };
+      qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18, ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}) };
   }));
   inputs.lines.set([...keep, ...mapped]);
-  if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.el.value = r.project_id;
+  if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.set(r.project_id);
+  if (r.bom_id && inputs.bom_id && !inputs.bom_id.get()) inputs.bom_id.set(r.bom_id);
   toast(`${mapped.length} material(s) copied from ${r.req_no}. You can add or change lines before saving.`);
+}
+
+// Requisition / PO "against a BOQ": copy the components still to be procured
+// (BOQ qty − already on POs − on open requisitions − what was sent from existing stock).
+export function toProcure(b) {
+  const fromStock = Math.max(0, (b.dispatched || 0) - (b.received || 0));
+  return Math.max(0, Math.round(((b.qty || 0) - (b.on_po || 0) - (b.req_open || 0) - fromStock) * 1000) / 1000);
+}
+export function bomRows(rows) {
+  rows.sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
+  let comp = '';
+  for (const r of rows) { if (r.component) comp = r.component; r.component_name = r.component || comp; }
+  return rows;
+}
+async function fillFromBom(bomId, inputs, entity, onlyIds) {
+  if (!bomId) return;
+  const [bom, rows] = await Promise.all([api(`/boms/${bomId}`), api(`/bom_items?bom_id=${bomId}&limit=20000`)]);
+  const need = bomRows(rows).filter(b => (onlyIds ? onlyIds.includes(b.id) : true) && toProcure(b) > 0);
+  if (!need.length) { toast(`Everything in ${bom.bom_no} is already on requisitions / POs`); return; }
+  const current = inputs.lines.get().filter(l => l.description || l.item_id || l.spec);
+  let keep = [];
+  if (current.length) {
+    const choice = await modal(`Components from ${bom.bom_no}`, h('p', `There are already ${current.length} line(s). Replace them with the ${need.length} component(s) still to be procured, or add them below?`),
+      [{ label: 'Cancel', value: null }, { label: 'Add below', value: 'add' }, { label: 'Replace', cls: 'primary', value: 'replace' }]);
+    if (!choice) return;
+    if (choice === 'add') keep = current;
+  }
+  const items = new Map();
+  for (const id of new Set(need.map(b => b.item_id).filter(Boolean))) items.set(id, await api(`/items/${id}`).catch(() => null));
+  const lines = need.map(b => {
+    const it = items.get(b.item_id);
+    const spec = [b.spec, b.moc && `MOC: ${b.moc}`, b.make && `Make: ${b.make}`, b.drawing_no && `Drg: ${b.drawing_no}`].filter(Boolean).join('\n');
+    const base = { item_id: b.item_id || null, bom_item_id: b.id, description: [b.component_name, b.dimensions].filter(Boolean).join(' '), spec, qty: toProcure(b), uom: b.uom || it?.uom || 'Nos' };
+    return entity === 'purchase_orders' ? { ...base, hsn: it?.hsn || '', rate: it?.rate || 0, gst: it?.gst_rate ?? 18 } : { ...base, remark: [b.section, b.sr_no].filter(Boolean).join(' ') };
+  });
+  inputs.lines.set([...keep, ...lines]);
+  if (bom.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.set(bom.project_id);
+  toast(`${lines.length} component(s) copied from ${bom.bom_no}. Change quantities or remove lines before saving.`);
 }
 
 // ---------------------------------------------------------------- approval progress (PO: technical → commercial → GM)
@@ -128,13 +197,20 @@ function approvalStrip(docType, row) {
 }
 
 // ---------------------------------------------------------------- actions per module
-function actionsFor(entity, row, reload) {
+function actionsFor(entity, row, reload, ctx = {}) {
   const id = row.id;
   const post = (path, body) => api(path, { method: 'POST', body });
   const go = (p, then) => async () => { try { const r = await p(); then?.(r); } catch (e) { fail(e); } };
   const can = e => canWrite(e, state.user.role);
   const status = (s, confirmText) => go(async () => { if (confirmText && !(await confirmBox(confirmText))) return; await post(`/${entity}/${id}/status`, { status: s }); reload(); });
-  const submit = go(() => post(`/${entity}/${id}/submit`), () => { toast('Sent for approval'); window.dispatchEvent(new Event('approvals-changed')); reload(); });
+  // Unsaved changes on screen (e.g. quantities just typed) are saved before submitting.
+  const submit = busy(async () => {
+    if (ctx.save) await ctx.save({ quiet: true });
+    await post(`/${entity}/${id}/submit`);
+    toast('Sent for approval');
+    window.dispatchEvent(new Event('approvals-changed'));
+    reload();
+  });
   const A = [];
   switch (entity) {
     case 'customers':
@@ -197,7 +273,9 @@ function actionsFor(entity, row, reload) {
     case 'challans': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/challan/${id}`, target: '_blank' }, '🖨 Print Challan'));
-      if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 BOQ status'));
+      if (row.issue_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.issue_type || 'OUTWARD'}?doc=${encodeURIComponent(row.issue_no)}`, target: '_blank' }, '🖨 Issue Slip'));
+      if (row.bom_id) A.push(h('a.btn', { href: `#/bom/${row.bom_id}` }, '📑 BOQ status'));
+      if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📂 Work order status'));
       if (can(entity) && st === 'Draft') A.push(h('button.btn.good', { onclick: go(async () => {
         const stockLines = (row.lines || []).filter(l => l.item_id).length;
         if (!(await confirmBox(`Dispatch ${row.challan_no}? The material is marked as sent against the work order${stockLines ? ` and ${stockLines} store item(s) are issued from stock` : ''}. The challan cannot be edited afterwards.`, 'Dispatch'))) return;
@@ -225,7 +303,8 @@ function actionsFor(entity, row, reload) {
       break;
     }
     case 'projects':
-      if (can('boqs')) A.push(h('button.btn.primary', { onclick: go(() => newBoqDialog({ project_id: id })) }, '📑 New BOQ (upload work order)'));
+      if (can('boqs')) A.push(h('button.btn.primary', { onclick: go(() => newBoqDialog({ project_id: id })) }, '📂 New Work Order (upload)'));
+      if (can('boms')) A.push(h('button.btn', { onclick: go(() => newBomDialog({ project_id: id })) }, '📑 New BOQ (bill of material)'));
       if (can('requisitions')) A.push(h('button.btn', { onclick: () => newRecord('requisitions', { project_id: id }) }, '📝 Requisition'));
       if (can('stock_moves')) A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&project=${id}` }, '📤 Issue Material'));
       if (can('purchase_orders')) A.push(h('button.btn', { onclick: () => newRecord('purchase_orders', { project_id: id }) }, '🛒 Purchase Order'));
@@ -301,8 +380,9 @@ export async function recordView(root, entity, id) {
   if (!ent) throw new Error('Unknown module');
   if (ent.editor === 'quotation' && id !== 'new') { location.hash = `#/quotation/${id}`; return; }
   if (ent.editor === 'boq' && id !== 'new' && !/details=1/.test(location.hash)) { location.hash = `#/boq/${id}`; return; }
+  if (ent.editor === 'bom' && id !== 'new' && !/details=1/.test(location.hash)) { location.hash = `#/bom/${id}`; return; }
   if (entity === 'stock_moves' && id === 'new') { location.hash = '#/stock-entry'; return; }
-  const isNew = id === 'new';
+  let isNew = id === 'new';
   const presets = Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
   let row = {};
   if (isNew) {
@@ -354,35 +434,57 @@ export async function recordView(root, entity, id) {
     // Opened as "new PO" from a requisition link: fill straight away.
     if (isNew && presets.requisition_id) fillFromRequisition(Number(presets.requisition_id), inputs).catch(fail);
   }
+  if (['purchase_orders', 'requisitions'].includes(entity) && writable && inputs.bom_id) {
+    inputs.bom_id.el.addEventListener('change', () => fillFromBom(inputs.bom_id.get(), inputs, entity).catch(fail));
+    if (isNew && presets.bom_id) fillFromBom(Number(presets.bom_id), inputs, entity, presets.bom_items ? presets.bom_items.split(',').map(Number) : null).catch(fail);
+  }
 
-  async function save() {
+  let saving = false;
+  async function save({ quiet = false } = {}) {
+    if (saving) return; // a second click / held Ctrl+S while saving must not create a second record
+    saving = true;
+    try { return await doSave(quiet); } finally { saving = false; }
+  }
+  async function doSave(quiet) {
+    const bad = ent.fields.find(f => inputs[f.key]?.invalid?.());
+    if (bad) throw new Error(`${bad.label}: pick one from the list (type part of the name and choose it)`);
     const body = {};
     for (const f of ent.fields) {
       if (!inputs[f.key] || f.readonly || f.computed) continue;
       body[f.key] = inputs[f.key].get();
     }
     // Presets for readonly-but-settable links (e.g. new payment against invoice) still need sending.
-    if (isNew) for (const k of Object.keys(presets)) if (!(k in body)) body[k] = row[k];
+    if (isNew) for (const k of Object.keys(presets)) if (!(k in body) && ent.fields.some(f => f.key === k)) body[k] = row[k];
     const missing = ent.fields.find(f => f.required && !f.readonly && inputs[f.key] && (body[f.key] === null || body[f.key] === ''));
     if (missing) throw new Error(`${missing.label} is required`);
+    const wasNew = isNew;
     const saved = isNew
       ? await api(`/${entity}`, { method: 'POST', body })
       : await api(`/${entity}/${id}`, { method: 'PUT', body });
     clearRefCache(entity);
-    if (isNew && newFiles.pending().length) await newFiles.uploadTo(saved.id);
-    toast('Saved');
     if (isNew) {
+      // From here on this page edits the saved record, so saving again never makes a copy.
+      isNew = false; id = saved.id;
+      history.replaceState(null, '', recordHref(entity, saved.id));
+      if (newFiles.pending().length) await newFiles.uploadTo(saved.id).catch(e => fail(new Error(`Saved, but a file could not be uploaded: ${e.message}`)));
+    }
+    if (quiet) return saved;
+    toast('Saved');
+    if (wasNew) {
       // When created from another record (e.g. follow-up from an enquiry), go back to it.
       const back = Object.entries(presets).find(([k]) => k.endsWith('_id'));
       const parentField = back && ent.fields.find(f => f.key === back[0]);
-      location.hash = parentField && ['followups', 'payments', 'contacts', 'material_approvals'].includes(entity)
+      const target = parentField && ['followups', 'payments', 'contacts', 'material_approvals'].includes(entity)
         ? recordHref(parentField.ref, back[1])
         : recordHref(entity, saved.id);
+      if (location.hash === target) recordView(root, entity, saved.id); else location.hash = target;
     } else recordView(root, entity, id);
+    return saved;
   }
 
   async function remove() {
-    if (!(await confirmBox(`Delete this ${ent.singular.toLowerCase()}? This cannot be undone.`, 'Delete'))) return;
+    const warn = locked ? ` It is ${row.status}${entity === 'challans' && ['Dispatched', 'Delivered'].includes(row.status) ? ' – the store issue made with it is reversed and the material shows as pending again' : ''}.` : '';
+    if (!(await confirmBox(`Delete ${title.replace(/^[^:]*: /, '')}?${warn} Its approvals and files are removed too. This cannot be undone.`, 'Delete'))) return;
     await api(`/${entity}/${id}`, { method: 'DELETE' });
     clearRefCache(entity);
     toast('Deleted');
@@ -391,7 +493,7 @@ export async function recordView(root, entity, id) {
 
   const newFiles = pendingAttachments(entity);
   const r = row;
-  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.invoice_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
+  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
     h('div.page-head',
@@ -400,9 +502,9 @@ export async function recordView(root, entity, id) {
       r.approval_stage ? h('span.badge.warn', `waiting: ${r.approval_stage}`) : null,
       locked ? h('span.muted', '🔒 locked') : null,
       h('div.actions',
-        isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id)),
-        writable ? h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save') : null,
-        !isNew && canDelete(entity, state.user.role) && !locked ? h('button.btn.danger', { onclick: () => remove().catch(fail) }, 'Delete') : null)),
+        isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id), { save: writable ? save : null }),
+        writable ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save') : null,
+        !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
     h('div.card', grid),
@@ -413,11 +515,11 @@ export async function recordView(root, entity, id) {
     isNew || !hasFunction(state.user.role, 'view_audit') ? null : history(entity, id),
   );
   // Ctrl+S saves
-  root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); save().catch(fail); } };
+  root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
 }
 
 // ---------------------------------------------------------------- files: work orders, drawings, CAD (dwg/dxf), PDFs, photos …
-const ATTACH_TITLES = { boqs: 'Work order files, drawings & documents', challans: 'Signed challan / proof of delivery', projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
+const ATTACH_TITLES = { boqs: 'Work order files, drawings & documents', boms: 'BOQ files, drawings & CAD', challans: 'Signed challan / proof of delivery', projects: 'Work order & project documents', material_approvals: 'Drawings, CAD & documents', purchase_orders: 'Vendor quotation / PO documents', requisitions: 'Attachments', vendors: 'Vendor documents (GST certificate, cheque …)' };
 const fileSize = n => n > 1048576 ? `${(n / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
 const PREVIEWABLE = /\.(pdf|png|jpe?g|gif|webp|txt)$/i;
 

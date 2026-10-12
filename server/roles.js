@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, audit, DATA_DIR } from './db.js';
 import { HttpError } from './crud.js';
-import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, defaultPermissions, setPermissions } from '../public/js/schema.js';
+import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, defaultPermissions, setPermissions } from '../public/js/schema.js';
 
 const parse = s => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
 
@@ -32,6 +32,15 @@ export function loadRoles() {
 export function seedRoles() {
   const ins = db.prepare('INSERT OR IGNORE INTO roles (name, label, description, perms, builtin) VALUES (?, ?, ?, ?, 1)');
   for (const [name, info] of Object.entries(ROLE_INFO)) ins.run(name, info.label, info.description, JSON.stringify(defaultPermissions(name)));
+  // Pop-up notification switches arrived later: give the built-in roles their defaults once (admins can change them after).
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_notify_v1'").get()) {
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const p = parse(r.perms);
+      const add = (DEFAULT_FUNCTIONS[r.name] || []).filter(fn => fn.startsWith('notify_') && !(p.functions || []).includes(fn));
+      if (add.length) db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...(p.functions || []), ...add] }), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_notify_v1', '\"1\"')").run();
+  }
   loadRoles();
 }
 
@@ -103,6 +112,14 @@ export function attachmentFile(id) {
   const full = path.join(UPLOAD_DIR, a.stored);
   if (!full.startsWith(UPLOAD_DIR) || !fs.existsSync(full)) throw new HttpError(404, 'The file is missing from the server');
   return { ...a, full };
+}
+
+// Files of a record that was deleted.
+export function removeAttachmentsOf(entity, recordId) {
+  for (const a of db.prepare('SELECT id, stored FROM attachments WHERE entity = ? AND record_id = ?').all(entity, Number(recordId))) {
+    fs.rmSync(path.join(UPLOAD_DIR, a.stored), { force: true });
+    db.prepare('DELETE FROM attachments WHERE id = ?').run(a.id);
+  }
 }
 
 export function deleteAttachment(id, user, canDeleteAny) {

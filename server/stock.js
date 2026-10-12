@@ -44,6 +44,13 @@ export function stockEntry(body, user) {
     const docNo = body.doc_no || (() => { const { seq, fy } = nextSeq(`stock_${type}`, date); return `${String(seq).padStart(3, '0')}/20${fy}`; })();
     const header = Object.fromEntries(HEADER_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
     let po = null;
+    // A PO number typed by hand that matches a PO in the CRM counts as "against that PO", so the PO tracker shows it.
+    if (type === 'INWARD' && !header.po_id && header.po_no) {
+      const typed = String(header.po_no).trim();
+      const hit = db.prepare("SELECT id FROM purchase_orders WHERE (po_no = ? OR po_no = ?) AND status IN ('Approved', 'Sent', 'Partially Received') ORDER BY id DESC LIMIT 1")
+        .get(typed, typed.replace(/^(\d{1,3})\//, (m, d) => d.padStart(3, '0') + '/'));
+      if (hit) header.po_id = hit.id;
+    }
     if (type === 'INWARD' && header.po_id) {
       po = getRow('purchase_orders', header.po_id);
       if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, `PO ${po.po_no} is ${po.status}; only approved POs can be received`);
@@ -59,8 +66,12 @@ export function stockEntry(body, user) {
         hsn: l.hsn || null, gst_rate: l.gst ?? null,
       }, user, { system: true });
       created.push(row.id);
-      if (po && Number.isInteger(l.po_line) && po.lines[l.po_line]) {
-        po.lines[l.po_line].received = round2((Number(po.lines[l.po_line].received) || 0) + Number(l.qty));
+      if (po) {
+        // Which PO line: the one chosen on the GRN, else the first line of the same item that is still pending.
+        let idx = Number.isInteger(l.po_line) && po.lines[l.po_line] ? l.po_line : -1;
+        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id) && (Number(x.received) || 0) < (Number(x.qty) || 0));
+        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id));
+        if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
       }
     }
     if (po) {
@@ -139,8 +150,8 @@ export function stockSummary(q = {}) {
 
 // ---------------------------------------------------------------- PO line tracker
 export function poLines(q = {}) {
-  const pos = db.prepare(`SELECT p.*, v.name vendor, COALESCE(NULLIF(pr.project_no,''), pr.code) || ' ' || pr.name project
-    FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id LEFT JOIN projects pr ON pr.id = p.project_id
+  const pos = db.prepare(`SELECT p.*, v.name vendor, COALESCE(NULLIF(pr.project_no,''), pr.code) || ' ' || pr.name project, bm.bom_no bom_no
+    FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id LEFT JOIN projects pr ON pr.id = p.project_id LEFT JOIN boms bm ON bm.id = p.bom_id
     WHERE p.status <> 'Cancelled' ORDER BY p.date DESC, p.id DESC`).all();
   const s = String(q.q || '').toLowerCase().trim();
   const rows = [];
@@ -155,14 +166,16 @@ export function poLines(q = {}) {
       const approved = APPROVED_PO.includes(p.status) ? qty : 0;
       const received = Number(l.received) || 0;
       const item = [l.description || heading, l.spec && !l.description ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – ');
+      const lineStatus = !approved ? (p.status === 'Closed' ? 'Short-closed' : 'Not approved yet') : received >= approved - 1e-9 ? 'Procured' : received > 0 ? 'Partly received' : 'Pending';
       rows.push({
-        po_id: p.id, po_no: p.po_no, date: p.date, vendor: p.vendor, project: p.project, status: p.status, line: i, item,
+        po_id: p.id, po_no: p.po_no, date: p.date, vendor: p.vendor, project: p.project, bom_no: p.bom_no, status: p.status, line_status: lineStatus, line: i, item,
         uom: l.uom, ordered: qty, approved, received, pending: round2(Math.max(0, approved - received)),
         rate: Number(l.rate) || 0, value: round2(qty * (Number(l.rate) || 0)), received_value: round2(received * (Number(l.rate) || 0)),
       });
     });
   }
-  return rows.filter(r => (!s || `${r.po_no} ${r.vendor} ${r.item} ${r.project}`.toLowerCase().includes(s)) && (!q.pending || r.pending > 0));
+  return rows.filter(r => (!s || `${r.po_no} ${r.vendor} ${r.item} ${r.project} ${r.bom_no || ''}`.toLowerCase().includes(s)) && (!q.pending || r.pending > 0)
+    && (!q.state || (q.state === 'procured' ? r.line_status === 'Procured' : q.state === 'pending' ? ['Pending', 'Partly received'].includes(r.line_status) : r.line_status === q.state)));
 }
 
 // ---------------------------------------------------------------- 1 April opening stock

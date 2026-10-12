@@ -1,8 +1,8 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
-import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy } from '../ui.js';
 import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
-import { itemPicker } from './form.js';
+import { itemPicker, bomRows } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST'];
@@ -34,9 +34,10 @@ function poStatus(po) {
 export async function stockEntryView(root) {
   const p = qs();
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
-  const [items, vendors, projects, allPos, boqOpts] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
+  const [items, vendors, projects, allPos, boqOpts, bomOpts] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
     canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : [],
-    canView('boqs', state.user.role) ? api('/boqs?status=Open').then(r => r.map(b => ({ id: b.id, label: `${b.boq_no} · ${b.title}` }))).catch(() => []) : []]);
+    canView('boqs', state.user.role) ? api('/boqs?status=Open').then(r => r.map(b => ({ id: b.id, label: `${b.boq_no} · ${b.title}` }))).catch(() => []) : [],
+    canView('boms', state.user.role) ? api('/boms').then(r => r.filter(b => b.status !== 'Completed').map(b => ({ id: b.id, label: `${b.bom_no} · ${b.client || ''}` }))).catch(() => []) : []]);
   const openPos = allPos.filter(x => ['Approved', 'Sent', 'Partially Received'].includes(x.status)).map(x => ({ id: x.id, label: `${x.po_no} · ${x.vendor_id_label || ''}` }));
   const itemById = new Map(items.map(i => [i.id, i]));
   const itemOpts = items.map(i => ({ id: i.id, label: `${i.code} · ${i.name}` }));
@@ -44,6 +45,9 @@ export async function stockEntryView(root) {
   let lines = [];
   let po = null;
   let boq = null;
+  let bom = null;
+  let makeChallan = false;
+  const ch = {}; // delivery challan details (ship-to address, vehicle …)
 
   if (p.po) {
     po = await api(`/purchase_orders/${p.po}`);
@@ -68,6 +72,16 @@ export async function stockEntryView(root) {
     }
     if (!lines.length) toast('Everything in this BOQ has already been sent');
   }
+  if (p.bom) {
+    type = 'OUTWARD';
+    bom = await api(`/boms/${p.bom}`);
+    Object.assign(header, { bom_id: bom.id, project_id: bom.project_id });
+    for (const b of bomRows(await api(`/bom_items?bom_id=${bom.id}&limit=20000`))) {
+      if (!(b.pending > 0)) continue;
+      lines.push({ bom_item_id: b.id, item_id: b.item_id || null, qty: b.pending, boqNote: `${b.section || ''} ${b.sr_no || ''} – ${[b.component_name, b.dimensions].filter(Boolean).join(' ').slice(0, 110)}`, boqPending: b.pending, uom: b.uom });
+    }
+    if (!lines.length) toast('Everything in this BOQ has already been sent');
+  }
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
   if (p.vendor) header.vendor_id = Number(p.vendor);
@@ -87,8 +101,20 @@ export async function stockEntryView(root) {
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('PO No (text)', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27 or Verbal' }))));
     }
-    if (type === 'OUTWARD') F.push(field('Against BOQ (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending BOQ material is listed below'));
-    if (boq) F.push(...['vehicle_no', 'transporter', 'lr_no', 'eway_bill'].map(k => field({ vehicle_no: 'Vehicle No', transporter: 'Transporter', lr_no: 'LR / Docket No', eway_bill: 'E-way Bill No' }[k], v(k, h('input')))));
+    if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
+    if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
+    if (['OUTWARD', 'TRANSFER'].includes(type) && !boq && !bom) {
+      const box = h('input', { type: 'checkbox', checked: makeChallan, style: { width: 'auto' }, onchange: e => { makeChallan = e.target.checked; ch.challan_type ||= type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'; render(); } });
+      F.push(h('label.span-2', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 } }, box, `Also make a delivery challan (issue slip and challan are both printed)`));
+    }
+    if (boq || bom || makeChallan) {
+      const cv = (k, el) => { el.value = ch[k] ?? ''; el.oninput = el.onchange = () => { ch[k] = el.value; }; return el; };
+      F.push(h('label.span-2', 'Ship to (address on the challan)', h('span.hint', 'leave blank to use the project site address'), cv('ship_to', h('textarea', { rows: 3, placeholder: 'Hospital / site name\nAddress\nCity' }))),
+        field('Site contact / phone', cv('site_contact', h('input'))), field('Vehicle No', cv('vehicle_no', h('input', { placeholder: 'MH14 AB 1234' }))),
+        field('Transporter', cv('transporter', h('input'))), field('LR / Docket No', cv('lr_no', h('input'))), field('Driver', cv('driver', h('input', { placeholder: 'name / phone' }))),
+        field('E-way Bill No', cv('eway_bill', h('input'))));
+      if (makeChallan) F.push(field('Challan type', cv('challan_type', h('select', ['Non-Returnable', 'Returnable'].map(x => h('option', x))))));
+    }
     if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
     if (['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
@@ -110,7 +136,7 @@ export async function stockEntryView(root) {
       const stockCell = h('td.num', it ? `${round2(it.stock)} ${it.uom || ''}` : '');
       const short = () => ['OUTWARD', 'TRANSFER', 'SCRAP'].includes(type) && it && Number(l.qty) > it.stock;
       const qty = h('input', { type: 'number', step: 'any', value: l.qty ?? '', style: { width: '90px' } });
-      const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? (priced ? '' : it?.rate ?? ''), placeholder: priced ? 'required' : String(it?.rate ?? ''), style: { width: '110px' } });
+      const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? '', placeholder: 'required', style: { width: '110px' } });
       const value = h('td.num');
       const upd = () => {
         value.textContent = inr((Number(l.qty) || 0) * (Number(l.rate ?? it?.rate) || 0));
@@ -126,7 +152,7 @@ export async function stockEntryView(root) {
         h('td', itemPicker(itemOpts, l.item_id, { onPick: id => { l.item_id = id; if (!priced) l.rate = null; render(); } }),
           l.note ? h('div.muted', { style: { fontSize: '12px' } }, `PO: ${l.note} (ordered ${l.ordered}, received ${l.received})`) : null,
           l.boqNote ? h('div.muted', { style: { fontSize: '12px' } }, `BOQ: ${l.boqNote}${l.boqPending != null ? ` (pending ${l.boqPending} ${l.uom || ''})` : ''}`) : null),
-        stockCell, h('td', qty), h('td', rate), value,
+        stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
     });
@@ -134,29 +160,33 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), h('th', 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), h('th', priced ? 'Price / piece *' : 'Price / piece'), h('th.num', 'Value'), h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), h('th', 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
-          h('span', { style: { marginLeft: 'auto' } }, 'Total value: ', totalValue))));
+          priced ? h('span', { style: { marginLeft: 'auto' } }, 'Total value: ', totalValue) : null)));
     recalc();
   }
 
   async function save(allowNegative = false) {
-    const payload = { ...header, type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: l.rate ?? (['INWARD', 'OPENING'].includes(type) ? null : itemById.get(l.item_id)?.rate ?? null) })), allowNegative };
+    // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative };
+    if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');
     if (type === 'TRANSFER' && !header.to_location) throw new Error('Enter where the material is transferred to');
     try {
       const r = await api('/stock/entry', { method: 'POST', body: payload });
       clearRefCache('items');
-      await modal('Saved', h('div.grid', h('p', r.challan
-        ? `Issued ${r.count} item(s) against ${boq.boq_no}. Delivery challan ${r.challan.challan_no} was created automatically and the BOQ now shows this material as sent.`
-        : `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).`)), [
-        r.challan ? { label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return true; } }
-          : { label: '🖨 Print slip', action: () => { window.open(`#/print/stockdoc/${type}?doc=${encodeURIComponent(r.doc_no)}`, '_blank'); return true; } },
-        r.challan ? { label: '📑 Open BOQ', action: () => { location.hash = `#/boq/${boq.id}`; return true; } } : null,
+      const against = bom ? bom.bom_no : boq ? boq.boq_no : null;
+      const open = url => { window.open(url, '_blank'); return false; }; // keep the dialog open to print the other one too
+      await modal('Saved', h('div.grid', h('p', r.challan && against
+        ? `Issued ${r.count} item(s) against ${against}. Delivery challan ${r.challan.challan_no} was created automatically and the ${bom ? 'BOQ' : 'work order'} now shows this material as sent.`
+        : `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).${r.challan ? ` Delivery challan ${r.challan.challan_no} made with it.` : ''}`)), [
+        { label: '🖨 Print issue slip', action: () => open(`#/print/stockdoc/${type}?doc=${encodeURIComponent(r.doc_no)}`) },
+        r.challan ? { label: '🖨 Print challan', action: () => open(`#/print/challan/${r.challan.id}`) } : null,
+        r.challan && against ? { label: bom ? '📑 Open BOQ' : '📂 Open work order', action: () => { location.hash = bom ? `#/bom/${bom.id}` : `#/boq/${boq.id}`; return true; } } : null,
         { label: 'New entry', cls: 'primary', value: true }].filter(Boolean));
-      if (r.challan && location.hash.startsWith('#/boq/')) return;
+      if (r.challan && /^#\/bo[mq]\//.test(location.hash)) return;
       location.hash = `#/stock-entry?type=${type}&t=${Date.now()}`;
     } catch (e) {
       if (/Not enough stock/.test(e.message) && !allowNegative) {
@@ -171,7 +201,7 @@ export async function stockEntryView(root) {
     }
   }
 
-  const tabs = h('div.tabs', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: !!po && t !== 'INWARD', onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const tabs = h('div.tabs', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD'), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
     tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', ENTRY_TYPES[i] === type));
     render();
@@ -179,7 +209,8 @@ export async function stockEntryView(root) {
   root.replaceChildren(
     h('div.page-head', h('h1', '🔁 Stock Entry'), h('div.actions',
       h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn', { href: '#/list/stock_moves' }, 'All movements'),
-      canWrite('stock_moves', state.user.role) ? h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save Entry') : null)),
+      canWrite('stock_moves', state.user.role) ? h('a.btn', { href: '#/import?kind=items', title: 'Upload the WIESPL Smart Store workbook (items, opening stock and all inward / outward / transfer / return / scrap entries), or a stock movements sheet' }, '📥 Import Excel') : null,
+      canWrite('stock_moves', state.user.role) ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save Entry') : null)),
     h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap. One slip can hold many items; numbers like 001/2026-27 are given automatically per type and restart every April.'),
     tabs, body);
   render();
@@ -259,19 +290,23 @@ export async function stockSummaryView(root) {
 // ---------------------------------------------------------------- PO tracker
 export async function poTrackerView(root) {
   const q = h('input.grow', { type: 'search', placeholder: 'Search PO no, vendor, item or project…', value: qs().q || '' });
-  const pending = h('input', { type: 'checkbox', style: { width: 'auto' } });
+  const pending = h('select', { style: { width: 'auto' } }, h('option', { value: '' }, 'All lines'), h('option', { value: 'pending' }, 'Pending (not fully received)'), h('option', { value: 'procured' }, 'Procured (fully received)'), h('option', { value: 'Not approved yet' }, 'PO not approved yet'));
+  pending.value = qs().state || '';
   const out = h('div');
   async function load() {
     try {
-      const rows = await api(`/reports/po-lines?q=${encodeURIComponent(q.value)}${pending.checked ? '&pending=1' : ''}`);
+      const rows = await api(`/reports/po-lines?q=${encodeURIComponent(q.value)}${pending.value ? '&state=' + encodeURIComponent(pending.value) : ''}`);
       const sum = k => rows.reduce((s, r) => s + (r[k] || 0), 0);
-      out.replaceChildren(rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
-        h('thead', h('tr', ['PO No', 'Date', 'Vendor', 'Project', 'Item', 'UOM', 'Ordered', 'Approved', 'Received', 'Pending', 'Rate', 'Value', 'Status'].map((t, i) => h('th' + (i >= 6 && i <= 11 ? '.num' : ''), t)))),
+      const cnt = st => rows.filter(r => r.line_status === st).length;
+      out.replaceChildren(rows.length ? h('div.kpis', h('div.kpi', h('div.label', 'PO lines'), h('div.value', rows.length)), h('div.kpi', h('div.label', '✓ Procured'), h('div.value', cnt('Procured'))),
+        h('div.kpi', h('div.label', '◐ Partly received'), h('div.value', cnt('Partly received'))), h('div.kpi', h('div.label', '○ Pending'), h('div.value', cnt('Pending'))), h('div.kpi', h('div.label', 'Not approved yet'), h('div.value', cnt('Not approved yet')))) : null,
+      rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
+        h('thead', h('tr', ['PO No', 'Date', 'Vendor', 'Project / BOQ', 'Item', 'UOM', 'Ordered', 'Approved', 'Received', 'Pending', 'Rate', 'Value', 'Procurement', 'PO Status'].map((t, i) => h('th' + (i >= 6 && i <= 11 ? '.num' : ''), t)))),
         h('tbody', rows.slice(0, 1000).map(r => h('tr.clickable', { onclick: () => (location.hash = `#/view/purchase_orders/${r.po_id}`) },
-          h('td.nowrap', r.po_no), h('td.nowrap', fmtDate(r.date)), h('td.clip', r.vendor || ''), h('td.clip', r.project || ''), h('td.clip', { title: r.item }, r.item), h('td', r.uom || ''),
+          h('td.nowrap', r.po_no), h('td.nowrap', fmtDate(r.date)), h('td.clip', r.vendor || ''), h('td.clip', [r.project, r.bom_no].filter(Boolean).join(' · ')), h('td.clip', { title: r.item }, r.item), h('td', r.uom || ''),
           h('td.num', r.ordered), h('td.num', r.approved), h('td.num', r.received), h('td.num', { style: { fontWeight: 600, color: r.pending > 0 ? 'var(--warn)' : '' } }, r.pending),
-          h('td.num', inr(r.rate)), h('td.num', inr(r.value)), h('td', badge(r.status))))),
-        h('tfoot', h('tr', h('td', { colspan: 6 }, `${rows.length} lines`), h('td.num', round2(sum('ordered'))), h('td.num', round2(sum('approved'))), h('td.num', round2(sum('received'))), h('td.num', round2(sum('pending'))), h('td'), h('td.num', inr(sum('value'))), h('td'))))))
+          h('td.num', inr(r.rate)), h('td.num', inr(r.value)), h('td.nowrap', { style: { color: r.line_status === 'Procured' ? 'var(--good)' : r.line_status === 'Pending' ? 'var(--warn)' : '' } }, { Procured: '✓ ', 'Partly received': '◐ ', Pending: '○ ' }[r.line_status] || '', r.line_status), h('td', badge(r.status))))),
+        h('tfoot', h('tr', h('td', { colspan: 6 }, `${rows.length} lines`), h('td.num', round2(sum('ordered'))), h('td.num', round2(sum('approved'))), h('td.num', round2(sum('received'))), h('td.num', round2(sum('pending'))), h('td'), h('td.num', inr(sum('value'))), h('td'), h('td'))))))
         : h('div.empty', 'No PO lines match'));
     } catch (e) { fail(e); }
   }
@@ -279,7 +314,7 @@ export async function poTrackerView(root) {
   q.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
   pending.addEventListener('change', load);
   root.replaceChildren(h('div.page-head', h('h1', '🔎 PO Tracker'), h('div.actions', h('a.btn', { href: '#/list/purchase_orders' }, 'Purchase Orders'))),
-    h('p.muted', 'Every line of every purchase order: how much was ordered, approved, received and is still pending. Receiving goods (GRN against a PO) updates it automatically.'),
-    h('div.toolbar', q, h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontWeight: 400 } }, pending, 'Pending only')), out);
+    h('p.muted', 'Every line of every purchase order: ordered, approved, received and still pending. A GRN against the PO (or with its PO number typed in) updates it automatically.'),
+    h('div.toolbar', q, pending), out);
   await load();
 }

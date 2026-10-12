@@ -13,7 +13,9 @@ import {
   authenticate, requireRole, createSession, destroySession, verifyPassword, hashPassword, publicUser,
   loginAllowed, loginFailed, loginSucceeded, purgeExpiredSessions,
 } from './auth.js';
-import { listRows, getRow, insertRow, updateRow, deleteRow, options, entityOr404, HttpError } from './crud.js';
+import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
+import * as notify from './notify.js';
+import { tx } from './db.js';
 import * as wf from './workflows.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -28,6 +30,7 @@ seed();
 roles.seedRoles();
 dispatch.migrateProjectBoqs();
 purgeExpiredSessions();
+notify.purgeOld();
 
 const app = express();
 app.disable('x-powered-by');
@@ -73,6 +76,10 @@ api.post('/me/password', wrap(req => {
   audit(req.user.name, 'users', req.user.id, 'password change');
   return { ok: true };
 }));
+
+// ---------------------------------------------------------------- pop-up notifications
+api.get('/notifications', wrap(req => notify.listFor(req.user, req.query)));
+api.post('/notifications/read', wrap(req => notify.markRead(req.user, req.body?.ids)));
 
 // ---------------------------------------------------------------- users & settings (admin)
 api.get('/users', wrap(() => db.prepare('SELECT * FROM users ORDER BY active DESC, name').all().map(publicUser)));
@@ -174,8 +181,11 @@ api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submit
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- work order BOQ & delivery challans
-api.post('/boqs/upload', need('boqs'), express.raw({ type: () => true, limit: '60mb' }), wrap(req =>
-  dispatch.createBoqFromFile({ title: req.query.title, project_id: req.query.project_id, filename: req.query.name, mime: req.headers['x-file-type'] }, req.body, req.user)));
+api.post('/boqs/upload', need('boqs'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
+  const r = await dispatch.createBoqFromFile({ title: req.query.title, project_id: req.query.project_id, filename: req.query.name, mime: req.headers['x-file-type'] }, req.body, req.user);
+  notify.notifyNew('boqs', r.boq, req.user);
+  return r;
+}));
 api.post('/boqs/:id/import', need('boqs'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
   if (!req.body?.length) throw new HttpError(400, 'Upload the work order .xlsx');
   const r = await dispatch.importBoq(req.params.id, req.body, req.query.mode, req.user);
@@ -183,6 +193,18 @@ api.post('/boqs/:id/import', need('boqs'), express.raw({ type: () => true, limit
   return r;
 }));
 api.post('/boqs/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBoq(req.params.id, req.body, req.user)));
+api.post('/boms/upload', need('boms'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
+  const r = await dispatch.createBomFromFile({ client: req.query.client, project_id: req.query.project_id, work_order_id: req.query.work_order_id, filename: req.query.name, mime: req.headers['x-file-type'] }, req.body, req.user);
+  notify.notifyNew('boms', r.bom, req.user);
+  return r;
+}));
+api.post('/boms/:id/import', need('boms'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
+  if (!req.body?.length) throw new HttpError(400, 'Upload the bill of material .xlsx');
+  const r = await dispatch.importBom(req.params.id, req.body, req.query.mode, req.user);
+  roles.saveAttachment('boms', req.params.id, { filename: req.query.name || 'Bill of material.xlsx', mime: req.headers['x-file-type'], note: 'Bill of material (imported)' }, req.body, req.user);
+  return r;
+}));
+api.post('/boms/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBom(req.params.id, req.body, req.user)));
 api.post('/challans/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchChallan(req.params.id, req.body, req.user)));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
@@ -190,10 +212,19 @@ api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliver
 api.post('/stock/entry', need('stock_moves'), wrap(req => {
   const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
   // Outward against a BOQ: the delivery challan is created automatically with the issue.
-  if (body.type === 'OUTWARD' && body.boq_id) {
-    if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans');
-    const r = dispatch.issueAgainstBoq(body, req.user);
+  const challanOk = () => { if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans'); };
+  if (body.type === 'OUTWARD' && (body.boq_id || body.bom_id)) {
+    challanOk();
+    const r = body.bom_id ? dispatch.issueAgainstBom(body, req.user) : dispatch.issueAgainstBoq(body, req.user);
     return { doc_no: r.challan.challan_no, challan: r.challan, count: r.challan.lines.length, type: 'OUTWARD' };
+  }
+  // Outward / transfer with "also make a delivery challan": issue slip and challan are saved together.
+  if (body.make_challan && ['OUTWARD', 'TRANSFER'].includes(body.type)) {
+    challanOk();
+    return tx(() => {
+      const r = stock.stockEntry(body, req.user);
+      return { ...r, challan: dispatch.challanForIssue(body, r, req.user) };
+    });
   }
   return stock.stockEntry(body, req.user);
 }));
@@ -342,7 +373,9 @@ api.get('/:entity/:id', wrap(req => { viewable(req); return getRow(req.params.en
 api.post('/:entity', wrap(req => {
   const ent = entityOr404(req.params.entity);
   if (!canWrite(req.params.entity, req.user.role) || ent.noCreate) throw new HttpError(403, 'You do not have permission to create this');
-  return insertRow(req.params.entity, req.body || {}, req.user);
+  const row = insertRow(req.params.entity, req.body || {}, req.user);
+  notify.notifyNew(req.params.entity, row, req.user);
+  return row;
 }));
 api.put('/:entity/:id', wrap(req => {
   const { entity, id } = req.params;
@@ -354,7 +387,19 @@ api.put('/:entity/:id', wrap(req => {
   }
   return updateRow(entity, id, req.body || {}, req.user);
 }));
-api.delete('/:entity/:id', wrap(req => { if (!canDelete(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have permission to delete this'); deleteRow(req.params.entity, req.params.id, req.user); return { ok: true }; }));
+api.delete('/:entity/:id', wrap(req => {
+  const { entity, id } = req.params;
+  const ent = entityOr404(entity);
+  const row = db.prepare(`SELECT * FROM ${entity} WHERE id = ?`).get(Number(id));
+  if (!row) throw new HttpError(404, 'Record not found');
+  const full = canDelete(entity, req.user.role) || (['bom_items', 'boq_items'].includes(entity) && canWrite(entity, req.user.role));
+  if (!canRemove(entity, row, req.user, full && canWrite(entity, req.user.role))) {
+    throw new HttpError(403, `Only the person who created this ${ent.singular.toLowerCase()} (while it is a Draft) or someone with full access to ${ent.label} can delete it`);
+  }
+  deleteRow(entity, id, req.user);
+  roles.removeAttachmentsOf(entity, id);
+  return { ok: true };
+}));
 
 app.use('/api', api);
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
