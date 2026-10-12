@@ -34,6 +34,8 @@ notify.purgeOld();
 
 const app = express();
 app.disable('x-powered-by');
+// Behind Render's proxy: real client IPs (login lock-out) and HTTPS detection (secure cookie).
+if (process.env.TRUST_PROXY) app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
 app.use(express.json({ limit: '10mb' }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -293,7 +295,7 @@ api.post('/admin/restore', requireRole(), express.raw({ type: () => true, limit:
   } catch (e) { fs.rmSync(tmp, { force: true }); throw e.status ? e : new HttpError(400, 'Could not read the backup: ' + e.message); }
   fs.renameSync(tmp, RESTORE_FILE);
   audit(req.user.name, 'backup', null, 'restore scheduled');
-  return { ok: true, message: 'Backup accepted. Close the CRM window and start it again (start-crm.bat) to finish restoring. The current data is kept in data/backups.' };
+  return { ok: true, message: 'Backup accepted. Restart the CRM to finish restoring: close the CRM window and run start-crm.bat again (on Render: Manual Deploy → Restart service). The current data is kept in the backups folder.' };
 }));
 api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user)));
 api.post('/sales_orders/:id/project', need('projects'), wrap(req => wf.projectFromSalesOrder(req.params.id, req.user)));

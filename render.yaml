@@ -1,0 +1,26 @@
+# Render blueprint: New → Blueprint → pick this repository.
+# The database and attached files live on the persistent disk (/var/data). Render only offers disks on paid
+# instances, so the plan is "starter"; on the free plan every restart or deploy would wipe all data.
+services:
+  - type: web
+    name: wiespl-crm
+    runtime: node
+    plan: starter
+    region: singapore
+    buildCommand: npm ci --omit=dev
+    startCommand: node server/index.js
+    healthCheckPath: /
+    autoDeploy: false
+    envVars:
+      - key: NODE_VERSION
+        value: 24.19.0
+      - key: WIESPL_DATA_DIR
+        value: /var/data
+      - key: TRUST_PROXY
+        value: "1"
+      - key: ADMIN_PASSWORD
+        sync: false # asked once when the blueprint is created: the first admin password
+    disk:
+      name: wiespl-data
+      mountPath: /var/data
+      sizeGB: 1

@@ -3,11 +3,11 @@
 ## WIESPL CRM & ERP
 
 Web-based CRM + ERP for Western India Electromedical Systems Pvt. Ltd. It runs on one office PC and staff use it from any browser on the office network.
-.\start-crm.bat
+
 ## Start
 
 1. Install **Node.js 22.13 or newer** (it has SQLite built in, so there is no database server to install).
-2. Double-click `start-crm.bat` (or run `npm install` then `npm start`).
+2. Double-click `start-crm.bat`, or in PowerShell in this folder run `.\start-crm.bat` (or `npm install` then `npm start`).
 3. Open `http://localhost:3000` on that PC. Other staff use the "Office network" address the window prints, e.g. `http://192.168.0.44:3000`.
    If they cannot connect, allow Node.js through Windows Firewall for Private networks.
 4. First login: user `admin`, with the password in `data/initial-admin-password.txt`. You will be asked to set a new password. Then delete that file and create users under **Admin → Users & Roles**.
@@ -19,6 +19,15 @@ Options: `PORT=8080` changes the port; `WIESPL_DATA_DIR=D:\crm-data` moves the d
 ## Backup
 
 All data is in `data/wiespl.db` (plus `-wal` / `-shm` files while running). Stop the server and copy the `data` folder to a backup drive or cloud folder regularly.
+
+## Hosting on Render
+
+`render.yaml` sets everything up: in Render choose **New → Blueprint**, pick this GitHub repository and enter the first admin password (`ADMIN_PASSWORD`).
+
+- The database and attached files are kept on a persistent disk at `/var/data` (`WIESPL_DATA_DIR`). Disks need a paid instance (plan `starter`); on the free plan every restart or deploy would erase all data.
+- To bring the office data across: on the office PC, **Admin → Import / Backup → Download full backup**; on Render, log in as admin, **Restore** that `.db` file, then **Manual Deploy → Restart service**. Attached files (drawings, work orders) are not in the backup and have to be uploaded again.
+- Use only one copy (office PC *or* Render) for daily work, otherwise the two databases drift apart.
+- `autoDeploy` is off: after pushing new code, click **Manual Deploy → Deploy latest commit**.
 
 ## Modules
 
