@@ -3,7 +3,7 @@
 ## WIESPL CRM & ERP
 
 Web-based CRM + ERP for Western India Electromedical Systems Pvt. Ltd. It runs on one office PC and staff use it from any browser on the office network.
-
+.\start-crm.bat
 ## Start
 
 1. Install **Node.js 22.13 or newer** (it has SQLite built in, so there is no database server to install).
