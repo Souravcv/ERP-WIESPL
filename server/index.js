@@ -15,6 +15,7 @@ import {
 } from './auth.js';
 import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
 import * as notify from './notify.js';
+import { publicRouter, unfinishedLeads } from './public.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
@@ -64,6 +65,8 @@ api.post('/login', wrap((req, res) => {
   return { user: publicUser(u) };
 }));
 api.post('/logout', (req, res) => { destroySession(req, res); res.json({ ok: true }); });
+// Client enquiry form (enquire.html): no login.
+api.use('/public', publicRouter());
 
 api.use(authenticate);
 
@@ -83,6 +86,7 @@ api.post('/me/password', wrap(req => {
 // ---------------------------------------------------------------- pop-up notifications
 api.get('/notifications', wrap(req => notify.listFor(req.user, req.query)));
 api.post('/notifications/read', wrap(req => notify.markRead(req.user, req.body?.ids)));
+api.get('/web-leads', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return unfinishedLeads(); }));
 
 // ---------------------------------------------------------------- users & settings (admin)
 api.get('/users', wrap(() => db.prepare('SELECT * FROM users ORDER BY active DESC, name').all().map(publicUser)));

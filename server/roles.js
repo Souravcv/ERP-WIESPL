@@ -41,6 +41,12 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_notify_v1', '\"1\"')").run();
   }
+  // Website enquiries pop up for sales (once for the built-in role).
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_web_enquiry_v1'").get()) {
+    const r = db.prepare("SELECT perms FROM roles WHERE name = 'sales'").get();
+    if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'notify_enquiry'])]; db.prepare("UPDATE roles SET perms = ? WHERE name = 'sales'").run(JSON.stringify(p)); }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_web_enquiry_v1', '\"1\"')").run();
+  }
   // PO approval became Purchase Head check → GM → Commercial (prices, payment terms, due dates).
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_po_flow_v2'").get()) {
     for (const [name, fn] of [['purchase_head', 'po_check'], ['accounts', 'po_commercial'], ['manager', 'po_check'], ['manager', 'po_commercial']]) {

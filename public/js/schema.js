@@ -88,6 +88,7 @@ export const FUNCTIONS = {
   notify_po: 'Pop-up: new purchase order',
   notify_boq: 'Pop-up: new BOQ (bill of material)',
   notify_work_order: 'Pop-up: new work order',
+  notify_enquiry: 'Pop-up: new enquiry from the client website form',
 };
 // Pop-up notifications per new document; approval requests always go to whoever may approve that step.
 export const NOTIFY_FUNCTIONS = { requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
@@ -98,7 +99,7 @@ export const DEFAULT_FUNCTIONS = {
   accounts: ['po_commercial', 'import', 'notify_po'],
   store: ['stock_opening', 'import', 'notify_po', 'notify_boq', 'notify_work_order'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
-  sales: ['import'],
+  sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
@@ -165,7 +166,7 @@ export const ENTITIES = {
     label: 'Enquiry Register', singular: 'Enquiry', group: 'CRM', icon: '📋', write: CRM,
     display: "{t}.enquiry_no || ' · ' || COALESCE({t}.hospital_name, '')",
     search: ['enquiry_no', 'quote_ref', 'place', 'district', 'doctor_name', 'hospital_name', 'consultant_name', 'type_of_work', 'remarks', 'enquiry_by', 'quoted_by'],
-    list: ['enquiry_no', 'quote_ref', 'date', 'hospital_name', 'doctor_name', 'place', 'type_of_work', 'enquiry_by', 'status', 'next_followup'],
+    list: ['enquiry_no', 'quote_ref', 'date', 'hospital_name', 'doctor_name', 'place', 'type_of_work', 'enquiry_by', 'lead_grade', 'status', 'next_followup'],
     statusField: 'status',
     related: [['followups', 'enquiry_id'], ['quotations', 'enquiry_id']],
     fields: [
@@ -195,6 +196,12 @@ export const ENTITIES = {
       { key: 'lost_reason', label: 'Lost / Regret Reason', type: 'text', span: 2 },
       { key: 'verified_by', label: 'Verified By', type: 'person', suggest: ['Sir'] },
       { key: 'verified_date', label: 'Verified Date', type: 'date' },
+      { key: 'email', label: 'Email', type: 'email' },
+      { key: 'whatsapp', label: 'WhatsApp on this number', type: 'yn' },
+      { key: 'best_time', label: 'Best time to call', type: 'text' },
+      { key: 'lead_score', label: 'Lead score (0–100)', type: 'number', readonly: true, hint: 'From the website form: timeline, budget, size' },
+      { key: 'lead_grade', label: 'Lead', type: 'select', options: ['', 'Hot', 'Warm', 'Cold'] },
+      { key: 'web_summary', label: 'What the client told us (website form)', type: 'textarea', span: 2, rows: 8, readonly: true },
       { key: 'fy', label: 'FY', type: 'text', hidden: true },
       { key: 'seq', label: 'Seq', type: 'number', hidden: true },
     ],

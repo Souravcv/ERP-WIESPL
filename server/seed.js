@@ -6,6 +6,13 @@ import { db, getSettings, setSettings, DATA_DIR } from './db.js';
 import { hashPassword } from './auth.js';
 
 export const DEFAULT_SETTINGS = {
+  // Client website enquiry form (enquire.html)
+  web_trust: ['14+ years designing and building modular OTs', 'Designed to NABH norms', 'Our own AHU, made at our Pune works', 'Room pressure can be switched between positive and negative'],
+  web_next_steps: 'Our team will call you within 24 hours to understand your requirement. We will then share a sample layout and an estimate for your project.',
+  web_brochure_url: '',
+  web_whatsapp: '',
+  web_show_estimate: 'No',
+  web_estimates: [],
   company_name: 'WESTERN INDIA ELECTROMEDICAL SYSTEMS PVT. LTD.',
   company_short: 'WIESPL',
   tagline: 'Turnkey Solutions for Healthcare!',

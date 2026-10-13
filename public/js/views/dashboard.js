@@ -31,6 +31,17 @@ function monthly(rows, fy) {
   return h('div', chart, h('div.collabels', data.map(d => h('span', d.m))));
 }
 
+// Visitors who started the client enquiry form but did not send it (follow up if they left a phone number).
+function webLeadsCard() {
+  const box = h('div.card', h('h2', '🌐 Website form: started but not sent'), h('div.muted', 'Loading…'));
+  api('/web-leads').then(rows => {
+    box.lastChild.replaceWith(rows.length ? h('table.data', h('thead', h('tr', ['Last active', 'Reached step', 'Interested in', 'Name / phone'].map(t => h('th', t)))),
+      h('tbody', rows.slice(0, 15).map(r => h('tr', h('td.nowrap', r.updated_at), h('td', r.step + 1), h('td.clip', r.types.join(', ') || '—'), h('td', [r.name, r.phone].filter(Boolean).join(' · ') || h('span.muted', 'not given yet'))))))
+      : h('div.muted', 'None in the last 30 days. Share the form from Enquiry Register → 🔗 Client enquiry form.'));
+  }).catch(() => box.remove());
+  return box;
+}
+
 // Each person sees the dashboard of their work: sales / CRM, store, or both (as tabs).
 export async function dashboardView(root) {
   const role = state.user.role;
@@ -108,6 +119,7 @@ async function crmDashboard(root, views) {
       h('div.card', h('h2', 'Low stock'), d.low_stock.length ? h('table.data', h('tbody', d.low_stock.map(i => h('tr.clickable', { onclick: () => (location.hash = `#/view/items/${i.id}`) },
         h('td', i.name), h('td.num', `${i.stock} ${i.uom || ''}`), h('td.num.muted', `min ${i.reorder_level}`))))) : h('div.muted', 'All items above reorder level')),
     ),
+    webLeadsCard(),
     h('div.card', h('h2', 'Latest enquiries'), d.recent.length ? h('table.data', h('thead', h('tr', ['Enquiry No', 'Date', 'Hospital', 'Doctor', 'Place', 'Work', 'Status'].map(t => h('th', t)))),
       h('tbody', d.recent.map(e => h('tr.clickable', { onclick: () => (location.hash = `#/view/enquiries/${e.id}`) },
         h('td', e.enquiry_no), h('td', fmtDate(e.date)), h('td', e.hospital_name || ''), h('td', e.doctor_name || ''), h('td', e.place || ''), h('td', e.type_of_work || ''), h('td', badge(e.status)))))) : h('div.muted', 'No enquiries yet. Add one, or import your Excel register from Admin → Import.')),

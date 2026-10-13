@@ -117,6 +117,8 @@ const SETTINGS_FORM = [
     ['po_contact_phone', 'Contact number'], ['po_contact_emails', 'Purchase email(s)'], ['po_greeting', 'Opening line', 'ta'], ['po_term_advance', 'Payment – Advance'], ['po_term_balance', 'Payment – Balance'],
     ['po_term_delivery', 'Delivery'], ['po_term_warranty', 'Warranty'], ['po_term_freight', 'Freight'], ['po_term_validity', 'Validity', 'ta'], ['po_term_invoice', 'Invoice copies'],
     ['po_term_jurisdiction', 'Jurisdiction', 'ta'], ['po_term_extra', 'Additional terms', 'ta']]],
+  ['Client website enquiry form (enquire.html)', [['web_next_steps', 'What happens next (thank-you screen)', 'ta'], ['web_trust', 'Trust points beside the form (one per line)', 'list'], ['web_whatsapp', 'Company WhatsApp number (e.g. 919876543210)'], ['web_brochure_url', 'Brochure link (PDF)'],
+    ['web_show_estimate', 'Show an indicative price range at the end', 'yn'], ['web_estimates', 'Ranges, one per line: Modular OT | 4500000 | 8500000 | per OT', 'list']]],
   ['Quotation defaults', [['default_subject', 'Default subject'], ['letter_greeting', 'Greeting'], ['letter_intro', 'Opening paragraph', 'ta'], ['letter_body', 'Body paragraph', 'ta'], ['letter_closing', 'Closing lines', 'ta'],
     ['usp_title', 'USP heading'], ['usp', 'USP points (one per line)', 'list'], ['terms', 'Default terms (one per line)', 'list'], ['client_scope', 'Default client scope', 'ta'], ['boq_note', 'Note under BOQ'], ['invoice_terms', 'Invoice terms', 'ta']]],
 ];

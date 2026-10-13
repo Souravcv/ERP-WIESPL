@@ -67,6 +67,21 @@ export async function newRecord(entity, preset = {}) {
   location.hash = `#/edit/${entity}/new${qs ? '?' + qs : ''}`;
 }
 
+// Link to the client-facing enquiry form (enquire.html) to send on WhatsApp / email / website.
+async function shareForm() {
+  const url = `${location.origin}/enquire.html`;
+  const text = `Planning a Modular OT, ICU or NICU? Tell us about your project in 2 minutes and see it in 3D: ${url}`;
+  const input = h('input', { value: url, readOnly: true, onclick: e => e.target.select() });
+  await modal('Client enquiry form', h('div.grid',
+    h('p', 'Send this link to doctors and hospitals. What they fill in comes into the Enquiry Register as a new enquiry (source: Website, with a Hot / Warm / Cold lead score), and sales get a pop-up.'),
+    h('label', 'Link', input),
+    location.hostname === 'localhost' || /^(192\.168|10\.|172\.)/.test(location.hostname) ? h('p', { style: { color: 'var(--warn)' } }, '⚠ This address only works inside your office network. For clients outside, use the Render (internet) address of the CRM.') : null,
+    h('div.toolbar', h('a.btn.primary', { href: `https://wa.me/?text=${encodeURIComponent(text)}`, target: '_blank', rel: 'noopener' }, '💬 Share on WhatsApp'),
+      h('button.btn', { onclick: async () => { try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { input.select(); toast('Press Ctrl+C to copy'); } } }, '📋 Copy link'),
+      h('a.btn', { href: url, target: '_blank', rel: 'noopener' }, '👀 Open the form'))),
+  [{ label: 'Close', value: true }]);
+}
+
 // A WIESPL estimate (ANNEXURE III, e.g. "SS 304_MOT.xlsx") becomes a standard BOQ with prices for quotations.
 async function importEstimate() {
   const set = h('input', { value: 'SS 304 MOT' });
@@ -139,6 +154,7 @@ export async function listView(root, entity) {
     h('div.page-head', h('h1', `${ent.icon} ${ent.label}`), h('div.actions',
       h('button.btn', { onclick: () => download(`/api/export/${entity}?${query()}`) }, '⬇ Export Excel'),
       delBtn,
+      entity === 'enquiries' ? h('button.btn', { onclick: busy(shareForm) }, '🔗 Client enquiry form') : null,
       entity === 'products' && canWrite(entity, state.user.role) ? h('button.btn', { onclick: busy(importEstimate) }, '📥 Import estimate Excel') : null,
       IMPORTABLE[entity] && canWrite(entity, state.user.role) ? h('a.btn', { href: `#/import?kind=${IMPORTABLE[entity]}` }, '📥 Import Excel') : null,
       canWrite(entity, state.user.role) && !ent.noCreate ? h('button.btn.primary', { onclick: () => newRecord(entity).catch(fail) }, `+ New ${ent.singular}`) : null)),
