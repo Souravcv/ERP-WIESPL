@@ -216,10 +216,10 @@ function step3D(n, total) {
   const legend = h('div.eq-legend', h('span', h('i', { style: { background: '#1e7d3a' } }), 'in your plan'), h('span', h('i', { style: { background: '#9aa7ba' } }), 'available'), h('span', 'Drag to turn · pinch or scroll to zoom · tap a label'));
   setTimeout(async () => {
     viewer?.dispose?.();
-    viewer = await mount3D(box, { types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2] }])) });
+    viewer = await mount3D(box, { types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])) });
     if (viewer?.controls) {
       const chip = (label, fn, pressed) => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!pressed), onclick: () => { const on = fn(); if (on !== undefined) b.setAttribute('aria-pressed', String(on)); } }, label); return b; };
-      bar.replaceChildren(...viewer.controls.map(c => chip(c.label, c.run, c.pressed)));
+      bar.replaceChildren(...viewer.controls.map(c => { const b = chip(c.label, c.run, c.pressed); c.ref?.(b); return b; }));
     }
   }, 30);
   return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Items you picked are marked in green; tap any label to learn what it does.',
