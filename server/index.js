@@ -16,6 +16,7 @@ import {
 import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
 import * as notify from './notify.js';
 import { publicRouter, unfinishedLeads, briefFor } from './public.js';
+import { migratePhotos, listPhotos, addPhoto, removePhoto } from './photos.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
@@ -130,6 +131,11 @@ api.delete('/users/:id', requireRole(), wrap(req => {
   return { ok: true };
 }));
 api.get('/settings', wrap(() => getSettings()));
+// real photos of each OT part, shown to clients on the enquiry form
+migratePhotos();
+api.get('/part-photos', requireRole(), wrap(() => listPhotos()));
+api.post('/part-photos', requireRole(), express.raw({ type: () => true, limit: '9mb' }), wrap(req => addPhoto(String(req.query.part || ''), String(req.query.name || ''), String(req.query.caption || ''), req.body, req.user)));
+api.delete('/part-photos/:id', requireRole(), wrap(req => removePhoto(req.params.id)));
 api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
 api.get('/audit', wrap(req => {
   if (!hasFunction(req.user.role, 'view_audit')) throw new HttpError(403, 'You do not have permission to see the activity log');

@@ -5,7 +5,7 @@ import { otNorms, otType } from './nabh.js';
 import { VIDEOS } from './explainers.js';
 
 export const SPECIALTIES = ['General surgery', 'Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Gynae / Obstetrics', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
-export const WALLS = ['SS 304', 'PPGI', 'Toughened glass', 'Wooden finish (HPL)'];
+export const WALLS = ['SS 304', 'PPGI', 'Toughened glass']; // OT walls; the passage can also be wood (HPL)
 export const WALL_COLOURS = { 'SS 304': ['Natural steel'], PPGI: ['Off-white'], 'Toughened glass': ['Ivory white', 'Sky blue', 'Mint green'], 'Wooden finish (HPL)': ['Light oak', 'Walnut'] };
 export const FLOORS = ['Beige', 'Grey', 'Sky blue', 'Aqua green', 'Navy blue', 'Light grey'];
 const YN = ['Yes', 'No'];
@@ -45,13 +45,15 @@ export const ROOM = [
     { key: 'wall', label: 'Wall panels', type: 'select', options: WALLS, def: () => 'SS 304' },
     { key: 'wall_colour', label: 'Wall colour', type: 'select', options: r => WALL_COLOURS[r.wall] || [], def: (i, r) => (WALL_COLOURS[r?.wall] || [''])[0], show: r => (WALL_COLOURS[r.wall] || []).length > 1 },
     { key: 'ceiling', label: 'Ceiling panels', type: 'select', options: ['SS 304', 'PPGI'], def: () => 'SS 304' },
+    { key: 'floor_type', label: 'Floor type', type: 'select', options: ['Antistatic conductive vinyl', 'Homogeneous vinyl'], def: () => 'Antistatic conductive vinyl' },
     { key: 'floor_main', label: 'Floor main colour', type: 'select', options: FLOORS, def: () => 'Beige' },
     { key: 'floor_border', label: 'Floor border colour', type: 'select', options: FLOORS, def: () => 'Grey' },
+    { key: 'passage_wall', label: 'Clean passage walls', type: 'select', options: ['Wooden finish (HPL)', ...WALLS] },
     { key: 'picture_glass', label: 'Picture glass panel (digital wallpaper)', type: 'yn', def: () => 'Yes' },
     { key: 'lead', label: 'Lead lining (C-arm / X-ray use)', type: 'yn' },
   ]],
   ['Doors, glazing & storage', [
-    { key: 'door', label: 'Main door', type: 'select', options: ['Hermetic sliding (automatic)', 'Double leaf swing', 'Single leaf swing'], def: () => 'Hermetic sliding (automatic)' },
+    { key: 'door', label: 'Main door', type: 'select', options: ['Hermetic sliding (automatic)', 'Automatic swing', 'Double leaf swing', 'Single leaf swing'], def: () => 'Hermetic sliding (automatic)' },
     { key: 'door_size', label: 'Door size', type: 'select', options: ['1200 × 2100 mm', '1500 × 2100 mm', '1800 × 2100 mm'], def: () => '1500 × 2100 mm' },
     { key: 'passbox', label: 'Pass boxes', type: 'number', def: () => 1 },
     { key: 'storage', label: 'SS storage cabinets', type: 'number', def: () => 2 },
@@ -68,7 +70,7 @@ export const ROOM = [
     { key: 'outside_panel', label: 'Control panel outside the OT', type: 'yn', def: () => 'Yes' },
     { key: 'leds', label: 'LED ceiling lights (2 × 2 ft)', type: 'number', def: () => 8 },
   ]],
-  ['Medical gases (outlets in this OT)', [
+  ['Gas outlets on the pendants (MGPS piping is in the hospital’s scope)', [
     { key: 'o2', label: 'Oxygen', type: 'number', def: () => 2 }, { key: 'n2o', label: 'Nitrous oxide', type: 'number', def: () => 1 },
     { key: 'air4', label: 'Air 4 bar', type: 'number', def: () => 2 }, { key: 'air7', label: 'Air 7 bar (tools)', type: 'number', def: (i, r) => (['Orthopaedics', 'Neuro'].includes(r?.specialty) ? 1 : 0) },
     { key: 'vac', label: 'Vacuum', type: 'number', def: () => 2 }, { key: 'co2', label: 'CO₂', type: 'number', def: (i, r) => (['General surgery', 'Gynae / Obstetrics', 'Urology', 'Robotic'].includes(r?.specialty) ? 1 : 0) },
@@ -86,7 +88,6 @@ export const SITE = [
   { key: 'dg', label: 'DG back-up for the OT', type: 'yn' }, { key: 'ups', label: 'UPS for the OT', type: 'yn' },
   { key: 'existing_floor', label: 'Existing floor', type: 'select', options: ['Mosaic / Kota stone', 'Tiles', 'Concrete', 'Not sure'], hint: 'Vinyl is laid on a 2 mm self-levelling base' },
   { key: 'civil_by', label: 'Civil work by', type: 'select', options: SCOPE }, { key: 'electrical_by', label: 'Electrical cabling by', type: 'select', options: SCOPE },
-  { key: 'mgps_by', label: 'MGPS / gas manifold by', type: 'select', options: SCOPE },
   { key: 'drawing', label: 'Architectural drawing available', type: 'yn' },
   { key: 'remarks', label: 'Other remarks', type: 'textarea' },
 ];

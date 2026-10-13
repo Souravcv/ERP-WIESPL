@@ -1,6 +1,7 @@
 import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRefCache, fmtDate } from '../ui.js';
 import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions } from '../schema.js';
 import { table } from './list.js';
+import { PART_UI } from '../parts.js';
 
 // ---------------------------------------------------------------- users (each user gets one role)
 export async function usersView(root) {
@@ -142,7 +143,37 @@ export async function settingsView(root) {
   };
   root.replaceChildren(h('div.page-head', h('h1', '⚙️ Company & Quotation Settings'), h('div.actions', h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save settings'))),
     h('p.muted', 'The scope sheet matrix and per-quotation text can be edited inside each quotation (Letter, Terms & Scope tab). Changes here apply to new quotations.'),
-    sections);
+    sections, photosCard());
+}
+
+// Real photos of each part (pass box, door, pendants …): shown to clients when they tap that part in the 3D view.
+function photosCard() {
+  const card = h('div.card');
+  const part = h('select', Object.entries(PART_UI).map(([k, p]) => h('option', { value: k }, `${p.icon || ''} ${p.title}`)));
+  const caption = h('input', { placeholder: 'e.g. Pass box at Sahyadri Hospital, Pune' });
+  const file = h('input', { type: 'file', accept: '.jpg,.jpeg,.png,.webp', multiple: true });
+  const list = h('div');
+  const load = async () => {
+    const rows = await api('/part-photos');
+    const by = {};
+    for (const r of rows) (by[r.part] ||= []).push(r);
+    list.replaceChildren(...(rows.length ? Object.entries(by).map(([k, ps]) => h('div', { style: { margin: '12px 0' } }, h('b', PART_UI[k]?.title || k),
+      h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '6px' } }, ps.map(p => h('div', { style: { width: '150px' } },
+        h('img', { src: `/api/public/part-photo/${p.id}`, alt: p.caption || '', style: { width: '150px', height: '100px', objectFit: 'cover', borderRadius: '8px', display: 'block' } }),
+        h('div.muted', { style: { fontSize: '11px', margin: '3px 0' } }, p.caption || p.filename),
+        h('button.btn.sm', { onclick: async () => { if (!(await confirmBox('Delete this photo? Clients will no longer see it.'))) return; await api(`/part-photos/${p.id}`, { method: 'DELETE' }); toast('Photo deleted'); load().catch(fail); } }, '🗑 Delete')))))) : [h('p.muted', 'No photos yet.')]));
+  };
+  const upload = async () => {
+    if (!file.files.length) { toast('Choose one or more photos'); return; }
+    for (const f of file.files) await api(`/part-photos?part=${encodeURIComponent(part.value)}&name=${encodeURIComponent(f.name)}&caption=${encodeURIComponent(caption.value)}`, { method: 'POST', raw: await f.arrayBuffer() });
+    toast(`${file.files.length} photo(s) added`); file.value = ''; caption.value = ''; load().catch(fail);
+  };
+  card.append(h('h2', '📷 Website 3D: real photos of each part'),
+    h('p.muted', 'When a client taps a part in the 3D view of the enquiry form (pass box, door, pendant, wall …), these photos from your own installations are shown beside it. JPG, PNG or WebP, up to 8 MB, 12 per part.'),
+    h('div.form-grid', h('label', 'Part', part), h('label', 'Caption (optional)', caption), h('label.span-2', 'Photos', file)),
+    h('div.toolbar', h('button.btn.primary', { onclick: () => upload().catch(fail) }, '⬆ Upload photos')), list);
+  load().catch(fail);
+  return card;
 }
 
 export async function auditView(root) {

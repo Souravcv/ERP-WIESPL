@@ -2,6 +2,8 @@
 // On submit the CRM creates an enquiry (with a lead score) and sales get a pop-up.
 import { mount3D, openExplainer, WALL_FINISHES } from './ot3d.js';
 import { VIDEOS, videoSecs, fmtSecs } from './explainers.js';
+import { partPanel } from './partpanel.js';
+import { DOOR_TYPES, FLOOR_TYPES } from './parts.js';
 import { otNorms, otType, NABH_SOURCE } from './nabh.js';
 
 const $ = id => document.getElementById(id);
@@ -52,13 +54,12 @@ const HIGH_LAF = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Robotic'];
 const FEATURES = [
   ['laf', 'Laminar air flow', 'A gentle downward flow of filtered air over the table keeps the surgical area particle-free.', '🌬️', ['ot', 'cathlab', 'ivf', 'cleanroom']],
   ['hepa', 'HEPA filtration', 'Filters that trap 99.99% of dust and bacteria from the air coming into the room.', '🧪', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf', 'cssd', 'cleanroom']],
-  ['panels', 'Modular wall & ceiling panels', 'Smooth, joint-free SS / PPGL panels instead of plaster and paint: easy to clean, nothing for germs to hide in.', '🧱', ['*']],
-  ['doors', 'Hermetic sliding doors', 'Air-tight automatic doors that keep the room pressure and sterility.', '🚪', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf']],
-  ['pendants', 'Surgeon & anaesthesia pendants', 'Ceiling arms carrying gases, power and equipment, so there are no cables on the floor.', '🦾', ['ot', 'cathlab']],
+  ['panels', 'Modular wall & ceiling panels', 'Smooth, joint-free panels instead of plaster and paint: easy to clean, nothing for germs to hide in. Choose SS 304, PPGI or toughened glass.', '🧱', ['*']],
+  ['doors', 'OT doors', 'Sealed doors that keep the room pressure and sterility. Choose sliding, swing or automatic swing.', '🚪', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf']],
+  ['pendant_surgeon', "Surgeon's pendant", 'Ceiling arm bringing gases, power, data and the surgical monitor to the surgeon: no cables on the floor.', '🦾', ['ot', 'cathlab']],
+  ['pendant_anaes', 'Anaesthesia pendant', 'Ceiling arm with gases (including AGSS), power and data for the anaesthesia workstation.', '🦾', ['ot', 'cathlab']],
   ['otlight', 'LED OT light', 'Bright, shadow-free light over the operating table.', '💡', ['ot']],
   ['bedhead', 'Bed-head panels / ICU pendants', 'Gas outlets, power sockets and a monitor shelf at every bed.', '🛏️', ['icu', 'nicu', 'picu', 'isolation']],
-  ['warmers', 'Incubator & warmer bays', 'Power and gas points planned for incubators, warmers and phototherapy.', '👶', ['nicu']],
-  ['mgps', 'Medical gas pipeline (MGPS)', 'Oxygen, air, vacuum and N₂O piped to the pendants and walls.', '🫧', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation']],
   ['control', "Surgeon's control panel", 'One touch screen for temperature, humidity, lights, timers and gas alarms.', '🖥️', ['ot', 'cathlab']],
   ['automation', 'OT automation & remote monitoring', 'See room conditions and alarms on your phone; records for NABH audits.', '📱', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'cleanroom']],
   ['pressure', 'Positive / negative pressure control', 'Protects patients (positive) or contains infection (negative), switchable.', '🔁', ['icu', 'nicu', 'picu', 'isolation', 'ot']],
@@ -66,14 +67,18 @@ const FEATURES = [
   ['lead', 'Lead-lined walls & doors', 'Radiation protection for Cath Lab and X-ray rooms.', '🛡️', ['cathlab', 'ot']],
   ['scrub', 'Scrub station', 'Hands-free surgical hand-wash outside the OT.', '🚿', ['ot', 'cathlab']],
   ['handwash', 'Hand-wash stations', 'Touch-free hand-wash points for staff and visitors.', '🧼', ['icu', 'nicu', 'picu', 'isolation']],
-  ['nurse', 'Nurse station', 'Central desk with view of all beds and monitors.', '🧑‍⚕️', ['icu', 'nicu', 'picu']],
   ['passbox', 'Pass box', 'Pass instruments and samples in and out without opening the door.', '📦', ['ot', 'ivf', 'cssd', 'cleanroom', 'isolation']],
-  ['flooring', 'Antistatic seamless flooring', 'Conductive vinyl floor without joints: safe and easy to disinfect.', '⬛', ['*']],
+  ['flooring', 'Seamless flooring', 'Vinyl without joints, easy to disinfect. Choose antistatic conductive (OTs) or homogeneous vinyl.', '⬛', ['*']],
   ['storage', 'SS storage cabinets', 'Flush stainless steel wall cabinets for consumables.', '🗄️', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'cssd']],
   ['fumigation', 'Fumigation system', 'Disinfects the room between cases.', '💨', ['ot', 'icu', 'nicu', 'picu', 'isolation', 'cssd']],
   ['shrm', 'SHRM – Smart Heat Recovery (WIESPL patent)', 'Holds humidity by re-using heat inside the system instead of electric heaters: no extra electrical load and lower running costs.', '♻️', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf', 'cleanroom']],
   ['ahu', 'AHU & air conditioning', 'The air handling unit that cools, filters and pressurises the room — the heart of the system.', '❄️', ['*']],
 ];
+const SUB_CHOICES = {
+  panels: { key: 'wall_finish', top: true, list: [['ss', 'SS 304'], ['ppgi', 'PPGI'], ['glass', 'Toughened glass']] },
+  doors: { key: 'door_type', list: DOOR_TYPES.map(([v, l]) => [v, l]) },
+  flooring: { key: 'floor_type', list: FLOOR_TYPES.map(([v, l]) => [v, l]) },
+};
 const TIMELINES = [['1m', 'Within 1 month'], ['3m', '1–3 months'], ['6m', '3–6 months'], ['6p', 'More than 6 months'], ['explore', 'Just exploring']];
 const BUDGETS = [['u50', 'Under ₹50 lakh'], ['50_100', '₹50 lakh – 1 crore'], ['100_200', '₹1 – 2 crore'], ['200_500', '₹2 – 5 crore'], ['500p', 'Above ₹5 crore'], ['guide', 'Need guidance']];
 const BEST_TIME = ['Morning', 'Afternoon', 'Evening', 'Any time'];
@@ -86,6 +91,9 @@ try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch { /* privat
 const S = { step: 0, token: null, done: null, files: [], ...saved, data: { types: [], specialties: [], features: [], whatsapp: true, ...(saved.data || {}) } };
 S.files = []; // files cannot be kept between visits
 const D = S.data;
+D.opts ||= {};
+if (D.features.includes('Surgeon & anaesthesia pendants')) D.features.splice(D.features.indexOf('Surgeon & anaesthesia pendants'), 1, "Surgeon's pendant", 'Anaesthesia pendant');
+D.features = D.features.filter(l => !['Medical gas pipeline (MGPS)', 'Incubator & warmer bays', 'Nurse station'].includes(l)).map(l => ({ 'Hermetic sliding doors': 'OT doors', 'Antistatic seamless flooring': 'Seamless flooring' }[l] || l));
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify({ step: S.step, token: S.token, data: D, done: S.done })); } catch { /* ignore */ } };
 let syncTimer;
 const sync = () => {
@@ -227,7 +235,14 @@ function stepFeatures(n, total) {
       toggle(D.features, label); b.setAttribute('aria-pressed', String(D.features.includes(label))); summary(); sync();
       feedback(D.features.length >= 6 ? 'That is a complete, NABH-ready setup. You will see it in 3D next.' : k === 'laf' && D.features.includes(label) ? 'Laminar flow + HEPA is the standard for infection-sensitive surgery.' : k === 'shrm' && D.features.includes(label) ? 'SHRM is WIESPL’s patented energy saver: you will see it inside the AHU in 3D.' : '');
     } }, h('span.ico', icon), h('span', h('b', label), h('small', hint)));
-    return v ? h('div.eq-featwrap', b, explainBtn(v, () => render())) : b;
+    const sc = SUB_CHOICES[k];
+    const sub = sc ? h('div.eq-subchoice', { hidden: !D.features.includes(label) }, sc.list.map(([val, l]) => {
+      const cur = sc.top ? D[sc.key] : D.opts[sc.key];
+      const c = h('button.eq-chip', { type: 'button', 'aria-pressed': String(cur === val), onclick: () => { if (sc.top) D[sc.key] = val; else D.opts[sc.key] = val; if (sc.key === 'wall_finish') D.wall_colour = null; c.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === c))); sync(); summary(); } }, l);
+      return c;
+    })) : null;
+    if (sub) b.addEventListener('click', () => { sub.hidden = !D.features.includes(label); });
+    return v || sub ? h('div.eq-featwrap' + (v ? '.has-vid' : ''), h('div.eq-featcard', b, v ? explainBtn(v, () => render()) : null), sub) : b;
   }));
   return card(n, total, 'Which features interest you?', 'Tap to add. Each one has a one-line explanation.', [h('div', { style: { marginBottom: '12px' } }, unsure), list]);
 }
@@ -241,8 +256,22 @@ const featureKeys = () => D.features.map(l => FEATURES.find(f => f[1] === l)?.[0
 const info3D = () => Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }]));
 const explainBtn = (key, after) => h('button.eq-explain', { type: 'button', onclick: e => { e.stopPropagation(); openExplainer(key, { features: featureKeys(), info: info3D(), wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border }, onWatch: watched, onAdd: addFeature, onClose: after }); } }, `▶ Explain · ${fmtSecs(videoSecs(key))}`);
 const wallName = () => { const f = WALL_FINISHES.find(x => x.key === D.wall_finish) || WALL_FINISHES[0]; return f.colours.length > 1 && D.wall_colour ? `${f.name}, ${D.wall_colour}` : f.name; };
+let partOpen = null, PHOTOS = {};
+const wide = () => matchMedia('(min-width: 960px)').matches;
+function openPart(key, host) {
+  partOpen = key;
+  const close = () => { partOpen = null; host.replaceChildren(); summary(); };
+  const panel = key && partPanel(key, { h, viewer, D, photos: PHOTOS, onClose: close, has: k => featureKeys().includes(k),
+    setFeature: (k, on) => { const label = FEATURES.find(x => x[0] === k)?.[1]; if (!label) return; const i = D.features.indexOf(label); if (on && i < 0) D.features.push(label); if (!on && i >= 0) D.features.splice(i, 1); sync(); summary(); },
+    saveOpt: () => { sync(); summary(); } });
+  if (!panel) return;
+  const side = $('eq-side');
+  if (wide()) { host.replaceChildren(); side.replaceChildren(panel); document.body.classList.add('part-open'); }
+  else { host.replaceChildren(panel); panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+}
 function step3D(n, total) {
   const box = h('div.eq-3d', h('div.loading', 'Loading 3D view…'));
+  const partHost = h('div.eq-parthost');
   D.viewed_3d = true; sync();
   const bar = h('div.eq-3dbar');
   const look = h('div.eq-legend');
@@ -257,16 +286,21 @@ function step3D(n, total) {
     viewer = await mount3D(box, {
       wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border },
       onWatch: watched, onAdd: key => { addFeature(key); drawNorms(); },
+      onSelect: key => openPart(key, partHost),
+      doorType: D.opts.door_type, surgeonArms: D.opts.surgeon_arms, anaesArms: D.opts.anaes_arms, xrayPlates: D.opts.xray_plates, passage: { finish: D.opts.passage_finish, colour: D.opts.passage_colour },
       onFinish: ({ wall, floor }) => { D.wall_finish = wall.finish; D.wall_colour = wall.colour; D.floor_main = floor.main; D.floor_border = floor.border; drawLook(); summary(); sync(); },
       types: D.types, features: featureKeys(), ots: D.ots, beds: D.beds, info: info3D(),
     });
+    if (D.opts.laf_size) viewer?.setLaf?.(D.opts.laf_size);
+    if (D.opts.light_domes || D.opts.light_off) viewer?.setLights?.(D.opts.light_domes || 2, !D.opts.light_off);
+    if (D.opts.storage_count) viewer?.setStorage?.(D.opts.storage_count);
     if (viewer?.controls) {
       const chip = (label, fn, pressed) => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!pressed), onclick: () => { const on = fn(); if (on !== undefined) b.setAttribute('aria-pressed', String(on)); } }, label); return b; };
       bar.replaceChildren(...viewer.controls.map(c => { const b = chip(c.label, c.run, c.pressed); c.ref?.(b); return b; }));
     }
   }, 30);
-  return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Tap a wall to choose SS, PPGI, glass or wood panels, tap the floor for its colours, and tap any part to see what it does.',
-    [box, bar, look, norms], { next: 'Looks good – next' });
+  return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Tap anything (a wall, the floor, the door, the pass box, a pendant, the passage …) to see its photos, try it and choose its options.',
+    [box, partHost, bar, look, norms], { next: 'Looks good – next' });
 }
 
 function stepPlan(n, total) {
@@ -341,7 +375,7 @@ function summaryItems() {
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
     D.specialties.length && ['Specialty', D.specialties.join(', ')], (D.features.length || D.features_unsure) && ['Features', D.features.length ? `${D.features.length} selected` : 'needs advice'],
-    D.wall_finish && ['Walls', wallName()], Object.keys(D.videos || {}).length && ['Videos', Object.keys(D.videos).map(k => VIDEOS[k]?.title.split(' –')[0].replace('The ', '').replace(', explained', '')).join(', ')], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
+    D.wall_finish && ['Walls', wallName()], D.opts?.door_type && ['Door', DOOR_TYPES.find(x => x[0] === D.opts.door_type)?.[1]], D.opts?.floor_type && ['Floor type', FLOOR_TYPES.find(x => x[0] === D.opts.floor_type)?.[1]], Object.keys(D.videos || {}).length && ['Videos', Object.keys(D.videos).map(k => VIDEOS[k]?.title.split(' –')[0].replace('The ', '').replace(', explained', '')).join(', ')], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
 }
@@ -350,7 +384,7 @@ function summary() {
   const short = [D.ots && needsOts() ? `${D.ots} ${has('ot') ? 'OT' : 'room'}${D.ots > 1 ? 's' : ''}` : null, ...D.types.filter(t => t !== 'ot' || !needsOts()).map(typeName), D.specialties[0], { new: 'New build', renovation: 'Renovation' }[D.build]].filter(Boolean);
   const box = h('div.eq-sumcard', h('h2', '🏥 Your project'), items.length ? h('ul', items.map(([k, v]) => h('li', h('span', k), h('b', v)))) : h('div.empty', 'Your answers will appear here.'));
   const trust = config.trust?.length ? h('div.eq-sumcard', h('h2', `Why ${config.short || 'us'}`), h('ul.eq-trust', config.trust.map(t => h('li', t)))) : null;
-  $('eq-side').replaceChildren(box, trust);
+  if (!(partOpen && wide() && STEPS[S.step]?.id === '3d')) { $('eq-side').replaceChildren(box, trust); document.body.classList.remove('part-open'); }
   const pill = $('eq-pill');
   pill.hidden = !items.length || !!S.done;
   document.body.classList.toggle('has-pill', !pill.hidden);
@@ -411,6 +445,7 @@ function thanks() {
 function render() {
   const main = $('eq-main');
   if (viewer && STEPS[S.step]?.id !== '3d') { viewer.dispose?.(); viewer = null; }
+  partOpen = null;
   if (S.done) { main.replaceChildren(thanks()); $('eq-bar').style.width = '100%'; summary(); return; }
   const list = active();
   let i = list.findIndex(s => s.id === STEPS[S.step]?.id);
@@ -423,6 +458,7 @@ function render() {
 (async () => {
   try {
     config = await api('/config');
+    api('/part-photos').then(p => { PHOTOS = p || {}; }).catch(() => {});
     $('eq-company').textContent = config.short || config.company || 'WIESPL';
     if (config.tagline) $('eq-tagline').textContent = config.tagline;
     const tel = String(config.phone || '').split(/[,/]/)[0].replace(/[^\d+]/g, '');

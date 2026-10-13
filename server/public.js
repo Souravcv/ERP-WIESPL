@@ -8,8 +8,24 @@ import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
 import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
 import { VIDEOS } from '../public/js/explainers.js';
+import { publicPhotos, photoFile } from './photos.js';
 
 const SPEC_OK = SPECIALTIES.filter(s => s !== 'Other');
+const OPTS = {
+  door_type: ['sliding', 'swing', 'autoswing'], door_size: ['1200', '1500', '1800'], floor_type: ['conductive', 'homogeneous'],
+  surgeon_arms: [1, 2], anaes_arms: [1, 2], light_domes: [1, 2, 3], light_camera: ['yes', 'no'], laf_size: ['4 × 6 ft', '4 × 8 ft', '6 × 8 ft', '8 × 10 ft', '10 × 10 ft'],
+  xray_plates: [2, 3], storage_count: [1, 2], passbox_count: [1, 2, 3, 4], scrub_bays: [1, 2, 3], scrub_tap: ['sensor', 'foot', 'elbow'],
+  passage_finish: ['wood', 'ss', 'ppgi', 'glass'], passage_colour: null,
+};
+const cleanOpts = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([k, v]) => k in OPTS && (OPTS[k] ? OPTS[k].includes(v) : typeof v === 'string' && v.length < 30)));
+const OPT_LABEL = { sliding: 'Sliding door', swing: 'Swing door', autoswing: 'Automatic swing door', conductive: 'Antistatic conductive vinyl', homogeneous: 'Homogeneous vinyl' };
+const optsText = o => [
+  o.door_type && `door: ${OPT_LABEL[o.door_type]}${o.door_size ? ` ${o.door_size} × 2100 mm` : ''}`, o.floor_type && `floor: ${OPT_LABEL[o.floor_type]}`,
+  o.surgeon_arms && `surgeon pendant: ${o.surgeon_arms === 2 ? 'double' : 'single'} arm`, o.anaes_arms && `anaesthesia pendant: ${o.anaes_arms === 2 ? 'double' : 'single'} arm`,
+  o.light_domes && `OT light: ${['', 'single', 'double', 'triple'][o.light_domes]} dome${o.light_camera === 'yes' ? ' with camera' : ''}`, o.laf_size && `plenum ${o.laf_size}`,
+  o.xray_plates && `${o.xray_plates}-plate X-ray viewer`, o.storage_count && `${o.storage_count} storage cabinet(s)`, o.passbox_count && `${o.passbox_count} pass box(es)`,
+  o.scrub_bays && `${o.scrub_bays}-bay scrub (${o.scrub_tap || 'sensor'})`, o.passage_finish && `passage walls: ${{ wood: 'wooden finish', ss: 'SS 304', ppgi: 'PPGI', glass: 'glass' }[o.passage_finish]}${o.passage_colour ? ` (${o.passage_colour})` : ''}`,
+].filter(Boolean).join(' · ');
 const VIDEO_NAMES = Object.fromEntries(Object.entries(VIDEOS).map(([k, v]) => [k, v.title]));
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
@@ -51,6 +67,7 @@ function cleanData(d = {}) {
     whatsapp: !!d.whatsapp, email: clip(d.email, 120), best_time: clip(d.best_time, 40), contact_by: clip(d.contact_by, 20), notes: clip(d.notes, 1000),
     viewed_3d: !!d.viewed_3d, panel_colour: clip(d.panel_colour, 30),
     videos: Object.fromEntries(Object.entries(d.videos && typeof d.videos === 'object' ? d.videos : {}).filter(([k]) => VIDEO_NAMES[k]).map(([k, v]) => [k, Math.max(0, Math.min(100, Math.round(Number(v) || 0)))]).filter(([, v]) => v > 0)),
+    opts: cleanOpts(d.opts),
     wall_finish: clip(d.wall_finish, 12), wall_colour: clip(d.wall_colour, 30), floor_main: clip(d.floor_main, 30), floor_border: clip(d.floor_border, 30),
   };
 }
@@ -86,6 +103,7 @@ export function summaryText(d) {
     d.budget && `Budget: ${BUDGETS[d.budget]}`,
     `Contact: ${[d.phone, d.whatsapp && '(WhatsApp)', d.email].filter(Boolean).join(' ')}${d.best_time ? ` · best time: ${d.best_time}` : ''}${d.contact_by ? ` · prefers ${d.contact_by}` : ''}`,
     d.viewed_3d && `Explored the 3D view${d.wall_finish ? ` · walls: ${WALL_NAME[d.wall_finish] || d.wall_finish}${d.wall_colour && ['glass', 'wood'].includes(d.wall_finish) ? ` (${d.wall_colour})` : ''}` : ''}${d.floor_main ? ` · floor: ${d.floor_main} with ${d.floor_border} border` : ''}`,
+    Object.keys(d.opts || {}).length && `Choices: ${optsText(d.opts)}`,
     Object.keys(d.videos || {}).length && `Watched: ${Object.entries(d.videos).map(([k, p]) => `${VIDEO_NAMES[k]} (${p}%)`).join(', ')}`,
     d.notes && `Notes: ${d.notes}`,
   ].filter(Boolean).join('\n');
@@ -120,6 +138,8 @@ export function publicRouter() {
   const wrap = fn => async (req, res, next) => { try { const out = await fn(req, res); if (out !== undefined && !res.headersSent) res.json(out); } catch (e) { next(e); } };
 
   r.get('/config', wrap(() => publicConfig()));
+  r.get('/part-photos', wrap(() => publicPhotos()));
+  r.get('/part-photo/:id', (req, res, next) => { try { const p = photoFile(req.params.id); res.set('Cache-Control', 'public, max-age=86400'); res.type(p.mime).sendFile(p.full); } catch (e) { next(e); } });
 
   // Progress, saved after every step (also when the visitor never finishes).
   r.post('/lead', express.json({ limit: '50kb' }), wrap(req => {
@@ -226,6 +246,22 @@ export function briefFor(enquiryId, d) {
     if (specs.length) Object.assign(r, newRoom(i, { ...r, specialty: specs[i % specs.length], laf: undefined, air7: undefined, co2: undefined }), { name: `OT ${i + 1}` });
     if (d?.wall_finish && WALL_NAME[d.wall_finish]) { r.wall = WALL_NAME[d.wall_finish]; r.wall_colour = d.wall_colour || r.wall_colour; }
     if (d?.floor_main) { r.floor_main = d.floor_main; r.floor_border = d.floor_border || r.floor_border; }
+    const o = d?.opts || {};
+    if (o.door_type) r.door = { sliding: 'Hermetic sliding (automatic)', swing: 'Single leaf swing', autoswing: 'Automatic swing' }[o.door_type];
+    if (o.door_size) r.door_size = `${o.door_size} × 2100 mm`;
+    if (o.floor_type) r.floor_type = OPT_LABEL[o.floor_type];
+    if (o.surgeon_arms) r.pendant_surgeon = o.surgeon_arms === 2 ? 'Double arm' : 'Single arm';
+    if (o.anaes_arms) r.pendant_anaes = o.anaes_arms === 2 ? 'Double arm' : 'Single arm';
+    if (o.light_domes) r.ot_light = ['', 'Single dome', 'Double dome', 'Triple dome'][o.light_domes];
+    if (o.light_camera) r.camera = o.light_camera === 'yes' ? 'Yes' : 'No';
+    if (o.laf_size) r.laf = o.laf_size;
+    if (o.xray_plates) r.xray = `${o.xray_plates}-plate LED`;
+    if (o.storage_count) r.storage = o.storage_count;
+    if (o.passbox_count) r.passbox = o.passbox_count;
+    if (o.scrub_bays) r.scrub = `${o.scrub_bays} bay`;
+    if (o.scrub_tap) r.scrub_type = { sensor: 'Sensor', foot: 'Foot-operated', elbow: 'Elbow' }[o.scrub_tap];
+    if (o.passage_finish) r.passage_wall = { wood: 'Wooden finish (HPL)', ss: 'SS 304', ppgi: 'PPGI', glass: 'Toughened glass' }[o.passage_finish];
+    if (d?.features?.includes('SHRM – Smart Heat Recovery (WIESPL patent)')) r.shrm = 'Yes';
     return r;
   });
   const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build] }, rooms });
