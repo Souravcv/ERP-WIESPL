@@ -6,6 +6,9 @@ import { db, getSettings } from './db.js';
 import { insertRow, HttpError } from './crud.js';
 import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
+import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
+
+const SPEC_OK = SPECIALTIES.filter(s => s !== 'Other');
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const SYSTEM_USER = { name: 'Website form', role: 'admin' };
@@ -45,6 +48,7 @@ function cleanData(d = {}) {
     name: clip(d.name, 80), hospital: clip(d.hospital, 120), city: clip(d.city, 60), phone: clip(digits(d.phone), 16),
     whatsapp: !!d.whatsapp, email: clip(d.email, 120), best_time: clip(d.best_time, 40), contact_by: clip(d.contact_by, 20), notes: clip(d.notes, 1000),
     viewed_3d: !!d.viewed_3d, panel_colour: clip(d.panel_colour, 30),
+    wall_finish: clip(d.wall_finish, 12), wall_colour: clip(d.wall_colour, 30), floor_main: clip(d.floor_main, 30), floor_border: clip(d.floor_border, 30),
   };
 }
 
@@ -77,7 +81,7 @@ export function summaryText(d) {
     d.timeline && `Timeline: ${TIMELINES[d.timeline]}`,
     d.budget && `Budget: ${BUDGETS[d.budget]}`,
     `Contact: ${[d.phone, d.whatsapp && '(WhatsApp)', d.email].filter(Boolean).join(' ')}${d.best_time ? ` · best time: ${d.best_time}` : ''}${d.contact_by ? ` · prefers ${d.contact_by}` : ''}`,
-    d.viewed_3d && `Explored the 3D view${d.panel_colour ? ` (liked ${d.panel_colour} wall panels)` : ''}`,
+    d.viewed_3d && `Explored the 3D view${d.wall_finish ? ` · walls: ${WALL_NAME[d.wall_finish] || d.wall_finish}${d.wall_colour && ['glass', 'wood'].includes(d.wall_finish) ? ` (${d.wall_colour})` : ''}` : ''}${d.floor_main ? ` · floor: ${d.floor_main} with ${d.floor_border} border` : ''}`,
     d.notes && `Notes: ${d.notes}`,
   ].filter(Boolean).join('\n');
 }
@@ -139,7 +143,7 @@ export function publicRouter() {
     const lead = token && db.prepare('SELECT * FROM web_leads WHERE token = ?').get(token);
     if (lead?.enquiry_id) {
       const e = db.prepare('SELECT enquiry_no FROM enquiries WHERE id = ?').get(lead.enquiry_id);
-      return { ref: e?.enquiry_no, already: true, estimate: estimate(d) };
+      return { ref: e?.enquiry_no, already: true, estimate: estimate(d), brief: briefFor(lead.enquiry_id, d) };
     }
     const score = leadScore(d);
     const types = d.types.map(t => (t === 'other' && d.other_type ? d.other_type : PROJECT_TYPES[t]));
@@ -156,7 +160,7 @@ export function publicRouter() {
       .run(token || crypto.randomBytes(18).toString('base64url'), JSON.stringify(d), d.name, d.phone, String(req.ip || '').slice(0, 60), enq.id);
     notify({ fn: 'notify_enquiry', kind: 'enquiries', title: `🌐 New ${grade(score).toLowerCase()} website enquiry: ${types.join(', ')}${d.city ? ` – ${d.city}` : ''}`,
       body: `${d.name}${d.hospital ? `, ${d.hospital}` : ''} · ${d.phone}${d.whatsapp ? ' (WhatsApp)' : ''} · score ${score}`, link: `#/view/enquiries/${enq.id}` }, SYSTEM_USER);
-    return { ref: enq.enquiry_no, score, estimate: estimate(d) };
+    return { ref: enq.enquiry_no, score, estimate: estimate(d), brief: briefFor(enq.id, d) };
   }));
 
   // Layout / drawing chosen on the form, sent right after submitting.
@@ -172,7 +176,56 @@ export function publicRouter() {
     if (!OK_FILE.test(name)) throw new HttpError(400, 'Allowed: PDF, images, AutoCAD (DWG / DXF), Word, Excel or ZIP');
     return saveAttachment('enquiries', lead.enquiry_id, { filename: name, mime: 'application/octet-stream', note: 'Layout / drawing sent with the website enquiry' }, req.body, SYSTEM_USER);
   }));
+  // ---- detailed requirement brief (second form), opened with its own link
+  const briefRow = req => { const t = String(req.query.t || req.body?.t || ''); const b = /^[A-Za-z0-9_-]{20,64}$/.test(t) && db.prepare('SELECT * FROM design_briefs WHERE token = ?').get(t); if (!b) throw new HttpError(404, 'This link is not valid. Please ask WIESPL for a new one.'); return b; };
+  r.get('/brief', wrap(req => {
+    limit(req, 'brief', 120, 10);
+    const b = briefRow(req);
+    const e = db.prepare('SELECT enquiry_no, hospital_name, place, doctor_name, doctor_phone, type_of_work FROM enquiries WHERE id = ?').get(b.enquiry_id) || {};
+    let data = null; try { data = JSON.parse(b.data || 'null'); } catch { /* start again */ }
+    return { ref: e.enquiry_no, enquiry: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, types: e.type_of_work }, data, submitted_at: b.submitted_at };
+  }));
+  r.post('/brief', express.json({ limit: '120kb' }), wrap(req => {
+    limit(req, 'brief-save', 240, 10);
+    const b = briefRow(req);
+    db.prepare("UPDATE design_briefs SET data = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(JSON.stringify(cleanBrief(req.body?.data)), b.id);
+    return { ok: true };
+  }));
+  r.post('/brief/submit', express.json({ limit: '120kb' }), wrap(req => {
+    limit(req, 'brief-submit', 10, 60);
+    const b = briefRow(req);
+    const d = cleanBrief(req.body?.data);
+    if (!d.rooms.length) throw new HttpError(400, 'Add at least one OT');
+    const text = briefText(d);
+    db.prepare("UPDATE design_briefs SET data = ?, updated_at = datetime('now','localtime'), submitted_at = datetime('now','localtime'), submitted_by = ? WHERE id = ?").run(JSON.stringify(d), [d.project.filled_by, d.project.filler_name].filter(Boolean).join(': ') || null, b.id);
+    db.prepare('UPDATE enquiries SET design_brief = ? WHERE id = ?').run(text, b.enquiry_id);
+    const e = db.prepare('SELECT enquiry_no, hospital_name FROM enquiries WHERE id = ?').get(b.enquiry_id) || {};
+    notify({ fn: 'notify_enquiry', kind: 'enquiries', title: `📋 Detailed requirements received: ${e.enquiry_no || ''}${e.hospital_name ? ' – ' + e.hospital_name : ''}`,
+      body: `${d.rooms.length} OT(s) · filled by ${d.project.filled_by || 'client'}${d.project.filler_name ? ' (' + d.project.filler_name + ')' : ''}`, link: `#/view/enquiries/${b.enquiry_id}` }, SYSTEM_USER);
+    return { ok: true, ref: e.enquiry_no };
+  }));
   return r;
+}
+
+const WALL_NAME = { ss: 'SS 304', ppgi: 'PPGI', glass: 'Toughened glass', wood: 'Wooden finish (HPL)' };
+// One brief link per enquiry, started with what the client already told us on the first form.
+export function briefFor(enquiryId, d) {
+  const old = db.prepare('SELECT token FROM design_briefs WHERE enquiry_id = ?').get(enquiryId);
+  if (old) return old.token;
+  const token = crypto.randomBytes(18).toString('base64url');
+  const e = db.prepare('SELECT hospital_name, place, doctor_name, doctor_phone, capacity FROM enquiries WHERE id = ?').get(enquiryId) || {};
+  const n = Math.max(1, Math.min(12, Number(d?.ots) || Number(String(e.capacity || '').match(/(\d+)\s*OT/i)?.[1]) || 1));
+  const specs = (d?.specialties || []).filter(s => SPEC_OK.includes(s));
+  const rooms = Array.from({ length: n }, (_, i) => {
+    const r = newRoom(i, null);
+    if (specs.length) Object.assign(r, newRoom(i, { ...r, specialty: specs[i % specs.length], laf: undefined, air7: undefined, co2: undefined }), { name: `OT ${i + 1}` });
+    if (d?.wall_finish && WALL_NAME[d.wall_finish]) { r.wall = WALL_NAME[d.wall_finish]; r.wall_colour = d.wall_colour || r.wall_colour; }
+    if (d?.floor_main) { r.floor_main = d.floor_main; r.floor_border = d.floor_border || r.floor_border; }
+    return r;
+  });
+  const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build] }, rooms });
+  db.prepare('INSERT INTO design_briefs (token, enquiry_id, data) VALUES (?, ?, ?)').run(token, enquiryId, JSON.stringify(data));
+  return token;
 }
 
 // Visitors who started the form but did not finish (for sales to follow up).

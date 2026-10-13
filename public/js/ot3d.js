@@ -16,12 +16,15 @@ function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.
 // Parts of the system that are not on the feature list but are explained in the 3D view.
 const PARTS = {
   risers: { label: 'Return air risers', hint: 'Used air leaves the OT low down near the floor, so contaminated air is drawn away from the patient and back to the AHU.' },
-  ahu_pre: { label: '1 · Pre-filter', hint: 'First stage: catches dust and larger particles from fresh and return air.' },
-  ahu_fine: { label: '2 · Fine filter', hint: 'Second stage: removes finer dust so the HEPA filters last longer.' },
-  ahu_coil: { label: '3 · Cooling coil', hint: 'Cools the air and removes moisture, keeping the OT at about 20–22 °C and below 55% humidity.' },
-  ahu_fan: { label: '4 · Blower', hint: 'Pushes the air through the ducts and HEPA filters at the right speed (variable, with a quiet night mode).' },
-  ahu_heat: { label: '5 · Heater & UV lamp', hint: 'Re-heats the air for exact humidity control; the UV lamp keeps the coil free of germs.' },
+  ahu_pre: { label: '1 · Pre-filter', hint: 'Washable flange-type filter (90% down to 10 microns, as NABH asks): catches dust and larger particles from fresh and return air.' },
+  ahu_fine: { label: '2 · Fine filter', hint: 'Second washable filter (99% down to 5 microns): removes finer dust so the HEPA filters at the OT last much longer.' },
+  ahu_coil: { label: '3 · Cooling coil', hint: 'Chilled by the outdoor unit: cools the air and wrings out moisture, so the OT stays at 21 ± 3 °C (18 ± 2 °C for joint replacement) and 20–60% RH.' },
+  shrm: { label: '4 · SHRM (WIESPL patent)', icon: '♻️', hint: 'Smart Heat Recovery Management: after the coil has dried the air, SHRM re-warms it with heat recovered inside the system instead of electric heaters. Humidity is held precisely with no extra electrical load, cutting power and running costs.' },
+  ahu_fan: { label: '5 · Blower (VFD)', hint: 'Pushes the air through the ducts and HEPA filters. A variable-frequency drive holds the set air velocity and slows down at night (NABH allows air changes to drop to 25% when the OT is not in use).' },
+  ahu_heat: { label: '6 · UV lamps', hint: 'UV-C lamps keep the coil and drain pan free of germs. Without SHRM an electric heater bank (shown red) sits here to re-heat the air.' },
   odu: { label: 'Outdoor unit', hint: 'The compressor outside the building. Copper pipes carry refrigerant to the cooling coil in the AHU.' },
+  ducts: { label: 'Supply & return ducts', hint: 'Insulated GI ducts: blue arrows carry clean air to the HEPA plenum, orange arrows bring room air back to the AHU.' },
+  velocity: { label: 'Air velocity sensor', icon: '📟', hint: 'Measures how fast the clean air leaves the plenum. NABH recommends 25–35 feet per minute over the table; the reading shows on the surgeon’s panel and the AHU blower adjusts to hold it.' },
   passage: { label: 'Clean passage', hint: 'Staff reach the OT through a clean passage; scrubbing is done here, outside the theatre.' },
   table: { label: 'Operating table', hint: 'Sits directly under the laminar flow plenum, inside the column of clean air.' },
 };
@@ -39,8 +42,16 @@ function fallback(box, opts, keys) {
   return { dispose() {} };
 }
 
-// Wall panel colours the visitor can try (PPGL / SS finishes).
-export const PANEL_COLOURS = [['Stainless steel', 0xd3d9df, 0.85, 0.3], ['Gloss white', 0xf0f2f4, 0.1, 0.2], ['Sky blue', 0x5d8fc6, 0.12, 0.42], ['Mint green', 0x86c2a8, 0.12, 0.42]];
+// Wall panel finishes, chosen by tapping a wall. Colours: [name, swatch, tint over the texture].
+export const WALL_FINISHES = [
+  { key: 'ss', name: 'Stainless steel (SS 304)', hint: 'Brushed SS 304 skin on 50 mm PUF panels. Natural steel: no colour to choose.', colours: [['Natural steel', 0xd3d9df]], metal: 0.85, rough: 0.3 },
+  { key: 'ppgi', name: 'PPGI', hint: 'Pre-painted galvanised steel panels with an antibacterial coat, in one off-white shade.', colours: [['Off-white', 0xeceee8]], metal: 0.1, rough: 0.35 },
+  { key: 'glass', name: 'Toughened glass', hint: 'Back-painted 8 mm toughened glass panels: seamless, glossy and easy to wipe.', colours: [['Ivory white', 0xece3cc], ['Sky blue', 0x6fa8dc], ['Mint green', 0x7cc7a4]], metal: 0, rough: 0.12 },
+  { key: 'wood', name: 'Wooden finish (HPL)', hint: 'High-pressure laminate with a warm wood look, as in WIESPL passages and lobbies.', colours: [['Light oak', 0xc9a57c, 0xffffff], ['Walnut', 0x8a6142, 0x9c7c64]], metal: 0.05, rough: 0.5 },
+];
+// Seamless vinyl floor: the client picks two colours (main field and border).
+export const FLOOR_COLOURS = [['Beige', '#cbc6b9'], ['Grey', '#a7b3c0'], ['Sky blue', '#8fb0cf'], ['Aqua green', '#8cc7b5'], ['Navy blue', '#3e5f8a'], ['Light grey', '#d5dae0']];
+const finishOf = (key, colour) => { const f = WALL_FINISHES.find(x => x.key === key) || WALL_FINISHES[0]; return [f, f.colours.find(c => c[0] === colour) || f.colours[0]]; };
 
 // Scenic digital wallpaper (mountains, lake, meadow) as used on WIESPL OT and passage walls.
 function drawLandscape(g, w, h) {
@@ -65,7 +76,7 @@ export async function mount3D(box, opts) {
   if (!box.isConnected) return { dispose() {} };
   const T = window.THREE;
   const small = Math.min(box.clientWidth, box.clientHeight) < 520 || /Mobi|Android/i.test(navigator.userAgent);
-  const info = k => opts.info[k] || PARTS[k];
+  const info = k => (anatomyTags.has(k) && PARTS[k]) || opts.info[k] || PARTS[k];
 
   // ------------------------------------------------------------ renderer, environment, lights
   box.replaceChildren();
@@ -102,12 +113,13 @@ export async function mount3D(box, opts) {
   // ------------------------------------------------------------ materials & geometry helpers
   const tex = (w, h, draw, rep) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d'), w, h); const t = new T.CanvasTexture(c); t.encoding = T.sRGBEncoding; t.anisotropy = 4; if (rep) { t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(rep[0], rep[1]); } return t; };
   const brushed = tex(256, 256, (g, w, h) => { g.fillStyle = '#cfd6de'; g.fillRect(0, 0, w, h); for (let i = 0; i < 1600; i++) { const y = Math.random() * h; g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '90,100,115'},${Math.random() * 0.05})`; g.fillRect(0, y, w, 0.6 + Math.random()); } }, [3, 3]);
+  const wood = tex(512, 512, (g, w, h) => { g.fillStyle = '#c9a57c'; g.fillRect(0, 0, w, h); for (let i = 0; i < 160; i++) { g.strokeStyle = `rgba(${Math.random() > 0.5 ? '120,80,40' : '235,205,170'},${0.08 + Math.random() * 0.1})`; g.lineWidth = 1 + Math.random() * 2; const x = Math.random() * w; g.beginPath(); g.moveTo(x, 0); g.bezierCurveTo(x + 6, h * 0.3, x - 6, h * 0.7, x + 3, h); g.stroke(); } g.fillStyle = 'rgba(80,55,30,.35)'; for (let x = 0; x < w; x += 128) g.fillRect(x, 0, 2, h); }, [2, 1]);
   const M = {
     ss: new T.MeshStandardMaterial({ color: 0xdfe4ea, map: brushed, metalness: 0.9, roughness: 0.28, envMapIntensity: 1.1 }),
     ssDark: new T.MeshStandardMaterial({ color: 0x9aa4b0, metalness: 0.85, roughness: 0.35 }),
     chrome: new T.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.12 }),
     panel: new T.MeshStandardMaterial({ color: 0xd3d9df, metalness: 0.85, roughness: 0.3, envMapIntensity: 0.9 }),
-    cut: new T.MeshStandardMaterial({ color: (PANEL_COLOURS.find(c => c[0] === opts.panelColour) || PANEL_COLOURS[0])[1], metalness: 0.2, roughness: 0.5, envMapIntensity: 0.4 }),
+    cut: new T.MeshStandardMaterial({ color: 0xd3d9df, metalness: 0.2, roughness: 0.5, envMapIntensity: 0.4 }),
     trim: new T.MeshStandardMaterial({ color: 0xe9edf2, metalness: 0.2, roughness: 0.4 }),
     seam: new T.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.4, roughness: 0.5 }),
     white: new T.MeshStandardMaterial({ color: 0xf2f4f7, metalness: 0.05, roughness: 0.45, envMapIntensity: 0.45 }),
@@ -125,11 +137,17 @@ export async function mount3D(box, opts) {
     copper: new T.MeshStandardMaterial({ color: 0xc8794a, metalness: 0.9, roughness: 0.3 }),
     blue: new T.MeshStandardMaterial({ color: 0x2f7fd8, metalness: 0.2, roughness: 0.45 }),
   };
-  const setFinish = name => {
-    const c = PANEL_COLOURS.find(x => x[0] === name) || PANEL_COLOURS[0];
-    for (const m of [M.panel, M.cut]) { m.color.setHex(c[1]); m.metalness = c[2]; m.roughness = c[3]; m.map = c[0] === 'Stainless steel' ? brushed : null; m.envMapIntensity = c[2] > 0.5 ? 0.9 : 0.35; m.needsUpdate = true; }
+  const look = { wall: { finish: 'ss', colour: 'Natural steel' }, floor: { main: 'Beige', border: 'Grey' } };
+  const setFinish = (key, colour) => {
+    const [f, c] = finishOf(key, colour);
+    look.wall = { finish: f.key, colour: c[0] };
+    for (const m of [M.panel, M.cut]) {
+      m.color.setHex(f.key === 'wood' ? c[2] : c[1]); m.metalness = f.metal; m.roughness = f.rough;
+      m.map = f.key === 'ss' ? brushed : f.key === 'wood' ? wood : null;
+      m.envMapIntensity = f.key === 'ss' ? 0.9 : f.key === 'glass' ? 0.55 : 0.35; m.needsUpdate = true;
+    }
   };
-  setFinish(opts.panelColour);
+  setFinish(opts.wall?.finish, opts.wall?.colour);
   const mats = [];
   const C = (color, o = {}) => { const m = new T.MeshStandardMaterial({ color, metalness: o.metal ?? 0.1, roughness: o.rough ?? 0.5, transparent: o.opacity != null, opacity: o.opacity ?? 1, depthWrite: o.opacity == null, emissive: o.emissive ?? 0, emissiveIntensity: o.ei ?? 1, side: o.side ?? T.FrontSide }); mats.push(m); return m; };
   const put = (parent, geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = m.receiveShadow = !mat.transparent; parent.add(m); return m; };
@@ -152,7 +170,8 @@ export async function mount3D(box, opts) {
   const comps = {};
   const comp = key => (comps[key] ||= { group: Object.assign(new T.Group(), { name: key }), anchor: new T.Vector3(), view: null });
   const extras = [];      // only in the anatomy view (above the ceiling)
-  const anatomyTags = new Set(['ahu_pre', 'ahu_fine', 'ahu_coil', 'ahu_fan', 'ahu_heat', 'odu']);
+  const anatomyTags = new Set(['ahu_pre', 'ahu_fine', 'ahu_coil', 'shrm', 'ahu_fan', 'ahu_heat', 'odu', 'ducts']);
+  const AHU_KEYS = new Set(['ahu', 'ahu_pre', 'ahu_fine', 'ahu_coil', 'shrm', 'ahu_fan', 'ahu_heat']);
   const spinning = [];    // blower wheel, ODU fan
   const flows = [];       // animated arrows along the ducts
   const W = isWard ? 9 : 6, D = 6, H = 3;
@@ -176,15 +195,24 @@ export async function mount3D(box, opts) {
 
   // ------------------------------------------------------------ room shell: modular panels, coving, floor, ceiling
   const panels = comp('panels');
-  const floorTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#5f84a8'; g.fillRect(0, 0, w, h); for (let i = 0; i < 4000; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '40,60,90'},${Math.random() * 0.09})`; g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6); } }, [W / 3, D / 3]);
   const flooring = comp('flooring');
-  const patterned = tex(1024, 1024, (g, w, h) => {
+  // seamless vinyl: border colour round the edge with a darker inlay line, main colour in the field under the table
+  const paintFloor = (g, w, h, main, border) => {
+    const hex = n => (FLOOR_COLOURS.find(c => c[0] === n) || FLOOR_COLOURS[0])[1];
     const speck = (x0, y0, ww, hh, base, n) => { g.fillStyle = base; g.fillRect(x0, y0, ww, hh); for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '60,70,85'},${Math.random() * 0.14})`; g.fillRect(x0 + Math.random() * ww, y0 + Math.random() * hh, 2, 2); } };
-    speck(0, 0, w, h, '#a7b3c0', 26000);
-    const band = isWard ? 0 : 0.17, inner = isWard ? 0 : 0.21;
-    if (!isWard) { g.fillStyle = '#8fb0cf'; g.beginPath(); g.roundRect ? g.roundRect(w * band, h * band, w * (1 - 2 * band), h * (1 - 2 * band), 40) : g.rect(w * band, h * band, w * (1 - 2 * band), h * (1 - 2 * band)); g.fill(); speck(w * inner, h * inner, w * (1 - 2 * inner), h * (1 - 2 * inner), '#cbc6b9', 14000); }
-  });
-  put(flooring.group, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ map: isWard ? floorTex : patterned, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.25 }), 0, 0, 0, -Math.PI / 2);
+    const rr = (x, y, ww, hh, r) => { g.beginPath(); if (g.roundRect) g.roundRect(x, y, ww, hh, r); else g.rect(x, y, ww, hh); };
+    speck(0, 0, w, h, hex(border), 26000);
+    const band = isWard ? 0.06 : 0.17, inner = band + 0.035;
+    g.strokeStyle = 'rgba(30,45,70,.35)'; g.lineWidth = 10; rr(w * band, h * band, w * (1 - 2 * band), h * (1 - 2 * band), 40); g.stroke();
+    g.save(); rr(w * inner, h * inner, w * (1 - 2 * inner), h * (1 - 2 * inner), 30); g.clip(); speck(0, 0, w, h, hex(main), 22000); g.restore();
+  };
+  const floorTex = tex(1024, 1024, (g, w, h) => paintFloor(g, w, h, opts.floor?.main || look.floor.main, opts.floor?.border || look.floor.border));
+  const setFloor = (main, border) => {
+    look.floor = { main: FLOOR_COLOURS.some(c => c[0] === main) ? main : look.floor.main, border: FLOOR_COLOURS.some(c => c[0] === border) ? border : look.floor.border };
+    paintFloor(floorTex.image.getContext('2d'), floorTex.image.width, floorTex.image.height, look.floor.main, look.floor.border); floorTex.needsUpdate = true;
+  };
+  setFloor(opts.floor?.main, opts.floor?.border);
+  put(flooring.group, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ map: floorTex, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.25 }), 0, 0, 0, -Math.PI / 2);
   flooring.anchor.set(W / 2 - 1.2, 0.05, D / 2 - 1.2);
   const slabTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#6f7884'; g.fillRect(0, 0, w, h); g.fillStyle = '#58606b'; for (let x = 40; x < w; x += 92) for (let y = 40; y < h; y += 92) { g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); } });
   put(flooring.group, B(W + 0.14, 0.18, D + 0.14), new T.MeshStandardMaterial({ map: slabTex, metalness: 0.35, roughness: 0.55 }), 0, -0.095, 0);
@@ -193,7 +221,7 @@ export async function mount3D(box, opts) {
     const n = Math.round(len / 1.2), pw = len / n;
     for (let i = 0; i < n; i++) {
       const c = -len / 2 + pw * (i + 0.5);
-      const p = put(panels.group, B(pw - 0.008, h, thick), M.panel);
+      const p = put(panels.group, B(pw - 0.008, h, thick), M.panel); p.userData.wall = true;
       if (axis === 'x') p.position.set(c, h / 2, fixed); else { p.position.set(fixed, h / 2, c); p.rotation.y = Math.PI / 2; }
     }
   };
@@ -208,7 +236,7 @@ export async function mount3D(box, opts) {
     let off = 0;
     for (const [m, t] of layers) {
       const c = fixed - off - t / 2; // layers stack inwards from the outside face
-      put(panels.group, axis === 'x' ? B(len, cutH, t) : B(t, cutH, len), m, axis === 'x' ? 0 : c, cutH / 2, axis === 'x' ? c : 0);
+      put(panels.group, axis === 'x' ? B(len, cutH, t) : B(t, cutH, len), m, axis === 'x' ? 0 : c, cutH / 2, axis === 'x' ? c : 0).userData.wall = true;
       off += t;
     }
   };
@@ -248,30 +276,38 @@ export async function mount3D(box, opts) {
   put(ahuBody, B(2.7, 0.06, 1.2), M.ahu, 0, -0.62, 0); put(ahuBody, B(2.7, 0.06, 1.2), M.ahu, 0, 0.62, 0);
   put(ahuBody, B(2.7, 1.3, 0.05), M.ahu, 0, 0, -0.58); put(ahuBody, B(0.05, 1.3, 1.2), M.ahu, -1.33, 0, 0); put(ahuBody, B(0.05, 1.3, 1.2), M.ahu, 1.33, 0, 0);
   put(ahuBody, B(2.7, 1.3, 0.02), M.glass, 0, 0, 0.6);
-  for (const x of [-1.33, -0.75, -0.2, 0.55, 1.33]) put(ahuBody, B(0.04, 1.32, 1.22), M.ssDark, x, 0, 0);
+  for (const x of [-1.33, -0.62, 0.22, 1.33]) put(ahuBody, B(0.04, 1.32, 1.22), M.ssDark, x, 0, 0);
   put(ahuBody, B(2.8, 0.14, 1.3), M.dark, 0, -0.72, 0);
   const pleat = tex(128, 128, (g, w, h) => { g.fillStyle = '#f2f2ea'; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x += 8) { g.fillStyle = '#c9c9bd'; g.fillRect(x, 0, 3, h); } });
   const fine = tex(128, 128, (g, w, h) => { g.fillStyle = '#e9eef7'; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x += 5) { g.fillStyle = '#b4c1d6'; g.fillRect(x, 0, 2, h); } });
   const fins = tex(128, 128, (g, w, h) => { g.fillStyle = '#c7d0da'; g.fillRect(0, 0, w, h); for (let x = 0; x < w; x += 3) { g.fillStyle = '#8e9aa8'; g.fillRect(x, 0, 1, h); } g.strokeStyle = '#b8743f'; g.lineWidth = 5; for (let y = 12; y < h; y += 22) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); } });
-  const stage = (key, x, mat, w = 0.08) => { const c = comp(key); put(c.group, B(w, 1.1, 1.0), mat); c.group.position.set(AX + x, AY, AZ); c.anchor.set(AX + x, AY + 0.82, AZ + 0.6); extras.push(c.group); };
-  stage('ahu_pre', -1.05, new T.MeshStandardMaterial({ map: pleat, roughness: 0.9 }));
-  stage('ahu_fine', -0.48, new T.MeshStandardMaterial({ map: fine, roughness: 0.9 }));
-  stage('ahu_coil', 0.12, new T.MeshStandardMaterial({ map: fins, metalness: 0.6, roughness: 0.4 }), 0.22);
+  // every stage remembers where it sits, so a double tap can pull the AHU apart (exploded view)
+  const ahuParts = [];
+  const part = (c, x, y = 0) => { c.group.position.set(AX + x, AY + y, AZ); c.anchor.set(AX + x, AY + 0.82, AZ + 0.6); extras.push(c.group); ahuParts.push({ c, x, base: c.group.position.clone() }); };
+  const stage = (key, x, mat, w = 0.08) => { const c = comp(key); put(c.group, B(w, 1.1, 1.0), mat); put(c.group, B(w + 0.03, 1.14, 0.03), M.ssDark, 0, 0, 0.5); part(c, x); return c; };
+  stage('ahu_pre', -1.12, new T.MeshStandardMaterial({ map: pleat, roughness: 0.9 }));
+  stage('ahu_fine', -0.82, new T.MeshStandardMaterial({ map: fine, roughness: 0.9 }));
+  stage('ahu_coil', -0.4, new T.MeshStandardMaterial({ map: fins, metalness: 0.6, roughness: 0.4 }), 0.22);
+  { // SHRM: WIESPL's patented heat-recovery coil (does the re-heating without an electric heater)
+    const c = stage('shrm', 0.02, new T.MeshStandardMaterial({ map: fins, color: 0xbfe8c9, metalness: 0.55, roughness: 0.4 }), 0.2);
+    for (let i = 0; i < 5; i++) put(c.group, Cy(0.022, 0.022, 0.98, 10), M.copper, 0.12, -0.42 + i * 0.21, 0, Math.PI / 2);
+    const badge = tex(256, 96, g => { g.fillStyle = '#1e7d3a'; g.fillRect(0, 0, 256, 96); g.fillStyle = '#fff'; g.font = 'bold 50px sans-serif'; g.fillText('SHRM', 58, 64); });
+    put(c.group, new T.PlaneGeometry(0.34, 0.13), new T.MeshBasicMaterial({ map: badge, toneMapped: false }), 0, 0.42, 0.53);
+  }
   { // blower wheel (spins)
-    const c = comp('ahu_fan'); c.group.position.set(AX + 0.85, AY - 0.05, AZ); extras.push(c.group);
+    const c = comp('ahu_fan'); part(c, 0.66, -0.05);
     put(c.group, Cy(0.36, 0.36, 0.5, 28, true), M.ssDark, 0, 0, 0, Math.PI / 2);
     const wheel = new T.Group(); c.group.add(wheel);
     for (let i = 0; i < 14; i++) { const a = i / 14 * Math.PI * 2; const b = put(wheel, B(0.03, 0.2, 0.42), M.chrome, Math.cos(a) * 0.26, Math.sin(a) * 0.26, 0); b.rotation.z = a + 0.4; }
     put(wheel, Cy(0.06, 0.06, 0.46, 12), M.dark, 0, 0, 0, Math.PI / 2);
     spinning.push([wheel, 'z', 9]);
-    c.anchor.set(AX + 0.85, AY + 0.82, AZ + 0.6);
   }
-  { // heater rods + UV lamp
-    const c = comp('ahu_heat'); c.group.position.set(AX + 1.18, AY, AZ); extras.push(c.group);
-    for (let i = 0; i < 4; i++) put(c.group, Cy(0.018, 0.018, 0.95, 10), C(0xd9532b, { emissive: 0xff5a1f, ei: 0.6, metal: 0.6 }), 0, -0.35 + i * 0.22, 0, Math.PI / 2);
-    put(c.group, Cy(0.022, 0.022, 0.9, 10), new T.MeshBasicMaterial({ color: 0xb48cff, toneMapped: false }), -0.08, 0.45, 0, Math.PI / 2);
-    c.anchor.set(AX + 1.18, AY + 0.82, AZ + 0.6);
+  { // UV lamps, plus the electric heater bank only when SHRM is not chosen
+    const c = comp('ahu_heat'); part(c, 1.16);
+    if (!opts.features.includes('shrm')) for (let i = 0; i < 4; i++) put(c.group, Cy(0.018, 0.018, 0.95, 10), C(0xd9532b, { emissive: 0xff5a1f, ei: 0.6, metal: 0.6 }), 0, -0.3 + i * 0.2, 0, Math.PI / 2);
+    for (const y of [0.45, -0.45]) put(c.group, Cy(0.022, 0.022, 0.9, 10), new T.MeshBasicMaterial({ color: 0xb48cff, toneMapped: false }), -0.06, y, 0, Math.PI / 2);
   }
+  ahuParts.push({ c: { group: ahuBody, anchor: new T.Vector3() }, x: 0, base: ahuBody.position.clone(), casing: true });
   ahu.anchor.set(AX - 0.9, AY + 0.9, AZ);
   { // outdoor unit with spinning fan and copper pipes to the coil
     const c = comp('odu'); extras.push(c.group);
@@ -285,10 +321,11 @@ export async function mount3D(box, opts) {
     put(c.group, new T.TubeGeometry(pipe, 40, 0.02, 8), M.copper);
     put(c.group, new T.TubeGeometry(new T.CatmullRomCurve3(pipe.points.map(p => p.clone().add(V(0, 0.08, 0)))), 40, 0.015, 8), M.copper);
     c.anchor.set(ox, oy + 0.7, oz);
+    ahuParts.push({ c: { group: c.group, anchor: new T.Vector3() }, x: 0, base: c.group.position.clone(), odu: true }); // steps aside when the AHU is taken apart
   }
   // rectangular flanged ducts with moving arrows (blue = clean supply air, orange = return air)
   const duct = (pts, w, h, color) => {
-    const g = new T.Group(); ahu.group.add(g); extras.push(g);
+    const g = new T.Group(); comp('ducts').group.add(g); extras.push(g);
     for (let i = 0; i < pts.length - 1; i++) {
       const a = pts[i], b = pts[i + 1], len = a.distanceTo(b);
       const m = put(g, B(w, h, len + h * 0.5), M.duct); m.position.copy(a).add(b).multiplyScalar(0.5); m.lookAt(b);
@@ -369,6 +406,15 @@ export async function mount3D(box, opts) {
     for (const [x, z, w, d] of [[0, 0.97, 2.5, 0.01], [0, -0.97, 2.5, 0.01], [1.27, 0, 0.01, 1.94], [-1.27, 0, 0.01, 1.94]]) put(laf.group, B(w, 0.25, d), M.glass, x, H - 0.39, z);
     laf.anchor.set(-1.25, H - 0.08, 0.98); hepa.anchor.set(1.05, H - 0.32, 0.7);
     laf.view = [V(3.3, 1.35, 3.5), V(0, 1.75, 0)]; hepa.view = [V(1.6, 0.95, 1.8), V(0, 2.75, 0)];
+    { // small air-velocity sensor hanging from the plenum edge
+      const vs = comp('velocity'), sx0 = 1.08, sz0 = 0.8, top = H - 0.27;
+      put(vs.group, RB(0.09, 0.06, 0.05, 0.012), M.white, sx0, top - 0.03, sz0);
+      put(vs.group, Cy(0.006, 0.006, 0.14, 8), M.chrome, sx0, top - 0.13, sz0);
+      put(vs.group, new T.SphereGeometry(0.016, 14, 10), M.ssDark, sx0, top - 0.205, sz0);
+      put(vs.group, new T.PlaneGeometry(0.012, 0.012), new T.MeshBasicMaterial({ color: 0x2ecc71, toneMapped: false }), sx0, top - 0.03, sz0 + 0.0255);
+      vs.anchor.set(sx0, top - 0.24, sz0);
+      vs.view = [V(1.75, 2.0, 1.55), V(sx0, top - 0.12, sz0)];
+    }
     // laminar air: soft particles falling straight down, spreading out once they pass the table
     const n = small ? 420 : 760, pos = new Float32Array(n * 3), vel = new Float32Array(n);
     const reset = (i, anyY) => { pos[i * 3] = (Math.random() - 0.5) * 2.25; pos[i * 3 + 1] = anyY ? 0.6 + Math.random() * 2.1 : H - 0.28; pos[i * 3 + 2] = (Math.random() - 0.5) * 1.65; vel[i] = 0.45 + Math.random() * 0.35; };
@@ -538,7 +584,6 @@ export async function mount3D(box, opts) {
     // ---- clean passage outside the door, with the scrub station (scrubbing is done outside the OT)
     const PW = 2.3, PX = -W / 2 - PW / 2 - 0.03;
     const passage = comp('passage');
-    const wood = tex(512, 512, (g, w, h) => { g.fillStyle = '#c9a57c'; g.fillRect(0, 0, w, h); for (let i = 0; i < 160; i++) { g.strokeStyle = `rgba(${Math.random() > 0.5 ? '120,80,40' : '235,205,170'},${0.08 + Math.random() * 0.1})`; g.lineWidth = 1 + Math.random() * 2; const x = Math.random() * w; g.beginPath(); g.moveTo(x, 0); g.bezierCurveTo(x + 6, h * 0.3, x - 6, h * 0.7, x + 3, h); g.stroke(); } g.fillStyle = 'rgba(80,55,30,.35)'; for (let x = 0; x < w; x += 128) g.fillRect(x, 0, 2, h); }, [2, 1]);
     const woodMat = new T.MeshStandardMaterial({ map: wood, roughness: 0.55, metalness: 0.05 });
     put(passage.group, new T.PlaneGeometry(PW, D), new T.MeshStandardMaterial({ map: tex(512, 512, (g, w, h) => { g.fillStyle = '#b9c4cf'; g.fillRect(0, 0, w, h); for (let i = 0; i < 5000; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '70,85,105'},${Math.random() * 0.12})`; g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6); } }, [1, 2]), roughness: 0.4 }), PX, 0.001, 0, -Math.PI / 2);
     put(passage.group, B(PW + 0.1, 0.18, D + 0.14), flooring.group.children[1]?.material || M.dark, PX, -0.095, 0);
@@ -678,24 +723,62 @@ export async function mount3D(box, opts) {
     t.onclick = e => { e.stopPropagation(); stopTour(); showKey(key); };
     tags[key] = t; box.append(t);
   }
-  const hintEl = el('div', 'hint3d', opts.moreBeds ? `Showing 6 of ${opts.moreBeds + 6} beds · drag to turn` : 'Drag to turn · tap a part');
-  box.append(hintEl, card);
-  const narrow = box.clientWidth < 600;
-  let onlyMine = false, anatomy = false, allLabels = !narrow, build = 1, buildPlay = null;
+  const hintEl = el('div', 'hint3d', opts.moreBeds ? `Showing 6 of ${opts.moreBeds + 6} beds · drag to turn` : 'Drag to turn · tap any part, a wall or the floor');
+  // finish picker on the right: tap a wall (SS / PPGI / glass / wood) or the floor (two vinyl colours)
+  const fin = el('div', 'finish'); fin.hidden = true;
+  const emit = () => opts.onFinish?.({ wall: { ...look.wall }, floor: { ...look.floor } });
+  const swatch = (hex, name, on, fn) => { const b = el('button', 'sw' + (on ? ' on' : '')); b.type = 'button'; b.title = name; b.setAttribute('aria-label', name); b.setAttribute('aria-pressed', String(on)); b.style.background = typeof hex === 'number' ? '#' + hex.toString(16).padStart(6, '0') : hex; b.onclick = fn; return b; };
+  const openFinish = what => {
+    card.hidden = true; stopTour();
+    fin.replaceChildren();
+    if (what === 'wall') {
+      fin.append(el('b', null, '🧱 Wall panels'), el('div', 'sub', 'Choose the finish for the OT walls.'));
+      for (const f of WALL_FINISHES) {
+        const on = look.wall.finish === f.key;
+        const row = el('div', 'opt' + (on ? ' on' : ''));
+        const head = el('button', 'opt-h', f.name); head.type = 'button'; head.setAttribute('aria-pressed', String(on));
+        head.onclick = () => { setFinish(f.key); emit(); openFinish('wall'); };
+        row.append(head);
+        if (on) {
+          row.append(el('div', 'hint', f.hint));
+          const sws = el('div', 'sws');
+          if (f.colours.length > 1) for (const c of f.colours) sws.append(swatch(c[1], c[0], look.wall.colour === c[0], () => { setFinish(f.key, c[0]); emit(); openFinish('wall'); }));
+          sws.append(el('span', 'one', f.key === 'ss' ? 'No colour: natural steel' : f.colours.length > 1 ? look.wall.colour : `One colour: ${f.colours[0][0]}`));
+          row.append(sws);
+        }
+        fin.append(row);
+      }
+    } else {
+      fin.append(el('b', null, '⬛ Floor'), el('div', 'sub', 'Seamless antistatic vinyl. Pick two colours.'));
+      for (const [k, label] of [['main', 'Main colour (under the table)'], ['border', 'Border colour']]) {
+        const sws = el('div', 'sws');
+        for (const [n, hex] of FLOOR_COLOURS) sws.append(swatch(hex, n, look.floor[k] === n, () => { setFloor(k === 'main' ? n : look.floor.main, k === 'border' ? n : look.floor.border); emit(); openFinish('floor'); }));
+        sws.append(el('span', 'one', look.floor[k]));
+        fin.append(el('div', 'lbl', label), sws);
+      }
+    }
+    const x = el('button', 'x', '×'); x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.onclick = () => { fin.hidden = true; }; fin.append(x);
+    fin.hidden = false;
+  };
+  box.append(hintEl, card, fin);
+  let onlyMine = false, anatomy = false, allLabels = false, build = 1, buildPlay = null, anatBtn = null;
+  let exploded = 0, explodeTo = 0, exAnim = null, ahuFocus = false; // ahuFocus: close-up on the AHU (ducts hidden so nothing blocks it)
   const ANATOMY_LABELS = new Set([...anatomyTags, 'ahu', 'laf', 'hepa', 'risers']);
   const applyVisibility = () => {
     for (const [key, c] of Object.entries(comps)) {
-      const always = ['panels', 'flooring', 'table', 'risers', 'ahu'].includes(key) || anatomyTags.has(key);
+      const always = ['panels', 'flooring', 'table', 'risers', 'ahu', 'velocity'].includes(key) || anatomyTags.has(key);
       if (!anatomyTags.has(key)) c.group.visible = (always || key === 'props' || !onlyMine || picked.has(key)) && !c.buildHidden;
       const shown = anatomyTags.has(key) ? anatomy : c.group.visible;
-      const hide = !shown || (key === 'ahu' && !anatomy) || (anatomy ? !ANATOMY_LABELS.has(key) : (!allLabels && !picked.has(key)));
+      // labels stay out of the way: only with "All labels", or the numbered stages of a dismantled AHU
+      const hide = !shown || (key === 'ahu' && !anatomy) || (explodeTo ? !(AHU_KEYS.has(key) && key !== 'ahu') : !allLabels || (anatomy && !ANATOMY_LABELS.has(key)));
       tags[key]?.classList.toggle('hidden', hide);
     }
     for (const g of extras) g.visible = anatomy;
+    if (comps.ducts) comps.ducts.group.visible = !ahuFocus;
     ceiling.visible = !anatomy && build > 0.9;
     if (air) air.points.visible = (air.on || anatomy) && comps.laf.group.visible && build > 0.985;
   };
-  const PHASE = { flooring: 0, table: 1, props: 1, warmers: 1, nurse: 1, fumigation: 1, laf: 2, hepa: 2, otlight: 2, pendants: 2 };
+  const PHASE = { flooring: 0, velocity: 2, table: 1, props: 1, warmers: 1, nurse: 1, fumigation: 1, laf: 2, hepa: 2, otlight: 2, pendants: 2 };
   const built = Object.entries(comps).filter(([k]) => !anatomyTags.has(k) && k !== 'ahu')
     .map(([k, c]) => ({ c, phase: PHASE[k] ?? 3, base: c.group.position.clone() }));
   const easeOut = p => 1 - Math.pow(1 - p, 3);
@@ -730,7 +813,7 @@ export async function mount3D(box, opts) {
   const fit = () => { const a = Math.max(0.3, box.clientWidth / Math.max(1, box.clientHeight)); return a < 1.3 ? Math.min(1.75, (1.3 / a) ** 0.55) : 1; };
   const scaled = ([p, t], s) => [t.clone().add(p.clone().sub(t).multiplyScalar(s)), t.clone()];
   const viewOf = name => (['overview', 'anatomy'].includes(name) ? scaled(views[name], fit()) : views[name]);
-  const flyTo = ([p, t], ms = 1100) => { anim = { p0: camera.position.clone(), t0: controls.target.clone(), p, t, start: performance.now(), ms }; };
+  const flyTo = ([p, t], ms = 1100) => { if (buildPlay) { buildPlay = null; applyBuild(1); } controls.autoRotate = false; anim = { p0: camera.position.clone(), t0: controls.target.clone(), p, t, start: performance.now(), ms }; };
   const fly = name => flyTo(viewOf(name));
   { const [p, t] = viewOf('overview'); camera.position.copy(p); controls.target.copy(t); }
 
@@ -739,9 +822,9 @@ export async function mount3D(box, opts) {
     ? 'The AHU on the terrace filters and cools the air (blue arrows); it enters through HEPA diffusers over the beds and leaves through the return riser (orange) back to the AHU.'
     : 'The outdoor unit and AHU filter, cool and dry the air (pre-filter → fine filter → coil → blower). It comes down through the HEPA plenum over the table (blue), sweeps the surgical area and leaves low down through the return risers (orange) back to the AHU.' };
   const tourStops = () => {
-    const order = isWard ? ['bedhead', 'mgps', 'warmers', 'nurse', 'pressure', 'hepa', 'doors'] : ['laf', 'hepa', 'otlight', 'pendants', 'control', 'mgps', 'storage', 'xray', 'passbox', 'doors', 'scrub'];
+    const order = isWard ? ['bedhead', 'mgps', 'warmers', 'nurse', 'pressure', 'hepa', 'doors'] : ['laf', 'hepa', 'velocity', 'otlight', 'pendants', 'control', 'mgps', 'storage', 'xray', 'passbox', 'doors', 'scrub'];
     const have = order.filter(k => comps[k] && info(k) && comps[k].group.visible);
-    const chosen = have.filter(k => picked.has(k));
+    const chosen = have.filter(k => picked.has(k) || (k === 'velocity' && picked.has('laf')));
     const list = (chosen.length >= 2 ? chosen : have.slice(0, 5)).map(k => ({ key: k, view: comps[k].view || [comps[k].anchor.clone().add(V(1.6, 0, 2.0)), comps[k].anchor.clone()] }));
     list.push({ story: AIR_STORY, view: viewOf('anatomy'), anatomy: true });
     return list;
@@ -751,21 +834,39 @@ export async function mount3D(box, opts) {
   const goStop = i => {
     const stops = tour.stops; tour.i = Math.max(0, Math.min(stops.length - 1, i));
     const s = stops[tour.i];
-    if (!!s.anatomy !== anatomy) { anatomy = !!s.anatomy; applyVisibility(); }
+    if (!!s.anatomy !== anatomy) setAnatomy(!!s.anatomy);
     flyTo(s.view, 1300);
     const last = tour.i === stops.length - 1;
     const nav = el('div'); nav.style.cssText = 'display:flex;gap:8px;margin-top:8px';
     nav.append(navBtn('‹', () => { clearTimeout(tour.timer); goStop(tour.i - 1); }),
-      navBtn(last ? 'Done' : 'Next ›', () => { clearTimeout(tour.timer); if (last) { stopTour(); card.hidden = true; anatomy = false; applyVisibility(); fly('overview'); } else goStop(tour.i + 1); }));
+      navBtn(last ? 'Done' : 'Next ›', () => { clearTimeout(tour.timer); if (last) { stopTour(); card.hidden = true; setAnatomy(false); fly('overview'); } else goStop(tour.i + 1); }));
     const step = `Tour ${tour.i + 1} of ${stops.length}`;
     if (s.story) showInfo(s.story, { step, nav }); else showKey(s.key, { step, nav });
     clearTimeout(tour.timer);
     if (!last) tour.timer = setTimeout(() => tour && goStop(tour.i + 1), 6500);
   };
 
+  // AHU: one tap flies in close, a double tap takes it apart so every stage can be seen (and tapped)
+  const setAnatomy = on => { anatomy = on; ahuFocus = false; if (!on) explodeTo = 0; anatBtn?.setAttribute('aria-pressed', String(on)); applyVisibility(); };
+  const ahuView = () => (explodeTo ? [V(AX + 0.3, AY + 0.9, AZ + 11.2), V(AX + 0.1, AY - 0.05, AZ + 1.4)] : [V(AX + 1.7, AY + 1.0, AZ + 5.0), V(AX, AY - 0.1, AZ + 0.1)]);
+  const ahuClose = key => {
+    stopTour(); fin.hidden = true;
+    if (build < 1) { buildPlay = null; applyBuild(1); }
+    if (!anatomy) setAnatomy(true);
+    ahuFocus = true; applyVisibility();
+    flyTo(scaled(ahuView(), fit()), 1200);
+    const i = info(key) || info('ahu');
+    showInfo(i, { step: explodeTo ? '💥 Exploded view · double-tap again to put it back' : '❄️ AHU close-up · double-tap it to take it apart', mine: picked.has(key) });
+  };
+  const toggleExplode = key => { explodeTo = explodeTo ? 0 : 1; applyVisibility(); ahuClose(explodeTo ? 'ahu' : key); if (explodeTo) showInfo({ icon: '💥', label: 'Inside the AHU', hint: 'Air moves left to right: pre-filter → fine filter → cooling coil → SHRM heat recovery → blower → UV lamps, then into the supply duct to the HEPA plenum. Tap any part to see what it does.' }, { step: 'Exploded view · double-tap to put it back' }); };
+  // a short blue outline round whatever was tapped
+  const sel = new T.BoxHelper(undefined, 0x2f7fd8); sel.visible = false; sel.material.depthTest = false; sel.material.transparent = true; sel.renderOrder = 10; scene.add(sel);
+  let selT = 0;
+  const flash = key => { const g = comps[key]?.group; if (!g || ['panels', 'flooring', 'props'].includes(key)) return; sel.setFromObject(g); sel.visible = true; selT = 2.2; };
+
   // tap a part of the room
   const ray = new T.Raycaster(), mouse = new T.Vector2();
-  let down = null;
+  let down = null, lastTap = 0, lastKey = null;
   renderer.domElement.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; if (tour) clearTimeout(tour.timer); });
   renderer.domElement.addEventListener('pointerup', e => {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
@@ -773,7 +874,17 @@ export async function mount3D(box, opts) {
     mouse.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     ray.setFromCamera(mouse, camera);
     const hit = ray.intersectObjects(Object.values(comps).map(c => c.group), true).find(i => { let o = i.object; while (o) { if (!o.visible) return false; o = o.parent; } return !!info(i.object.userData.key); });
-    if (hit) { stopTour(); showKey(hit.object.userData.key); } else if (!tour) card.hidden = true;
+    const now = performance.now();
+    if (hit) {
+      const key = hit.object.userData.key, dbl = now - lastTap < 400 && AHU_KEYS.has(lastKey);
+      stopTour();
+      if (AHU_KEYS.has(key)) { if (dbl) toggleExplode(key); else if (explodeTo && key !== 'ahu') { showKey(key, { step: 'Exploded view · double-tap to put it back' }); flash(key); } else ahuClose(key); }
+      else if (key === 'panels' && hit.object.userData.wall) openFinish('wall');
+      else if (key === 'flooring') openFinish('floor');
+      else { fin.hidden = true; showKey(key); flash(key); }
+      lastKey = key;
+    } else if (!tour) { card.hidden = true; lastKey = null; }
+    lastTap = now;
   });
 
   // ------------------------------------------------------------ size & animation loop
@@ -814,6 +925,19 @@ export async function mount3D(box, opts) {
         f.mesh.instanceMatrix.needsUpdate = true;
       }
     }
+    if (exploded !== explodeTo) {
+      if (!exAnim || exAnim.to !== explodeTo) exAnim = { from: exploded, to: explodeTo, start: now };
+      const k = Math.min(1, (now - exAnim.start) / 900);
+      exploded = k >= 1 ? explodeTo : exAnim.from + (explodeTo - exAnim.from) * easeOut(k);
+      if (k >= 1) exAnim = null;
+      for (const p of ahuParts) {
+        const g = p.c.group;
+        if (p.casing) g.position.set(p.base.x, p.base.y + exploded * 0.25, p.base.z - exploded * 2.4);
+        else if (p.odu) g.position.set(p.base.x + exploded * 3.6, p.base.y, p.base.z - exploded * 2.6);
+        else { g.position.set(p.base.x + p.x * 1.9 * exploded, p.base.y, p.base.z + exploded * 1.6); p.c.anchor.set(g.position.x, AY + 0.82, g.position.z + 0.6); }
+      }
+    }
+    if (selT > 0) { selT -= dt; sel.material.opacity = Math.min(1, selT); if (selT <= 0) sel.visible = false; }
     if (comps.doors?.leaf && comps.doors.group.visible) { doorT += dt; const s = (Math.sin(doorT * 0.6) + 1) / 2; const sl = comps.doors.slide || { axis: 'x', base: -1.12, amp: 0.95 }; comps.doors.leaf.position[sl.axis] = sl.base + s * sl.amp; }
     controls.update();
     renderer.render(scene, camera);
@@ -821,9 +945,10 @@ export async function mount3D(box, opts) {
     // keep labels clear of the build slider and the hint
     const br = box.getBoundingClientRect(), keepOut = el => { const r = el.getBoundingClientRect(); return [r.left - br.left, r.top - br.top, r.right - br.left, r.bottom - br.top]; };
     const placed = [keepOut(buildBox), keepOut(hintEl)];
+    const tk = tour && !tour.stops[tour.i]?.anatomy ? tour.stops[tour.i]?.key : null; // on the tour only the current stop is labelled
     for (const key of order) {
       const t = tags[key];
-      if (t.classList.contains('hidden') || build < 0.999 || (tour && tour.stops[tour.i]?.key !== key && !tour.stops[tour.i]?.anatomy)) { t.style.display = 'none'; continue; }
+      if (build < 0.999 || (tk ? key !== tk : t.classList.contains('hidden'))) { t.style.display = 'none'; continue; }
       v.copy(comps[key].anchor).project(camera);
       const tw = (t._w ||= t.offsetWidth || 120), th = 24;
       const x0 = ((v.x + 1) / 2) * w, y = ((1 - v.y) / 2) * h;
@@ -842,17 +967,22 @@ export async function mount3D(box, opts) {
   document.addEventListener('visibilitychange', vis);
 
   return {
-    setPanelColour(name) { setFinish(name); },
+    setFinish(key, colour) { setFinish(key, colour); },
+    setFloor(main, border) { setFloor(main, border); },
+    openFinish,
     controls: [
       { label: '🧱 Build it again', run: () => { playBuild(); } },
       { label: '▶ Take the tour', pressed: false, ref: b => { tourBtn = b; }, run: () => { if (tour) { stopTour(); card.hidden = true; return false; } buildPlay = null; controls.autoRotate = false; applyBuild(1); tour = { stops: tourStops(), i: 0 }; goStop(0); return true; } },
-      { label: '🔬 Anatomy: how air flows', pressed: false, run: () => { stopTour(); if (build < 1) { buildPlay = null; applyBuild(1); } anatomy = !anatomy; applyVisibility(); fly(anatomy ? 'anatomy' : 'overview'); if (anatomy) showInfo({ icon: '🔬', label: 'How the clean air flows', hint: 'Blue arrows: filtered, cooled air from the AHU to the HEPA filters. Orange arrows: used air going back from the room. Tap the numbered AHU stages to see what each one does.' }); else card.hidden = true; return anatomy; } },
-      { label: 'Show only my choices', pressed: false, run: () => { onlyMine = !onlyMine; applyVisibility(); return onlyMine; } },
-      { label: 'All labels', pressed: allLabels, run: () => { allLabels = !allLabels; applyVisibility(); return allLabels; } },
+      { label: '🎨 Walls & floor', run: () => { if (anatomy) setAnatomy(false); fly('overview'); openFinish('wall'); } },
+      { label: '🔬 Anatomy: how air flows', pressed: false, ref: b => { anatBtn = b; }, run: () => { stopTour(); fin.hidden = true; if (build < 1) { buildPlay = null; applyBuild(1); } const on = ahuFocus || !anatomy; explodeTo = 0; setAnatomy(on); fly(anatomy ? 'anatomy' : 'overview'); if (anatomy) showInfo({ icon: '🔬', label: 'How the clean air flows', hint: 'Blue arrows: filtered, cooled air from the AHU to the HEPA filters. Orange arrows: used air going back from the room. Tap the AHU for a close-up; double-tap it to take it apart.' }); else card.hidden = true; return anatomy; } },
+      { label: '❄️ AHU close-up', run: () => { if (explodeTo) { explodeTo = 0; applyVisibility(); } ahuClose('ahu'); } },
+      { label: '💥 Take the AHU apart', run: () => { if (!anatomy) setAnatomy(true); toggleExplode('ahu'); } },
+      { label: isWard ? '👁 Bed-side view' : "👁 Surgeon's view", run: () => { stopTour(); if (anatomy) setAnatomy(false); fly('eye'); } },
+      ...(isWard ? [] : [{ label: '🚿 Passage & scrub', run: () => { stopTour(); if (anatomy) setAnatomy(false); flyTo(comps.passage.view, 1300); showKey('scrub'); } }]),
       ...(isWard ? [] : [{ label: 'Clean air flow', pressed: !!air?.on, run: () => { air.on = !air.on; applyVisibility(); return air.on; } }]),
-      { label: isWard ? '👁 Bed-side view' : "👁 Surgeon's view", run: () => { stopTour(); fly('eye'); } },
-      ...(isWard ? [] : [{ label: '🚿 Passage & scrub', run: () => { stopTour(); if (anatomy) { anatomy = false; applyVisibility(); } flyTo(comps.passage.view, 1300); showKey('scrub'); } }]),
-      { label: '↺ Overview', run: () => { stopTour(); card.hidden = true; if (anatomy) { anatomy = false; applyVisibility(); } fly('overview'); } },
+      { label: '🏷 Labels', pressed: allLabels, run: () => { allLabels = !allLabels; applyVisibility(); return allLabels; } },
+      { label: 'Show only my choices', pressed: false, run: () => { onlyMine = !onlyMine; applyVisibility(); return onlyMine; } },
+      { label: '↺ Overview', run: () => { stopTour(); card.hidden = true; fin.hidden = true; if (anatomy) setAnatomy(false); fly('overview'); } },
     ],
     dispose() {
       stopTour(); cancelAnimationFrame(raf); ro.disconnect(); document.removeEventListener('visibilitychange', vis); controls.dispose();

@@ -15,7 +15,7 @@ import {
 } from './auth.js';
 import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
 import * as notify from './notify.js';
-import { publicRouter, unfinishedLeads } from './public.js';
+import { publicRouter, unfinishedLeads, briefFor } from './public.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
@@ -192,6 +192,7 @@ api.get('/dashboard', wrap(req => {
 const need = (entity) => (req, res, next) => canWrite(entity, req.user.role) ? next() : res.status(403).json({ error: 'You do not have permission for this action' });
 
 api.post('/enquiries/:id/quotation', need('quotations'), wrap(req => wf.quotationFromEnquiry(req.params.id, req.user)));
+api.post('/enquiries/:id/brief', need('enquiries'), wrap(req => { const e = db.prepare('SELECT id FROM enquiries WHERE id = ?').get(req.params.id); if (!e) throw new HttpError(404, 'Enquiry not found'); let d = {}; const l = db.prepare('SELECT data FROM web_leads WHERE enquiry_id = ?').get(e.id); try { d = JSON.parse(l?.data || '{}'); } catch { /* none */ } return { token: briefFor(e.id, d) }; }));
 api.post('/quotations/:id/submit', need('quotations'), wrap(req => wf.submitForApproval('Quotation', req.params.id, req.user)));
 api.post('/quotations/:id/revise', need('quotations'), wrap(req => wf.reviseQuotation(req.params.id, req.user)));
 api.post('/quotations/:id/convert', need('sales_orders'), wrap(req => wf.convertToSalesOrder(req.params.id, req.body, req.user)));

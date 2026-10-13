@@ -1,6 +1,7 @@
 // Client enquiry wizard: one question per screen, contact details last, progress saved as the visitor goes.
 // On submit the CRM creates an enquiry (with a lead score) and sales get a pop-up.
-import { mount3D, PANEL_COLOURS } from './ot3d.js';
+import { mount3D, WALL_FINISHES } from './ot3d.js';
+import { otNorms, otType, NABH_SOURCE } from './nabh.js';
 
 const $ = id => document.getElementById(id);
 function h(tag, attrs, ...kids) {
@@ -69,6 +70,7 @@ const FEATURES = [
   ['flooring', 'Antistatic seamless flooring', 'Conductive vinyl floor without joints: safe and easy to disinfect.', '⬛', ['*']],
   ['storage', 'SS storage cabinets', 'Flush stainless steel wall cabinets for consumables.', '🗄️', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'cssd']],
   ['fumigation', 'Fumigation system', 'Disinfects the room between cases.', '💨', ['ot', 'icu', 'nicu', 'picu', 'isolation', 'cssd']],
+  ['shrm', 'SHRM – Smart Heat Recovery (WIESPL patent)', 'Holds humidity by re-using heat inside the system instead of electric heaters: no extra electrical load and lower running costs.', '♻️', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf', 'cleanroom']],
   ['ahu', 'AHU & air conditioning', 'The air handling unit that cools, filters and pressurises the room — the heart of the system.', '❄️', ['*']],
 ];
 const TIMELINES = [['1m', 'Within 1 month'], ['3m', '1–3 months'], ['6m', '3–6 months'], ['6p', 'More than 6 months'], ['explore', 'Just exploring']];
@@ -180,19 +182,39 @@ function stepSize(n, total) {
     h('p.eq-skip', { style: { marginTop: '8px' } }, 'One standard OT is about 20 × 20 ft (400 sq ft).')]);
 }
 
+// NABH / WHO requirements for the chosen OT specialty; with `onAdd`, missing required items can be added in one tap.
+const otSpecs = () => D.specialties.filter(s => OT_SPECIALTY.includes(s));
+function nabhCard({ checklist, onAdd } = {}) {
+  if (!has('ot', 'cathlab')) return null;
+  const N = otNorms(otSpecs());
+  const label = k => FEATURES.find(f => f[0] === k)?.[1];
+  const missing = N.needs.filter(x => x.required && !D.features.includes(label(x.key)));
+  return h('div.eq-nabh',
+    h('h3', `📋 NABH norms: ${N.title}${otSpecs().length ? ` · ${otSpecs().join(', ')}` : ''}`),
+    h('p.src', NABH_SOURCE),
+    checklist
+      ? h('ul', N.needs.map(x => { const ok = D.features.includes(label(x.key)); return h('li' + (ok ? '.ok' : x.required ? '.need' : ''), h('span', label(x.key) || x.key), h('div', `${x.why}${x.required ? '' : ' (recommended)'}`)); }))
+      : h('ul', N.rows.map(([k, v]) => h('li', h('span', k), h('div', v)))),
+    checklist && onAdd && missing.length ? h('button.eq-btn', { type: 'button', onclick: () => { for (const x of missing) if (label(x.key)) D.features.push(label(x.key)); sync(); summary(); onAdd(); } }, `＋ Add the ${missing.length} required item${missing.length > 1 ? 's' : ''}`) : null,
+    checklist && !missing.length ? h('p.src', { style: { margin: '8px 0 0', color: 'var(--accent)' } }, '✔ Your plan has everything NABH requires for the air system.') : null);
+}
+
 function stepSpecialty(n, total) {
   const list = [...(needsOts() ? OT_SPECIALTY : []), ...(needsBeds() ? ICU_TYPE.filter(t => (has('nicu') || !t.startsWith('NICU')) && (has('picu') || t !== 'PICU')) : [])];
+  const norms = h('div');
+  const drawNorms = () => norms.replaceChildren(nabhCard() || '');
   const chips = h('div.eq-chips', [...list, 'Not sure yet'].map(s => {
     const b = h('button.eq-chip' + (s === 'Not sure yet' ? '.unsure' : ''), { type: 'button', 'aria-pressed': String(D.specialties.includes(s)), onclick: () => {
-      toggle(D.specialties, s); b.setAttribute('aria-pressed', String(D.specialties.includes(s))); summary(); sync();
+      toggle(D.specialties, s); b.setAttribute('aria-pressed', String(D.specialties.includes(s))); summary(); sync(); drawNorms();
       const high = D.specialties.find(x => HIGH_LAF.includes(x));
-      feedback(high ? `Great: ${high.toLowerCase()} OTs usually need laminar air flow with HEPA filters. We will include those options.`
+      feedback(high ? `${high} needs a ${otType(high) === 'A' ? 'Type A' : 'well-equipped'} OT: laminar air flow with HEPA filters. The NABH norms are below.`
         : D.specialties.some(x => x.startsWith('NICU')) ? 'Level III NICUs need more gas points and power per bed: we plan bays to suit.'
           : D.specialties.length ? 'Noted. This helps us size the air system correctly.' : '');
     } }, s);
     return b;
   }));
-  return card(n, total, needsOts() ? 'Which specialty will use it?' : 'What kind of ICU?', 'Pick all that apply.', chips, { skip: 'Skip' });
+  drawNorms();
+  return card(n, total, needsOts() ? 'Which specialty will use it?' : 'What kind of ICU?', 'Pick all that apply.', [chips, norms], { skip: 'Skip' });
 }
 
 function stepFeatures(n, total) {
@@ -201,7 +223,7 @@ function stepFeatures(n, total) {
   const list = h('div.eq-feats', feats.map(([k, label, hint, icon]) => {
     const b = h('button.eq-feat', { type: 'button', 'aria-pressed': String(D.features.includes(label)), onclick: () => {
       toggle(D.features, label); b.setAttribute('aria-pressed', String(D.features.includes(label))); summary(); sync();
-      feedback(D.features.length >= 6 ? 'That is a complete, NABH-ready setup. You will see it in 3D next.' : k === 'laf' && D.features.includes(label) ? 'Laminar flow + HEPA is the standard for infection-sensitive surgery.' : '');
+      feedback(D.features.length >= 6 ? 'That is a complete, NABH-ready setup. You will see it in 3D next.' : k === 'laf' && D.features.includes(label) ? 'Laminar flow + HEPA is the standard for infection-sensitive surgery.' : k === 'shrm' && D.features.includes(label) ? 'SHRM is WIESPL’s patented energy saver: you will see it inside the AHU in 3D.' : '');
     } }, h('span.ico', icon), h('span', h('b', label), h('small', hint)));
     return b;
   }));
@@ -209,27 +231,32 @@ function stepFeatures(n, total) {
 }
 
 let viewer = null;
+const wallName = () => { const f = WALL_FINISHES.find(x => x.key === D.wall_finish) || WALL_FINISHES[0]; return f.colours.length > 1 && D.wall_colour ? `${f.name}, ${D.wall_colour}` : f.name; };
 function step3D(n, total) {
   const box = h('div.eq-3d', h('div.loading', 'Loading 3D view…'));
   D.viewed_3d = true; sync();
   const bar = h('div.eq-3dbar');
-  const sw = h('div.eq-swatches', h('span', 'Wall panel colour:'), PANEL_COLOURS.map(([name, hex]) => {
-    const b = h('button.eq-swatch', { type: 'button', title: name, 'aria-label': name, 'aria-pressed': String((D.panel_colour || PANEL_COLOURS[0][0]) === name), style: { background: '#' + hex.toString(16).padStart(6, '0') }, onclick: () => {
-      D.panel_colour = name; viewer?.setPanelColour?.(name); sw.querySelectorAll('.eq-swatch').forEach(x => x.setAttribute('aria-pressed', String(x === b))); sw.querySelector('b').textContent = name; sync(); summary();
-    } });
-    return b;
-  }), h('b', D.panel_colour || PANEL_COLOURS[0][0]));
-  const legend = h('div.eq-legend', h('span', h('i', { style: { background: '#1e7d3a' } }), 'in your plan'), h('span', h('i', { style: { background: '#9aa7ba' } }), 'available'), h('span', 'Drag to turn · pinch or scroll to zoom · tap a label'));
+  const look = h('div.eq-legend');
+  const drawLook = () => look.replaceChildren(h('span', `🧱 Walls: ${wallName()}`), h('span', `⬛ Floor: ${D.floor_main || 'Beige'} with ${D.floor_border || 'Grey'} border`),
+    h('span', 'Tap a wall or the floor to change it · tap any part to learn what it does · double-tap the AHU to take it apart'));
+  drawLook();
+  const norms = h('div');
+  const drawNorms = () => norms.replaceChildren(nabhCard({ checklist: true, onAdd: () => render() }) || '');
+  drawNorms();
   setTimeout(async () => {
     viewer?.dispose?.();
-    viewer = await mount3D(box, { panelColour: D.panel_colour, types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])) });
+    viewer = await mount3D(box, {
+      wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border },
+      onFinish: ({ wall, floor }) => { D.wall_finish = wall.finish; D.wall_colour = wall.colour; D.floor_main = floor.main; D.floor_border = floor.border; drawLook(); summary(); sync(); },
+      types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])),
+    });
     if (viewer?.controls) {
       const chip = (label, fn, pressed) => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!pressed), onclick: () => { const on = fn(); if (on !== undefined) b.setAttribute('aria-pressed', String(on)); } }, label); return b; };
       bar.replaceChildren(...viewer.controls.map(c => { const b = chip(c.label, c.run, c.pressed); c.ref?.(b); return b; }));
     }
   }, 30);
-  return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Items you picked are marked in green; tap any label to learn what it does.',
-    [box, bar, sw, legend], { next: 'Looks good – next' });
+  return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Tap a wall to choose SS, PPGI, glass or wood panels, tap the floor for its colours, and tap any part to see what it does.',
+    [box, bar, look, norms], { next: 'Looks good – next' });
 }
 
 function stepPlan(n, total) {
@@ -304,7 +331,7 @@ function summaryItems() {
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
     D.specialties.length && ['Specialty', D.specialties.join(', ')], (D.features.length || D.features_unsure) && ['Features', D.features.length ? `${D.features.length} selected` : 'needs advice'],
-    D.panel_colour && ['Panels', D.panel_colour],
+    D.wall_finish && ['Walls', wallName()], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
 }
@@ -337,7 +364,7 @@ async function submit() {
     for (const f of S.files) {
       try { await fetch(`/api/public/lead/file?token=${encodeURIComponent(S.token)}&name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f }).then(x => { if (x.ok) uploaded++; }); } catch { /* keep going */ }
     }
-    S.done = { ref: r.ref, estimate: r.estimate, uploaded, files: S.files.length };
+    S.done = { ref: r.ref, estimate: r.estimate, uploaded, files: S.files.length, brief: r.brief };
     persist();
     render();
   } catch (e) {
@@ -361,6 +388,8 @@ function thanks() {
     h('p.eq-sub', config.next_steps || 'Our team will call you within 24 hours.'),
     d.files && d.uploaded < d.files ? h('p.eq-err', 'Some files could not be uploaded; please send them on WhatsApp or email.') : null,
     d.estimate ? h('div.eq-range', h('div', 'Projects like yours typically fall between'), h('b', `${inrShort(d.estimate.low)} – ${inrShort(d.estimate.high)}`), h('div.eq-skip', 'Indicative only. Your exact price depends on the layout and the features you choose.')) : null,
+    d.brief ? h('div.eq-range', h('b', { style: { fontSize: '16px' } }, '📋 Are you the surgeon or from the hospital team?'), h('div', 'Add the detailed requirements now (room sizes, specialty, wall and floor finish, equipment). It takes about 5 minutes and gets you an exact proposal.'),
+      h('a.eq-btn.primary', { href: `brief.html?t=${encodeURIComponent(d.brief)}`, style: { display: 'inline-block', marginTop: '10px', textDecoration: 'none' } }, 'Fill the detailed requirements ›')) : null,
     h('div.eq-actions',
       config.brochure_url ? h('a.eq-btn', { href: config.brochure_url, target: '_blank', rel: 'noopener' }, '📄 Download brochure') : null,
       wa ? h('a.eq-btn', { href: wa, target: '_blank', rel: 'noopener' }, '💬 WhatsApp us') : null,

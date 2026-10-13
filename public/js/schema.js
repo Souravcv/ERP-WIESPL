@@ -202,6 +202,7 @@ export const ENTITIES = {
       { key: 'lead_score', label: 'Lead score (0–100)', type: 'number', readonly: true, hint: 'From the website form: timeline, budget, size' },
       { key: 'lead_grade', label: 'Lead', type: 'select', options: ['', 'Hot', 'Warm', 'Cold'] },
       { key: 'web_summary', label: 'What the client told us (website form)', type: 'textarea', span: 2, rows: 8, readonly: true },
+      { key: 'design_brief', label: 'Detailed requirements (surgeon / hospital brief)', type: 'textarea', span: 2, rows: 12, readonly: true, hint: 'From the 📋 Detailed requirement form' },
       { key: 'fy', label: 'FY', type: 'text', hidden: true },
       { key: 'seq', label: 'Seq', type: 'number', hidden: true },
     ],

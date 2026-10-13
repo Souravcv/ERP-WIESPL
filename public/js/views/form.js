@@ -244,6 +244,24 @@ function commercialPanel(po, reload) {
     h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
 }
 
+// Second, detailed form (room sizes, specialty, finishes, equipment, gases, site scope) for the surgeon / hospital team,
+// or for sales to fill during the visit. What is sent lands in "Detailed requirements" on this enquiry.
+async function briefDialog(row) {
+  const { token } = await api(`/enquiries/${row.id}/brief`, { method: 'POST' });
+  const url = `${location.origin}/brief.html?t=${encodeURIComponent(token)}`;
+  const text = `Dear ${row.doctor_name || 'Doctor'}, please fill the detailed OT requirements for ${row.hospital_name || 'your hospital'} (about 5 minutes): ${url}`;
+  const input = h('input', { value: url, readOnly: true, onclick: e => e.target.select() });
+  const phone = String(row.doctor_phone || '').replace(/\D/g, '');
+  await modal('Detailed requirement form', h('div.grid',
+    h('p', 'Send this link to the surgeon or hospital team, or open it yourself and fill it during the meeting. It asks for each OT: size, specialty (with the NABH norms), wall / floor finish, doors, pendants, OT light, gas outlets, scrub, SHRM and the site scope. The answers come back into this enquiry under “Detailed requirements”, and you get a pop-up.'),
+    h('label', 'Link (works only for this enquiry)', input),
+    location.hostname === 'localhost' || /^(192\.168|10\.|172\.)/.test(location.hostname) ? h('p', { style: { color: 'var(--warn)' } }, '⚠ This address only works inside your office network. For clients outside, use the Render (internet) address of the CRM.') : null,
+    h('div.toolbar', h('a.btn.primary', { href: `https://wa.me/${phone.length === 10 ? '91' + phone : phone}?text=${encodeURIComponent(text)}`, target: '_blank', rel: 'noopener' }, '💬 Send on WhatsApp'),
+      h('button.btn', { onclick: async () => { try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { input.select(); toast('Press Ctrl+C to copy'); } } }, '📋 Copy link'),
+      h('a.btn', { href: url, target: '_blank', rel: 'noopener' }, '✍️ Open and fill it now'))),
+  [{ label: 'Close', value: true }]);
+}
+
 // ---------------------------------------------------------------- actions per module
 function actionsFor(entity, row, reload, ctx = {}) {
   const id = row.id;
@@ -269,6 +287,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'enquiries':
       if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));
+      if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
       if (!row.customer_id && can('customers') && row.hospital_name) {
         A.push(h('button.btn', { onclick: go(async () => {
           const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, district: row.district, contact_person: row.doctor_name, phone: row.doctor_phone } });

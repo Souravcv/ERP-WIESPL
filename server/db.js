@@ -83,6 +83,9 @@ export function migrate() {
     CREATE TABLE IF NOT EXISTS web_leads (
       id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT DEFAULT (datetime('now','localtime')),
       step INTEGER, data TEXT, name TEXT, phone TEXT, ip TEXT, enquiry_id INTEGER, submitted_at TEXT);
+    CREATE TABLE IF NOT EXISTS design_briefs (
+      id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, enquiry_id INTEGER NOT NULL, data TEXT, created_at TEXT DEFAULT (datetime('now','localtime')),
+      updated_at TEXT, submitted_at TEXT, submitted_by TEXT);
   `);
   // Client work orders were called "BOQ" before the BOQ / bill of material module existed: BOQ-001/2026-27 → WO-001/2026-27.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migrated_wo_numbers'").get()) {
