@@ -244,6 +244,48 @@ function commercialPanel(po, reload) {
     h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
 }
 
+// Sales questionnaire (MD, 13 Oct 2026): is the client cost-sensitive or quality-sensitive, what budget and taste,
+// so the proposal can be tailored. Internal only; saved on the enquiry.
+const PROFILE_QS = [
+  ['priority', 'What matters most to them?', [['Lowest price', -2], ['Value for money', 0], ['Best quality and brand', 2]]],
+  ['makes', 'Have they asked for specific makes / imported brands?', [['Not bothered', -1], ['Some preference', 0], ['Yes, premium brands', 2]]],
+  ['compare', 'How will they compare quotations?', [['Mainly on price', -2], ['Price and specification', 0], ['Quality and references', 2]]],
+  ['nabh', 'NABH accreditation?', [['Not planned', -1], ['Planned', 1], ['Already accredited', 2]]],
+  ['look', 'What finish do they expect?', [['Functional is fine', -1], ['Good finish', 0], ['A showpiece OT', 2]]],
+  ['payment', 'Payment comfort', [['Needs long credit / financing', -1], ['Staged payments', 0], ['Comfortable with advance', 1]]],
+];
+const TASTES = ['Premium look', 'Minimal & functional', 'Organic / health-conscious', 'Latest technology', 'Energy saving', 'Vastu-compliant layout', 'Fast delivery', 'Low maintenance'];
+async function profileDialog(row, reload) {
+  const before = String(row.profile_answers || '').split('\n'); // earlier answers, as saved
+  const ans = {}, picks = new Set((row.client_taste || '').split(/\s*[,;]\s*/).filter(t => TASTES.includes(t)));
+  const qs = PROFILE_QS.map(([k, q, opts]) => { const sel = h('select', h('option', { value: '' }, '—'), opts.map(([l]) => h('option', l))); ans[k] = sel; const old = before.find(x => x.startsWith(q + ' ')); if (old) sel.value = old.slice(q.length + 1); return h('label', q, sel); });
+  const budget = h('select', ENTITIES.enquiries.fields.find(x => x.key === 'budget_range').options.map(o => h('option', { value: o }, o || '—'))); budget.value = row.budget_range || '';
+  const maker = h('select', ENTITIES.enquiries.fields.find(x => x.key === 'decision_maker').options.map(o => h('option', { value: o }, o || '—'))); maker.value = row.decision_maker || '';
+  const tastes = h('div.toolbar', TASTES.map(t => { const b = h('button.btn.small' + (picks.has(t) ? '.primary' : ''), { type: 'button', onclick: () => { if (picks.has(t)) picks.delete(t); else picks.add(t); b.classList.toggle('primary', picks.has(t)); } }, t); return b; }));
+  const other = h('input', { placeholder: 'Anything else about their taste (e.g. likes the Delhi SS + glass OT)' });
+  const inst = h('input', { value: row.institution_name || '' }), board = h('textarea', { rows: 3 }), fin = h('textarea', { rows: 2 });
+  board.value = row.board_members || ''; fin.value = row.financial_status || '';
+  const ok = await modal('🧭 Client profile questionnaire (internal)', h('div.grid',
+    h('p.muted', 'For WIESPL sales only. The answers tell whether the client is cost-sensitive or quality-sensitive, so the proposal can be tailored. Nothing here is shown to the client.'),
+    h('div.form-grid', qs, h('label', 'Budget range', budget), h('label', 'Decision maker', maker)),
+    h('div', h('b', 'Taste & priorities'), tastes, other),
+    h('h3', 'Institution (MIS)'), h('div.form-grid', h('label', 'Institution / trust / group', inst), h('label.span-2', 'Board of Directors / trustees', board), h('label.span-2', 'Financial strength / purchasing power', fin))),
+  [{ label: 'Cancel', value: false }, { label: 'Save profile', cls: 'primary', value: true }]);
+  if (!ok) return;
+  let score = 0; const lines = [];
+  for (const [k, q, opts] of PROFILE_QS) { const v = ans[k].value; const o = opts.find(x => x[0] === v); if (o) { score += o[1]; lines.push(`${q} ${v}`); } }
+  const profile = lines.length ? (score >= 4 ? 'Quality-sensitive' : score <= -3 ? 'Cost-sensitive' : 'Balanced') : row.client_profile || '';
+  const tip = { 'Quality-sensitive': 'Lead with SS 304 / SS + glass, SHRM, iSmart, premium pendants and references of finished OTs.', 'Cost-sensitive': 'Lead with PPGL walls and standard makes; show the options and what each adds; emphasise value and running cost.', Balanced: 'Offer a recommended package plus one step up and one step down.' }[profile];
+  const taste = [...picks, other.value.trim()].filter(Boolean).join(', ');
+  await api(`/enquiries/${row.id}`, { method: 'PUT', body: {
+    client_profile: profile || null, budget_range: budget.value || null, decision_maker: maker.value || null, client_taste: taste || null,
+    institution_name: inst.value.trim() || null, board_members: board.value.trim() || null, financial_status: fin.value.trim() || null,
+    profile_answers: [...lines, lines.length ? `Score ${score} → ${profile}` : null, tip ? `Proposal approach: ${tip}` : null].filter(Boolean).join('\n') || null,
+  } });
+  toast(profile ? `Saved: ${profile}` : 'Saved');
+  reload();
+}
+
 // Second, detailed form (room sizes, specialty, finishes, equipment, gases, site scope) for the surgeon / hospital team,
 // or for sales to fill during the visit. What is sent lands in "Detailed requirements" on this enquiry.
 async function briefDialog(row) {
@@ -288,6 +330,8 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));
       if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
+      if (can('enquiries')) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
+      A.push(h('a.btn', { href: `#/print/techsheet/${id}`, target: '_blank' }, '📄 Techno-commercial sheet'));
       if (!row.customer_id && can('customers') && row.hospital_name) {
         A.push(h('button.btn', { onclick: go(async () => {
           const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, district: row.district, contact_person: row.doctor_name, phone: row.doctor_phone } });

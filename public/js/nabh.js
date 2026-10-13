@@ -3,7 +3,7 @@
 export const NABH_SOURCE = 'NABH Revised Guidelines for Air Conditioning in Operation Theatres (2018) · WHO Global Guidelines for the Prevention of Surgical Site Infection';
 
 // Type A (erstwhile super-specialty): neurosciences, joint replacement orthopaedics, cardiothoracic, transplant.
-const TYPE_A = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant'];
+const TYPE_A = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Multi-specialty']; // multi-specialty: designed for its most sensitive use
 export const otType = specs => ([].concat(specs || []).some(s => TYPE_A.includes(s)) ? 'A' : 'B');
 
 // [feature key, why it is needed, required (true) or recommended]
@@ -38,4 +38,15 @@ export function otNorms(specs) {
     ],
     needs: NEEDS.map(([key, why, required]) => ({ key, why, required })),
   };
+}
+
+// Infection-sensitivity protocols used by WIESPL (MD's direction, 13 Oct 2026). Multi-specialty OTs are designed
+// for the most sensitive specialty that will use them.
+const HIGH = ['Transplant', 'Cardiac', 'Neuro', 'Orthopaedics', 'Multi-specialty'];
+export function protocolFor(specs) {
+  const list = [].concat(specs || []);
+  if (list.some(s => HIGH.includes(s))) return { level: 'High', text: 'High infection sensitivity (transplant, cardiac, neuro, orthopaedic): laminar air flow with terminal HEPA over the table, the strictest air protocol.' };
+  if (list.includes('Plastic surgery')) return { level: 'Special', text: 'Plastic surgery follows its own protocol: our engineer will advise the air and lighting design for your cases.' };
+  if (list.length && list.every(s => s === 'Gynae / Obstetrics')) return { level: 'Lower', text: 'Gynaecology has a lower relative sensitivity (different bacterial growth patterns): a standard clean-air protocol, still to NABH.' };
+  return list.length ? { level: 'Standard', text: 'Standard clean-air protocol to NABH for general surgical work.' } : null;
 }

@@ -1,7 +1,7 @@
 import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRefCache, fmtDate } from '../ui.js';
 import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions } from '../schema.js';
 import { table } from './list.js';
-import { PART_UI } from '../parts.js';
+import { PART_UI, PHOTO_SLOTS } from '../parts.js';
 
 // ---------------------------------------------------------------- users (each user gets one role)
 export async function usersView(root) {
@@ -149,7 +149,7 @@ export async function settingsView(root) {
 // Real photos of each part (pass box, door, pendants …): shown to clients when they tap that part in the 3D view.
 function photosCard() {
   const card = h('div.card');
-  const part = h('select', Object.entries(PART_UI).map(([k, p]) => h('option', { value: k }, `${p.icon || ''} ${p.title}`)));
+  const part = h('select', PHOTO_SLOTS.map(([k, label]) => h('option', { value: k }, label)));
   const caption = h('input', { placeholder: 'e.g. Pass box at Sahyadri Hospital, Pune' });
   const file = h('input', { type: 'file', accept: '.jpg,.jpeg,.png,.webp', multiple: true });
   const list = h('div');
@@ -157,7 +157,7 @@ function photosCard() {
     const rows = await api('/part-photos');
     const by = {};
     for (const r of rows) (by[r.part] ||= []).push(r);
-    list.replaceChildren(...(rows.length ? Object.entries(by).map(([k, ps]) => h('div', { style: { margin: '12px 0' } }, h('b', PART_UI[k]?.title || k),
+    list.replaceChildren(...(rows.length ? Object.entries(by).map(([k, ps]) => h('div', { style: { margin: '12px 0' } }, h('b', PHOTO_SLOTS.find(x => x[0] === k)?.[1] || PART_UI[k]?.title || k),
       h('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '6px' } }, ps.map(p => h('div', { style: { width: '150px' } },
         h('img', { src: `/api/public/part-photo/${p.id}`, alt: p.caption || '', style: { width: '150px', height: '100px', objectFit: 'cover', borderRadius: '8px', display: 'block' } }),
         h('div.muted', { style: { fontSize: '11px', margin: '3px 0' } }, p.caption || p.filename),

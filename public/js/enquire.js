@@ -4,7 +4,7 @@ import { mount3D, openExplainer, WALL_FINISHES } from './ot3d.js';
 import { VIDEOS, videoSecs, fmtSecs } from './explainers.js';
 import { partPanel } from './partpanel.js';
 import { DOOR_TYPES, FLOOR_TYPES } from './parts.js';
-import { otNorms, otType, NABH_SOURCE } from './nabh.js';
+import { otNorms, otType, protocolFor, NABH_SOURCE } from './nabh.js';
 
 const $ = id => document.getElementById(id);
 function h(tag, attrs, ...kids) {
@@ -47,14 +47,14 @@ const TYPES = [
   ['cathlab', 'Cath Lab', 'Cardiac / X-ray'], ['isolation', 'Isolation Room', 'Infection control'], ['ivf', 'IVF Lab', 'Embryology'], ['cssd', 'CSSD', 'Sterilisation'],
   ['cleanroom', 'Clean Room', 'Pharma / lab'], ['other', 'Something else', 'Tell us below'],
 ];
-const OT_SPECIALTY = ['General surgery', 'Orthopaedics', 'Cardiac', 'Neuro', 'Gynae / Obstetrics', 'Ophthalmic', 'ENT', 'Urology', 'Transplant', 'Robotic', 'Day care'];
+const OT_SPECIALTY = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care'];
 const ICU_TYPE = ['Medical ICU', 'Surgical ICU', 'Cardiac ICU', 'Neuro ICU', 'Burns ICU', 'Covid / isolation ICU', 'NICU Level II', 'NICU Level III', 'PICU'];
-const HIGH_LAF = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Robotic'];
+const HIGH_LAF = ['Multi-specialty', 'Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Robotic'];
 // [key, label, hint, icon, for which projects]
 const FEATURES = [
   ['laf', 'Laminar air flow', 'A gentle downward flow of filtered air over the table keeps the surgical area particle-free.', '🌬️', ['ot', 'cathlab', 'ivf', 'cleanroom']],
   ['hepa', 'HEPA filtration', 'Filters that trap 99.99% of dust and bacteria from the air coming into the room.', '🧪', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf', 'cssd', 'cleanroom']],
-  ['panels', 'Modular wall & ceiling panels', 'Smooth, joint-free panels instead of plaster and paint: easy to clean, nothing for germs to hide in. Choose SS 304, PPGI or toughened glass.', '🧱', ['*']],
+  ['panels', 'Modular wall & ceiling panels', 'Smooth, joint-free panels instead of plaster and paint: easy to clean, nothing for germs to hide in. Choose SS 304, PPGL, toughened glass or SS 304 + glass.', '🧱', ['*']],
   ['doors', 'OT doors', 'Sealed doors that keep the room pressure and sterility. Choose sliding, swing or automatic swing.', '🚪', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'ivf']],
   ['pendant_surgeon', "Surgeon's pendant", 'Ceiling arm bringing gases, power, data and the surgical monitor to the surgeon: no cables on the floor.', '🦾', ['ot', 'cathlab']],
   ['pendant_anaes', 'Anaesthesia pendant', 'Ceiling arm with gases (including AGSS), power and data for the anaesthesia workstation.', '🦾', ['ot', 'cathlab']],
@@ -75,7 +75,7 @@ const FEATURES = [
   ['ahu', 'AHU & air conditioning', 'The air handling unit that cools, filters and pressurises the room — the heart of the system.', '❄️', ['*']],
 ];
 const SUB_CHOICES = {
-  panels: { key: 'wall_finish', top: true, list: [['ss', 'SS 304'], ['ppgi', 'PPGI'], ['glass', 'Toughened glass']] },
+  panels: { key: 'wall_finish', top: true, list: [['ss', 'SS 304'], ['ppgi', 'PPGL'], ['glass', 'Toughened glass'], ['ssglass', 'SS 304 + glass']] },
   doors: { key: 'door_type', list: DOOR_TYPES.map(([v, l]) => [v, l]) },
   flooring: { key: 'floor_type', list: FLOOR_TYPES.map(([v, l]) => [v, l]) },
 };
@@ -200,6 +200,7 @@ function nabhCard({ checklist, onAdd } = {}) {
   const missing = N.needs.filter(x => x.required && !D.features.includes(label(x.key)));
   return h('div.eq-nabh',
     h('h3', `📋 NABH norms: ${N.title}${otSpecs().length ? ` · ${otSpecs().join(', ')}` : ''}`),
+    protocolFor(otSpecs()) ? h('p', { style: { margin: '0 0 8px', fontWeight: 600 } }, `🦠 Infection protocol: ${protocolFor(otSpecs()).level}. ${protocolFor(otSpecs()).text}`) : null,
     h('p.src', NABH_SOURCE),
     checklist
       ? h('ul', N.needs.map(x => { const ok = D.features.includes(label(x.key)); return h('li' + (ok ? '.ok' : x.required ? '.need' : ''), h('span', label(x.key) || x.key), h('div', `${x.why}${x.required ? '' : ' (recommended)'}`)); }))

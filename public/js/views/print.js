@@ -1,6 +1,7 @@
 import { h, api, state, fmtDate } from '../ui.js';
 import { bomDoc } from './bom.js';
 import { bomRows } from './form.js';
+import { PROJECT, ROOM, SITE, roomCalc } from '../brief-fields.js';
 import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, gstTotals, round2 } from '../calc.js';
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
@@ -235,6 +236,45 @@ function requisitionDoc(r, s) {
       h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td'), h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? `${r.approved_by} (${r.approved_at || ''})` : r.status))))));
 }
 
+// Techno-commercial requirement sheet (MD, 13 Oct 2026): the enquiry, the detailed form per OT with design figures,
+// site and scope, the internal client profile and MIS, and the drawings received. The base for the proposal.
+function techSheetDoc(e, brief, files, s) {
+  const d = brief?.data || {}, rooms = d.rooms || [], P = d.project || {}, S = d.site || {};
+  const row = (k, v) => (v == null || v === '' ? null : h('tr', h('th', { style: { width: '34%', textAlign: 'left', fontWeight: 600 } }, k), h('td', ...multiline(v))));
+  let num = 0; // sections are numbered only when they have something in them
+  const sec = (title, ...rows) => { const r = rows.flat().filter(Boolean); return r.length ? [h('tr', h('td', { colspan: 2, style: { background: '#1f4e9a', color: '#fff', fontWeight: 700, padding: '5px 8px' } }, title.startsWith('INTERNAL') ? title : `${++num} · ${title}`)), ...r] : []; };
+  const val = (f, v) => (v == null || v === '' ? null : `${v}${f.unit ? ' ' + f.unit : ''}`);
+  const fieldsOf = (fields, obj) => fields.filter(f => (!f.show || f.show(obj)) && f.type !== 'textarea').map(f => row(f.label, val(f, obj[f.key])));
+  const otRows = () => rooms.flatMap((r, i) => {
+    const c = roomCalc(r);
+    return sec(`${r.name || `OT ${i + 1}`} — ${r.specialty || 'specialty not given'}`,
+      row('NABH type / air class', `Type ${c.type} · ${c.cls}`), c.protocol ? row('Infection protocol', c.protocol.text) : null,
+      row('Size (L × W × H)', `${r.length || '?'} × ${r.width || '?'} × ${r.height || '?'} ft${c.area ? ` · ${c.area} sq ft floor · ${c.wallArea} sq ft walls` : ''}`),
+      row('Design (WIESPL basis of design)', c.cfm ? `${Math.round(c.acph)} air changes · AHU ≈ ${c.cfm} cfm · ≈ ${c.tr} TR${c.sunRoof ? ' + roof load (sun-exposed)' : ''} · fresh air ≈ ${c.fresh} cfm · ${c.temp} · RH ${c.rh}` : null),
+      c.voidFt != null ? row('Space above false ceiling', `${c.voidFt} ft`) : null,
+      ROOM.flatMap(([, fields]) => fieldsOf(fields.filter(f => !['name', 'specialty', 'length', 'width', 'height'].includes(f.key)), r)),
+      row('Notes', r.notes));
+  });
+  const internal = sec('INTERNAL – client profile & MIS (remove before sharing with the client)',
+    row('Client profile', e.client_profile), row('Budget range', e.budget_range), row('Decision maker', e.decision_maker), row('Taste & priorities', e.client_taste),
+    row('Institution / group', e.institution_name), row('Board of Directors / trustees', e.board_members), row('Financial strength', e.financial_status), row('Questionnaire', e.profile_answers),
+    row('Lead (website score)', e.lead_grade ? `${e.lead_grade}${e.lead_score != null ? ` (${e.lead_score}/100)` : ''}` : null));
+  return h('div.doc', h('div.page', { style: { fontSize: '11.5px' } },
+    letterhead(s),
+    h('div', { style: { textAlign: 'center', fontSize: '17px', fontWeight: 700, margin: '10px 0 2px' } }, 'TECHNO-COMMERCIAL REQUIREMENT SHEET'),
+    h('div', { style: { textAlign: 'center', marginBottom: '8px' } }, `Enquiry ${e.enquiry_no || ''} · ${fmtDate(e.date) || ''}${brief?.submitted_at ? ` · detailed form received ${brief.submitted_at}${brief.submitted_by ? ` from ${brief.submitted_by}` : ''}` : ' · detailed form not received yet'}`),
+    h('table', h('tbody',
+      sec('Client & project', row('Hospital / client', e.hospital_name || P.hospital), row('Place', [e.place, e.district].filter(Boolean).join(', ') || P.city), row('Doctor / contact', [e.doctor_name || P.doctor, e.doctor_phone || P.phone, e.email].filter(Boolean).join(' · ')),
+        row('Type of work', e.type_of_work), row('Capacity', e.capacity), row('Source', e.source), fieldsOf(PROJECT.filter(f => !['hospital', 'city', 'doctor', 'phone'].includes(f.key)), P)),
+      sec('Site & scope of work', fieldsOf(SITE, S), row('Remarks', S.remarks)),
+      otRows(),
+      sec('Drawings & photos received', files.length ? files.map(a => row(a.filename, a.note || '')) : [row('—', 'None yet: ask for the architectural / structural drawing')]),
+      sec('What the client told us online', row('Website form', e.web_summary)),
+      internal)),
+    h('table', { style: { marginTop: '18px' } }, h('tbody', h('tr', ['Prepared by (Sales)', 'Checked by (Technical)', 'Approved (MD)'].map(t => h('td', { style: { height: '64px', verticalAlign: 'bottom', textAlign: 'center', width: '33%' } }, t))))),
+  ));
+}
+
 function challanDoc(c, project, s) {
   const lines = (c.lines || []).filter(l => l.description || Number(l.qty));
   const blanks = Math.max(0, 8 - lines.length);
@@ -345,6 +385,11 @@ export async function printView(root, kind, id) {
     const r = await api(`/requisitions/${id}`);
     title = r.req_no;
     doc = requisitionDoc(r, s);
+  } else if (kind === 'techsheet') {
+    const e = await api(`/enquiries/${id}`);
+    const [brief, files] = await Promise.all([api(`/enquiries/${id}/brief-data`).catch(() => ({})), api(`/attachments/enquiries/${id}`).catch(() => [])]);
+    title = `Techno-commercial sheet ${e.enquiry_no || ''} ${e.hospital_name || ''}`.trim();
+    doc = techSheetDoc(e, brief, files, s);
   } else if (kind === 'stockdoc') {
     const docNo = new URLSearchParams(location.hash.split('?')[1] || '').get('doc');
     const moves = await api(`/stock_moves?type=${encodeURIComponent(id)}&doc_no=${encodeURIComponent(docNo)}`);

@@ -12,6 +12,7 @@ const finishLook = (f, colour) => {
   const c = (f.colours.find(x => x[0] === colour) || f.colours[0])[1];
   if (f.key === 'ss') return 'repeating-linear-gradient(90deg, rgba(255,255,255,.18) 0 2px, rgba(80,90,105,.08) 2px 4px), linear-gradient(135deg, #eef1f4, #b9c2cc 45%, #e4e8ec 60%, #a8b2bd)';
   if (f.key === 'glass') return `linear-gradient(120deg, rgba(255,255,255,.65) 0 18%, rgba(255,255,255,0) 32%), linear-gradient(180deg, ${hex(c)}, ${hex(c)})`;
+  if (f.combo) return `linear-gradient(170deg, rgba(255,255,255,.55) 0 10%, rgba(255,255,255,0) 22%), linear-gradient(to top, #c9d0d8 0 40%, #8e98a4 40% 42%, ${hex(c)} 42%)`;
   if (f.key === 'wood') return `repeating-linear-gradient(90deg, rgba(80,50,25,.18) 0 1px, transparent 1px 22px), repeating-linear-gradient(88deg, rgba(120,80,40,.12) 0 3px, transparent 3px 9px), ${hex(c)}`;
   return `linear-gradient(180deg, ${hex(c)}, #dfe2dc)`;
 };
@@ -41,7 +42,7 @@ export function partPanel(rawKey, ctx) {
   const body = [];
   const K = P.kind;
   if (K === 'wall' || K === 'passage') {
-    const list = K === 'wall' ? OT_FINISHES : WALL_FINISHES;
+    const list = K === 'wall' ? OT_FINISHES : WALL_FINISHES.filter(f => !f.combo);
     const cur = K === 'wall' ? { f: D.wall_finish || 'ss', c: D.wall_colour } : { f: o.passage_finish || 'wood', c: o.passage_colour };
     body.push(section(K === 'wall' ? 'Choose the wall finish' : 'Choose the passage wall finish', h('div.eq-finishes', list.map(f => {
       const on = cur.f === f.key, colour = on ? cur.c : null;
@@ -51,7 +52,7 @@ export function partPanel(rawKey, ctx) {
         saveOpt(); redraw();
       };
       return h('div.eq-finish' + (on ? '.on' : ''),
-        h('button.look', { type: 'button', style: { background: finishLook(f, colour) }, onclick: () => apply(colour), 'aria-label': f.name }),
+        h('button.look', { type: 'button', style: { background: photos[`wall_${f.key}`]?.length && K === 'wall' ? `center / cover no-repeat url(/api/public/part-photo/${photos[`wall_${f.key}`][0].id})` : finishLook(f, colour) }, onclick: () => (K === 'wall' && photos[`wall_${f.key}`]?.length ? lightbox(h, photos[`wall_${f.key}`], 0, f.name) : apply(colour)), 'aria-label': f.name }),
         h('div.txt', h('b', f.name, on ? ' ✓' : ''), h('small', f.hint),
           f.colours.length > 1 ? h('div.sws', f.colours.map(([n, x]) => h('button.sw' + (on && (cur.c || f.colours[0][0]) === n ? '.on' : ''), { type: 'button', title: n, 'aria-label': n, style: { background: hex(x) }, onclick: () => apply(n) })), h('span', on ? cur.c || f.colours[0][0] : `${f.colours.length} colours`)) : h('small.one', f.key === 'ss' ? 'No colour: natural steel' : `Colour: ${f.colours[0][0]}`)));
     }))));

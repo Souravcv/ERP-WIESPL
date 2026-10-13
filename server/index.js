@@ -198,6 +198,13 @@ api.get('/dashboard', wrap(req => {
 const need = (entity) => (req, res, next) => canWrite(entity, req.user.role) ? next() : res.status(403).json({ error: 'You do not have permission for this action' });
 
 api.post('/enquiries/:id/quotation', need('quotations'), wrap(req => wf.quotationFromEnquiry(req.params.id, req.user)));
+// structured detailed-form data for the techno-commercial sheet
+api.get('/enquiries/:id/brief-data', wrap(req => {
+  if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access');
+  const b = db.prepare('SELECT data, submitted_at, submitted_by FROM design_briefs WHERE enquiry_id = ?').get(Number(req.params.id));
+  let data = null; try { data = JSON.parse(b?.data || 'null'); } catch { /* none */ }
+  return { data, submitted_at: b?.submitted_at || null, submitted_by: b?.submitted_by || null };
+}));
 api.post('/enquiries/:id/brief', need('enquiries'), wrap(req => { const e = db.prepare('SELECT id FROM enquiries WHERE id = ?').get(req.params.id); if (!e) throw new HttpError(404, 'Enquiry not found'); let d = {}; const l = db.prepare('SELECT data FROM web_leads WHERE enquiry_id = ?').get(e.id); try { d = JSON.parse(l?.data || '{}'); } catch { /* none */ } return { token: briefFor(e.id, d) }; }));
 api.post('/quotations/:id/submit', need('quotations'), wrap(req => wf.submitForApproval('Quotation', req.params.id, req.user)));
 api.post('/quotations/:id/revise', need('quotations'), wrap(req => wf.reviseQuotation(req.params.id, req.user)));

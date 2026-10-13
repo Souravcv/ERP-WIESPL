@@ -1,12 +1,12 @@
 // Detailed OT requirement brief (second form, filled by the surgeon / hospital team or WIESPL sales).
 // Follows the WIESPL Basis of Design (Annexure II) and estimate (Annexure III). Shared by brief.js (browser)
 // and server/public.js (summary text for the Enquiry Register), so it must not touch the DOM.
-import { otNorms, otType } from './nabh.js';
+import { otNorms, otType, protocolFor } from './nabh.js';
 import { VIDEOS } from './explainers.js';
 
-export const SPECIALTIES = ['General surgery', 'Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Gynae / Obstetrics', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
-export const WALLS = ['SS 304', 'PPGI', 'Toughened glass']; // OT walls; the passage can also be wood (HPL)
-export const WALL_COLOURS = { 'SS 304': ['Natural steel'], PPGI: ['Off-white'], 'Toughened glass': ['Ivory white', 'Sky blue', 'Mint green'], 'Wooden finish (HPL)': ['Light oak', 'Walnut'] };
+export const SPECIALTIES = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
+export const WALLS = ['SS 304', 'PPGL', 'Toughened glass', 'SS 304 + glass']; // OT walls; the passage can also be wood (HPL)
+export const WALL_COLOURS = { 'SS 304': ['Natural steel'], PPGL: ['Off-white'], 'Toughened glass': ['Ivory white', 'Sky blue', 'Mint green'], 'SS 304 + glass': ['Ivory white', 'Sky blue', 'Mint green'], 'Wooden finish (HPL)': ['Light oak', 'Walnut'] };
 export const FLOORS = ['Beige', 'Grey', 'Sky blue', 'Aqua green', 'Navy blue', 'Light grey'];
 const YN = ['Yes', 'No'];
 const SCOPE = ['WIESPL', 'Hospital', 'Not decided'];
@@ -28,10 +28,19 @@ export const ROOM = [
     { key: 'specialty', label: 'Specialty', type: 'select', options: SPECIALTIES, def: () => 'General surgery' },
     { key: 'length', label: 'Length', type: 'number', unit: 'ft', def: () => 20 },
     { key: 'width', label: 'Width', type: 'number', unit: 'ft', def: () => 20 },
-    { key: 'height', label: 'Clear height', type: 'number', unit: 'ft', def: () => 10, hint: 'Floor to slab; the false ceiling sits at about 9–10 ft' },
+    { key: 'height', label: 'OT height (finished ceiling)', type: 'number', unit: 'ft', def: () => 10, hint: 'Height of the false ceiling inside the OT' },
     { key: 'cases', label: 'Surgeries per day', type: 'number' },
     { key: 'persons', label: 'People in the OT during surgery', type: 'number', def: () => 6 },
     { key: 'equip_kw', label: 'Equipment load', type: 'number', unit: 'kW', def: () => 2 },
+  ]],
+  ['Site & structure', [
+    { key: 'slab_height', label: 'Slab height (floor to bottom of slab)', type: 'number', unit: 'ft', hint: 'The space above the false ceiling carries the plenum and ducts' },
+    { key: 'beams', label: 'Beams under the slab inside the OT', type: 'select', options: ['No beams', 'Yes, beams inside the OT', 'Not sure'] },
+    { key: 'beam_depth', label: 'Deepest beam (below the slab)', type: 'number', unit: 'inch', show: r => r.beams === 'Yes, beams inside the OT' },
+    { key: 'periphery_beams', label: 'Periphery beams where the ducts must pass', type: 'select', options: ['No', 'Yes', 'Not sure'], hint: 'Ducts enter the OT over the walls' },
+    { key: 'periphery_depth', label: 'Periphery beam depth', type: 'number', unit: 'inch', show: r => r.periphery_beams === 'Yes' },
+    { key: 'north', label: 'Which side faces North?', type: 'select', options: ['Front (door side)', 'Back wall', 'Left wall', 'Right wall', 'Not sure'], hint: 'Standing at the OT door, looking in' },
+    { key: 'above', label: 'What is above the OT?', type: 'select', options: ['Open terrace (sun-exposed)', 'Another floor (shaded)', 'Plant / AHU room', 'Not sure'], hint: 'Needed for the heat load' },
   ]],
   ['Air system (HVAC)', [
     { key: 'laf', label: 'Laminar flow plenum', type: 'select', options: ['4 × 6 ft', '4 × 8 ft', '6 × 8 ft', '8 × 10 ft', 'Not sure'], def: (i, r) => suggestLaf(r?.specialty), hint: 'Suggested from the specialty; NABH wants the filter area 1 ft beyond every side of the table' },
@@ -44,7 +53,7 @@ export const ROOM = [
   ['Walls, ceiling & floor', [
     { key: 'wall', label: 'Wall panels', type: 'select', options: WALLS, def: () => 'SS 304' },
     { key: 'wall_colour', label: 'Wall colour', type: 'select', options: r => WALL_COLOURS[r.wall] || [], def: (i, r) => (WALL_COLOURS[r?.wall] || [''])[0], show: r => (WALL_COLOURS[r.wall] || []).length > 1 },
-    { key: 'ceiling', label: 'Ceiling panels', type: 'select', options: ['SS 304', 'PPGI'], def: () => 'SS 304' },
+    { key: 'ceiling', label: 'Ceiling panels', type: 'select', options: ['SS 304', 'PPGL'], def: () => 'SS 304' },
     { key: 'floor_type', label: 'Floor type', type: 'select', options: ['Antistatic conductive vinyl', 'Homogeneous vinyl'], def: () => 'Antistatic conductive vinyl' },
     { key: 'floor_main', label: 'Floor main colour', type: 'select', options: FLOORS, def: () => 'Beige' },
     { key: 'floor_border', label: 'Floor border colour', type: 'select', options: FLOORS, def: () => 'Grey' },
@@ -117,9 +126,10 @@ export function roomCalc(r) {
   const fresh = vol ? Math.ceil((vol * 5) / 60 / 10) * 10 : 0;
   const [pa, pb] = String(r.laf || '').match(/\d+/g)?.map(Number) || [];
   const lafOk = pa ? Math.max(pa, pb) >= 8.7 && Math.min(pa, pb) >= 3.7 : null; // 80-inch table + 1 ft each side
-  const norms = otNorms(r.specialty);
+  const norms = otNorms(r.specialty), protocol = protocolFor(r.specialty);
+  const voidFt = Number(r.slab_height) && Number(r.height) ? Math.round((Number(r.slab_height) - Number(r.height)) * 10) / 10 : null;
   return {
-    type, acph, cfm, tr, fresh, area: L * Wd, wallArea: Math.round(2 * (L + Wd) * Math.min(Ht, 10)), lafOk, norms,
+    type, acph, cfm, tr, fresh, protocol, voidFt, sunRoof: /sun-exposed/.test(r.above || ''), area: L * Wd, wallArea: Math.round(2 * (L + Wd) * Math.min(Ht, 10)), lafOk, norms,
     temp: r.specialty === 'Orthopaedics' ? '18 ± 2 °C (joint replacement)' : '20 ± 2 °C (NABH 21 ± 3 °C)',
     rh: 'not more than 55% (NABH 20–60%)', cls: type === 'A' ? 'ISO 5 (Class 100)' : 'ISO 6 (Class 1000), designed to Class 100 at the plenum',
   };
@@ -134,7 +144,8 @@ export function briefText(d = {}) {
   (d.rooms || []).forEach((r, i) => {
     const c = roomCalc(r);
     out.push('', `${r.name || `OT ${i + 1}`} · ${r.specialty || '—'} · NABH Type ${c.type}`,
-      `  Size: ${r.length || '?'} × ${r.width || '?'} × ${r.height || '?'} ft · design ${Math.round(c.acph)} air changes · about ${c.cfm} cfm AHU · ${c.tr} TR · fresh air ${c.fresh} cfm · ${c.temp}`);
+      `  Size: ${r.length || '?'} × ${r.width || '?'} × ${r.height || '?'} ft · design ${Math.round(c.acph)} air changes · about ${c.cfm} cfm AHU · ${c.tr} TR${c.sunRoof ? ' + roof heat load (sun-exposed)' : ''} · fresh air ${c.fresh} cfm · ${c.temp}`,
+      c.protocol ? `  Infection protocol: ${c.protocol.level}` : null, c.voidFt != null ? `  Space above the false ceiling: ${c.voidFt} ft` : null);
     for (const [title, fields] of ROOM) {
       const vals = fields.filter(f => show(f, r) && f.key !== 'name' && f.key !== 'specialty' && !['length', 'width', 'height'].includes(f.key)).map(f => val(f, r[f.key]) && `${f.label}: ${val(f, r[f.key])}`).filter(Boolean);
       if (vals.length) out.push(`  ${title}: ${vals.join(' · ')}`);
@@ -145,7 +156,7 @@ export function briefText(d = {}) {
   if (sv.length) out.push('', 'SITE & SCOPE', ...sv);
   const w = Object.entries(d.watched || {});
   if (w.length) out.push('', `Explainer videos watched: ${w.map(([k, p]) => `${VIDEOS[k]?.title || k} (${p}%)`).join(', ')}`);
-  return out.join('\n');
+  return out.filter(x => x != null).join('\n');
 }
 
 // Keep only known keys with short values (the brief comes from an open link).

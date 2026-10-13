@@ -46,8 +46,9 @@ function fallback(box, opts, keys) {
 // Wall panel finishes, chosen by tapping a wall. Colours: [name, swatch, tint over the texture].
 export const WALL_FINISHES = [
   { key: 'ss', name: 'Stainless steel (SS 304)', hint: 'Brushed SS 304 skin on 50 mm PUF panels. Natural steel: no colour to choose.', colours: [['Natural steel', 0xd3d9df]], metal: 0.85, rough: 0.3 },
-  { key: 'ppgi', name: 'PPGI', hint: 'Pre-painted galvanised steel panels with an antibacterial coat, in one off-white shade.', colours: [['Off-white', 0xeceee8]], metal: 0.1, rough: 0.35 },
+  { key: 'ppgi', name: 'PPGL', hint: 'Pre-painted galvalume steel PUF panels with an antibacterial coat, in one off-white shade.', colours: [['Off-white', 0xeceee8]], metal: 0.1, rough: 0.35 },
   { key: 'glass', name: 'Toughened glass', hint: 'Back-painted 8 mm toughened glass panels: seamless, glossy and easy to wipe.', colours: [['Ivory white', 0xece3cc], ['Sky blue', 0x6fa8dc], ['Mint green', 0x7cc7a4]], metal: 0, rough: 0.12 },
+  { key: 'ssglass', name: 'SS 304 + glass', hint: 'SS 304 panels up to dado height with back-painted toughened glass above, as in our Delhi project.', colours: [['Ivory white', 0xece3cc], ['Sky blue', 0x6fa8dc], ['Mint green', 0x7cc7a4]], metal: 0, rough: 0.12, combo: true },
   { key: 'wood', name: 'Wooden finish (HPL)', hint: 'High-pressure laminate with a warm wood look, as in WIESPL passages and lobbies.', colours: [['Light oak', 0xc9a57c, 0xffffff], ['Walnut', 0x8a6142, 0x9c7c64]], metal: 0.05, rough: 0.5, passageOnly: true },
 ];
 export const OT_FINISHES = WALL_FINISHES.filter(f => !f.passageOnly);
@@ -144,14 +145,13 @@ export async function mount3D(box, opts) {
   M.passage = new T.MeshStandardMaterial({ map: wood, roughness: 0.55, metalness: 0.05 });
   const finishMat = (m, f, c) => { m.color.setHex(f.key === 'wood' ? c[2] : c[1]); m.metalness = f.metal; m.roughness = f.rough; m.map = f.key === 'ss' ? brushed : f.key === 'wood' ? wood : null; m.envMapIntensity = f.key === 'ss' ? 0.9 : f.key === 'glass' ? 0.55 : 0.35; m.needsUpdate = true; };
   const setPassage = (key, colour) => { const [f, c] = finishOf(key || 'wood', colour); look.passage = { finish: f.key, colour: c[0] }; finishMat(M.passage, f, c); };
+  M.panelLow = new T.MeshStandardMaterial();
   const setFinish = (key, colour) => {
     const [f, c] = finishOf(key, colour);
     look.wall = { finish: f.key, colour: c[0] };
-    for (const m of [M.panel, M.cut]) {
-      m.color.setHex(f.key === 'wood' ? c[2] : c[1]); m.metalness = f.metal; m.roughness = f.rough;
-      m.map = f.key === 'ss' ? brushed : f.key === 'wood' ? wood : null;
-      m.envMapIntensity = f.key === 'ss' ? 0.9 : f.key === 'glass' ? 0.55 : 0.35; m.needsUpdate = true;
-    }
+    const [ssF, ssC] = finishOf('ss');
+    finishMat(M.panel, f.combo ? { ...f, key: 'glass' } : f, c);                       // upper wall (all of it, unless a combination)
+    for (const m of [M.panelLow, M.cut]) finishMat(m, f.combo ? ssF : f, f.combo ? ssC : c); // below dado height
   };
   setFinish(opts.wall?.finish, opts.wall?.colour);
   setPassage(opts.passage?.finish, opts.passage?.colour);
@@ -225,8 +225,10 @@ export async function mount3D(box, opts) {
   put(flooring.group, B(W + 0.14, 0.18, D + 0.14), new T.MeshStandardMaterial({ map: slabTex, metalness: 0.35, roughness: 0.55 }), 0, -0.095, 0);
   // panel walls: 1.2 m wide panels with slim seams
   // a wall slab along z (at x), with an optional rectangular opening (z0..z1, y0..y1)
+  const DADO = 1.2; // SS + glass walls change material here
   const slabZ = (parent, mat, x, t, zA, zB, h, hole) => {
-    const box = (za, zb, ya, yb) => { if (zb - za > 0.001 && yb - ya > 0.001) put(parent, B(t, yb - ya, zb - za), mat, x, (ya + yb) / 2, (za + zb) / 2); };
+    const one = (za, zb, ya, yb, m) => { if (zb - za > 0.001 && yb - ya > 0.001) put(parent, B(t, yb - ya, zb - za), m, x, (ya + yb) / 2, (za + zb) / 2); };
+    const box = (za, zb, ya, yb) => { if (mat !== M.panel) return one(za, zb, ya, yb, mat); one(za, zb, ya, Math.min(yb, DADO), M.panelLow); one(za, zb, Math.max(ya, DADO), yb, M.panel); };
     const o = hole && hole.z1 > zA && hole.z0 < zB ? hole : null;
     if (!o) return box(zA, zB, 0, h);
     box(zA, zB, 0, o.y0); box(zA, zB, o.y1, h); box(zA, o.z0, o.y0, o.y1); box(o.z1, zB, o.y0, o.y1);
@@ -237,8 +239,7 @@ export async function mount3D(box, opts) {
     for (let i = 0; i < n; i++) {
       const c = -len / 2 + pw * (i + 0.5);
       if (axis === 'z') { const g = new T.Group(); panels.group.add(g); slabZ(g, M.panel, fixed, thick, c - pw / 2 + 0.004, c + pw / 2 - 0.004, h, PB_HOLE); g.traverse(o => { o.userData.wall = true; }); continue; }
-      const p = put(panels.group, B(pw - 0.008, h, thick), M.panel); p.userData.wall = true;
-      p.position.set(c, h / 2, fixed);
+      for (const [ya, yb, m] of [[0, DADO, M.panelLow], [DADO, h, M.panel]]) { const p = put(panels.group, B(pw - 0.008, yb - ya, thick), m, c, (ya + yb) / 2, fixed); p.userData.wall = true; }
     }
   };
   panelWall(W, 'x', -D / 2, H); panelWall(D, 'z', -W / 2, H);
@@ -248,7 +249,7 @@ export async function mount3D(box, opts) {
   const lead = opts.features.includes('lead') || opts.types.includes('cathlab');
   const cutH = 0.75;
   const layered = (len, axis, fixed) => {
-    const layers = [[M.cut, 0.012], [M.puf, 0.07], ...(lead ? [[M.leadSheet, 0.01]] : []), [M.panel, 0.012]];
+    const layers = [[M.cut, 0.012], [M.puf, 0.07], ...(lead ? [[M.leadSheet, 0.01]] : []), [M.panelLow, 0.012]];
     let off = 0;
     for (const [m, t] of layers) {
       const c = fixed - off - t / 2; // layers stack inwards from the outside face
@@ -258,8 +259,8 @@ export async function mount3D(box, opts) {
   };
   layered(W, 'x', D / 2); layered(D, 'z', W / 2);
   // rounded coving where floor meets wall and wall meets wall
-  { const c = put(panels.group, Cy(0.09, 0.09, W, 12, false, 0, Math.PI / 2), M.panel, 0, 0, -D / 2 + 0.03); c.rotation.set(Math.PI, 0, Math.PI / 2); }
-  { const c = put(panels.group, Cy(0.09, 0.09, D, 12, false, 0, Math.PI / 2), M.panel, -W / 2 + 0.03, 0, 0); c.rotation.set(Math.PI / 2, 0, Math.PI); }
+  { const c = put(panels.group, Cy(0.09, 0.09, W, 12, false, 0, Math.PI / 2), M.panelLow, 0, 0, -D / 2 + 0.03); c.rotation.set(Math.PI, 0, Math.PI / 2); }
+  { const c = put(panels.group, Cy(0.09, 0.09, D, 12, false, 0, Math.PI / 2), M.panelLow, -W / 2 + 0.03, 0, 0); c.rotation.set(Math.PI / 2, 0, Math.PI); }
   { const c = put(panels.group, Cy(0.09, 0.09, H, 12, false, 0, Math.PI / 2), M.panel, -W / 2 + 0.03, H / 2, -D / 2 + 0.03); c.rotation.y = Math.PI; }
   panels.anchor.set(-W / 2 + 0.08, 2.35, -D / 4);
   if (lead) { const l = comp('lead'); l.anchor.set(W / 2 - 0.04, cutH + 0.05, D / 4); }
@@ -782,7 +783,7 @@ export async function mount3D(box, opts) {
     tags[key] = t; box.append(t);
   }
   const hintEl = el('div', 'hint3d', opts.moreBeds ? `Showing 6 of ${opts.moreBeds + 6} beds · drag to turn` : 'Drag to turn · tap any part, a wall or the floor');
-  // finish picker on the right: tap a wall (SS / PPGI / glass / wood) or the floor (two vinyl colours)
+  // finish picker on the right: tap a wall (SS / PPGL / glass / SS + glass) or the floor (two vinyl colours)
   const fin = el('div', 'finish'); fin.hidden = true;
   const emit = () => opts.onFinish?.({ wall: { ...look.wall }, floor: { ...look.floor } });
   const swatch = (hex, name, on, fn) => { const b = el('button', 'sw' + (on ? ' on' : '')); b.type = 'button'; b.title = name; b.setAttribute('aria-label', name); b.setAttribute('aria-pressed', String(on)); b.style.background = typeof hex === 'number' ? '#' + hex.toString(16).padStart(6, '0') : hex; b.onclick = fn; return b; };

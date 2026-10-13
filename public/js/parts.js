@@ -15,7 +15,7 @@ export const LAF_SIZE_LIST = ['4 × 6 ft', '4 × 8 ft', '6 × 8 ft', '8 × 10 ft
 export const PART_UI = {
   panels: { title: 'Wall panels', icon: '🧱', feature: 'panels', kind: 'wall',
     text: 'Modular PUF-insulated panels with rounded coving at every corner: joint-free, easy to clean, nothing for germs to hide in. Everything on the wall (control panel, cabinets, X-ray viewer, pass box) sits flush.',
-    facts: ['Choose stainless steel (SS 304), PPGI or toughened glass', 'Rounded coving floor-to-wall, wall-to-wall and wall-to-ceiling', '45° chamfer where the wall meets the ceiling', 'Digital wallpaper / picture glass panel available'] },
+    facts: ['Choose stainless steel (SS 304), PPGL, toughened glass, or SS 304 with glass above', 'Real photos of each material are shown on its card', 'Rounded coving floor-to-wall, wall-to-wall and wall-to-ceiling', '45° chamfer where the wall meets the ceiling', 'Digital wallpaper / picture glass panel available'] },
   flooring: { title: 'Seamless floor', icon: '⬛', feature: 'flooring', kind: 'floor',
     text: 'Seamless vinyl laid on a 2–3 mm self-levelling base, with welded joints so the whole floor can be disinfected.',
     facts: ['Choose the type, then the main and border colours', 'Coving joins the floor to the walls without a gap'] },
@@ -78,5 +78,10 @@ export const PART_UI = {
   bedhead: { title: 'Bed-head panel', icon: '🛏️', feature: 'bedhead', kind: 'info', text: 'Gas outlets, power sockets, light and monitor shelf at every bed.', facts: [] },
   handwash: { title: 'Hand-wash station', icon: '🧼', feature: 'handwash', kind: 'info', text: 'Touch-free hand-wash for staff and visitors.', facts: [] },
 };
+// photo slots in Settings: every part, plus one per wall material / combination (shown on its card)
+export const PHOTO_SLOTS = [
+  ['wall_ss', '🧱 Wall material: SS 304'], ['wall_ppgi', '🧱 Wall material: PPGL'], ['wall_glass', '🧱 Wall material: toughened glass'], ['wall_ssglass', '🧱 Wall material: SS 304 + glass'],
+  ...Object.entries(PART_UI).map(([k, p]) => [k, `${p.icon || ''} ${p.title}`]),
+];
 // the AHU stages open the AHU / SHRM panel
 export const PART_ALIAS = { ahu_pre: 'ahu', ahu_fine: 'ahu', ahu_coil: 'ahu', ahu_fan: 'ahu', ahu_heat: 'ahu', odu: 'ahu', ducts: 'ahu' };

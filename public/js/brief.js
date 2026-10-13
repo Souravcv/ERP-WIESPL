@@ -69,6 +69,7 @@ const grid = (fields, obj, onChange) => h('div.bf-grid', fields.filter(f => !f.s
 function checks(r, c) {
   const L = [];
   const add = (cls, text) => L.push(h('li.' + cls, text));
+  if (c.protocol) add(c.protocol.level === 'Special' ? 'warn' : 'ok', c.protocol.text);
   add('ok', `${c.norms.title}: air at the supply grille ${c.cls}.`);
   add('ok', `Design ${Math.round(c.acph)} air changes per hour (NABH minimum 20, of which 4 fresh air).`);
   if (c.lafOk === true) add('ok', `Plenum ${r.laf} covers the table with 1 ft to spare on every side.`);
@@ -78,6 +79,10 @@ function checks(r, c) {
   else add('ok', 'Terminal HEPA filters, 99.97% at 0.3 µm.');
   add(r.door && !/Hermetic/.test(r.door) ? 'warn' : 'ok', r.door && !/Hermetic/.test(r.door) ? 'Swing doors: keep them closed so the OT stays at +2.5 Pa or more.' : 'Hermetic door helps hold positive pressure (NABH: at least 2.5 Pa, day and night).');
   add('ok', `Temperature ${c.temp}, humidity ${c.rh}.`);
+  if (c.voidFt != null) add(c.voidFt > 0 ? 'info' : 'warn', c.voidFt > 0 ? `${c.voidFt} ft between the false ceiling and the slab for the plenum and ducts${r.beams === 'Yes, beams inside the OT' ? ` (less under the ${r.beam_depth ? r.beam_depth + '-inch ' : ''}beams)` : ''}.` : 'The slab height must be more than the OT height: please check both.');
+  if (r.periphery_beams === 'Yes') add('warn', `Periphery beams${r.periphery_depth ? ` (${r.periphery_depth} inch)` : ''}: ducts must pass under or through them; our engineer will plan the route.`);
+  if (c.sunRoof) add('warn', 'Open terrace above: the roof adds heat load, so the cooling (TR) will be sized up.');
+  else if (r.above === 'Another floor (shaded)') add('ok', 'Shaded slab above: no extra roof heat load.');
   if (r.shrm === 'Yes') add('ok', 'SHRM: humidity control without the electric heater bank of the standard design (12 kW per OT).');
   if (r.scrub === 'None') add('warn', 'WHO: surgical hand preparation is needed before every case; plan a scrub station in the passage.');
   add('info', 'NABH: validate every 6 months to ISO 14644 (temperature & RH, particle count, air changes, velocity, pressure, HEPA).');
@@ -138,10 +143,31 @@ function draw() {
       h('h2.bf-h', '2 · Operation theatres'),
       h('div#bf-rooms', tabs, roomCard()),
       h('h2.bf-h', '3 · Site & scope of work'), grid(SITE, B.site),
+      h('h2.bf-h', '4 · Drawings & site photos'), filesBox(),
       h('p.eq-skip', `Norms: ${NABH_SOURCE}. Design figures follow the WIESPL basis of design and are confirmed after the site survey.`),
       h('div.eq-err', { id: 'bf-err' }),
       h('div.eq-nav', h('button.eq-btn', { type: 'button', onclick: () => print() }, '🖨 Print / PDF'),
         h('button.eq-btn.primary', { type: 'button', onclick: send }, sent ? 'Send again' : 'Send to WIESPL'))));
+}
+
+function filesBox() {
+  const list = h('ul.eq-files', (info.files || []).map(f => h('li', h('span', `📎 ${f.filename}`))));
+  const input = h('input', { type: 'file', multiple: true, accept: '.pdf,.jpg,.jpeg,.png,.webp,.heic,.dwg,.dxf,.doc,.docx,.xls,.xlsx,.zip', style: { display: 'none' } });
+  const msg = h('p.eq-skip');
+  input.onchange = async () => {
+    for (const f of input.files) {
+      if (f.size > 25 * 1048576) { msg.textContent = `${f.name} is larger than 25 MB`; continue; }
+      msg.textContent = `Uploading ${f.name}…`;
+      const res = await fetch(`/api/public/brief/file?t=${encodeURIComponent(token)}&name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: f });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) { msg.textContent = d.error || 'Upload failed'; continue; }
+      (info.files ||= []).push({ filename: f.name }); list.append(h('li', h('span', `📎 ${f.name}`))); msg.textContent = 'Uploaded.';
+    }
+    input.value = '';
+  };
+  return h('div', h('div.eq-drop', { role: 'button', tabindex: '0', onclick: () => input.click(), onkeydown: e => (e.key === 'Enter' || e.key === ' ') && input.click() },
+    h('div', { style: { fontSize: '30px' } }, '📐'), h('b', 'Add the architectural drawing, structural drawing or site photos'), h('span.eq-skip', 'For buildings under construction the drawing is essential · PDF, AutoCAD (DWG / DXF), images · up to 25 MB each')),
+  input, msg, list);
 }
 
 async function send(e) {
@@ -158,6 +184,7 @@ async function send(e) {
     B = { project: {}, site: {}, rooms: [], ...(info.data || {}) };
     for (const k of ['hospital', 'city', 'doctor', 'phone']) if (!B.project[k] && info.enquiry?.[k]) B.project[k] = info.enquiry[k];
     if (!B.rooms.length) B.rooms.push(newRoom(0));
+    for (const r of B.rooms) for (const k of ['wall', 'ceiling']) if (r[k] === 'PPGI') r[k] = 'PPGL';
     if (info.submitted_at) sent = { ref: info.ref };
     draw();
   } catch (e) {

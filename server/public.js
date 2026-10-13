@@ -24,7 +24,7 @@ const optsText = o => [
   o.surgeon_arms && `surgeon pendant: ${o.surgeon_arms === 2 ? 'double' : 'single'} arm`, o.anaes_arms && `anaesthesia pendant: ${o.anaes_arms === 2 ? 'double' : 'single'} arm`,
   o.light_domes && `OT light: ${['', 'single', 'double', 'triple'][o.light_domes]} dome${o.light_camera === 'yes' ? ' with camera' : ''}`, o.laf_size && `plenum ${o.laf_size}`,
   o.xray_plates && `${o.xray_plates}-plate X-ray viewer`, o.storage_count && `${o.storage_count} storage cabinet(s)`, o.passbox_count && `${o.passbox_count} pass box(es)`,
-  o.scrub_bays && `${o.scrub_bays}-bay scrub (${o.scrub_tap || 'sensor'})`, o.passage_finish && `passage walls: ${{ wood: 'wooden finish', ss: 'SS 304', ppgi: 'PPGI', glass: 'glass' }[o.passage_finish]}${o.passage_colour ? ` (${o.passage_colour})` : ''}`,
+  o.scrub_bays && `${o.scrub_bays}-bay scrub (${o.scrub_tap || 'sensor'})`, o.passage_finish && `passage walls: ${{ wood: 'wooden finish', ss: 'SS 304', ppgi: 'PPGL', glass: 'glass' }[o.passage_finish]}${o.passage_colour ? ` (${o.passage_colour})` : ''}`,
 ].filter(Boolean).join(' · ');
 const VIDEO_NAMES = Object.fromEntries(Object.entries(VIDEOS).map(([k, v]) => [k, v.title]));
 
@@ -208,13 +208,23 @@ export function publicRouter() {
     const b = briefRow(req);
     const e = db.prepare('SELECT enquiry_no, hospital_name, place, doctor_name, doctor_phone, type_of_work FROM enquiries WHERE id = ?').get(b.enquiry_id) || {};
     let data = null; try { data = JSON.parse(b.data || 'null'); } catch { /* start again */ }
-    return { ref: e.enquiry_no, enquiry: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, types: e.type_of_work }, data, submitted_at: b.submitted_at };
+    return { ref: e.enquiry_no, enquiry: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, types: e.type_of_work }, data, submitted_at: b.submitted_at, files: db.prepare("SELECT filename FROM attachments WHERE entity = 'enquiries' AND record_id = ? AND uploaded_by = 'Website form' ORDER BY id").all(b.enquiry_id) };
   }));
   r.post('/brief', express.json({ limit: '120kb' }), wrap(req => {
     limit(req, 'brief-save', 240, 10);
     const b = briefRow(req);
     db.prepare("UPDATE design_briefs SET data = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(JSON.stringify(cleanBrief(req.body?.data)), b.id);
     return { ok: true };
+  }));
+  // drawings / site photos from the detailed form go onto the enquiry
+  r.post('/brief/file', express.raw({ type: () => true, limit: '25mb' }), wrap(req => {
+    limit(req, 'brief-file', 20, 60);
+    const b = briefRow(req);
+    const n = db.prepare("SELECT COUNT(*) n FROM attachments WHERE entity = 'enquiries' AND record_id = ? AND uploaded_by = 'Website form'").get(b.enquiry_id).n;
+    if (n >= 15) throw new HttpError(400, 'Up to 15 files can be attached');
+    const name = clip(req.query.name, 150);
+    if (!OK_FILE.test(name)) throw new HttpError(400, 'Allowed: PDF, images, AutoCAD (DWG / DXF), Word, Excel or ZIP');
+    return saveAttachment('enquiries', b.enquiry_id, { filename: name, mime: 'application/octet-stream', note: 'Drawing / site photo from the detailed requirement form' }, req.body, SYSTEM_USER);
   }));
   r.post('/brief/submit', express.json({ limit: '120kb' }), wrap(req => {
     limit(req, 'brief-submit', 10, 60);
@@ -232,7 +242,7 @@ export function publicRouter() {
   return r;
 }
 
-const WALL_NAME = { ss: 'SS 304', ppgi: 'PPGI', glass: 'Toughened glass', wood: 'Wooden finish (HPL)' };
+const WALL_NAME = { ss: 'SS 304', ppgi: 'PPGL', glass: 'Toughened glass', ssglass: 'SS 304 + glass', wood: 'Wooden finish (HPL)' };
 // One brief link per enquiry, started with what the client already told us on the first form.
 export function briefFor(enquiryId, d) {
   const old = db.prepare('SELECT token FROM design_briefs WHERE enquiry_id = ?').get(enquiryId);
@@ -260,7 +270,7 @@ export function briefFor(enquiryId, d) {
     if (o.passbox_count) r.passbox = o.passbox_count;
     if (o.scrub_bays) r.scrub = `${o.scrub_bays} bay`;
     if (o.scrub_tap) r.scrub_type = { sensor: 'Sensor', foot: 'Foot-operated', elbow: 'Elbow' }[o.scrub_tap];
-    if (o.passage_finish) r.passage_wall = { wood: 'Wooden finish (HPL)', ss: 'SS 304', ppgi: 'PPGI', glass: 'Toughened glass' }[o.passage_finish];
+    if (o.passage_finish) r.passage_wall = { wood: 'Wooden finish (HPL)', ss: 'SS 304', ppgi: 'PPGL', glass: 'Toughened glass' }[o.passage_finish];
     if (d?.features?.includes('SHRM – Smart Heat Recovery (WIESPL patent)')) r.shrm = 'Yes';
     return r;
   });
