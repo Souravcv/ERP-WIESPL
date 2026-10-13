@@ -22,6 +22,7 @@ const PARTS = {
   ahu_fan: { label: '4 · Blower', hint: 'Pushes the air through the ducts and HEPA filters at the right speed (variable, with a quiet night mode).' },
   ahu_heat: { label: '5 · Heater & UV lamp', hint: 'Re-heats the air for exact humidity control; the UV lamp keeps the coil free of germs.' },
   odu: { label: 'Outdoor unit', hint: 'The compressor outside the building. Copper pipes carry refrigerant to the cooling coil in the AHU.' },
+  passage: { label: 'Clean passage', hint: 'Staff reach the OT through a clean passage; scrubbing is done here, outside the theatre.' },
   table: { label: 'Operating table', hint: 'Sits directly under the laminar flow plenum, inside the column of clean air.' },
 };
 
@@ -39,7 +40,19 @@ function fallback(box, opts, keys) {
 }
 
 // Wall panel colours the visitor can try (PPGL / SS finishes).
-export const PANEL_COLOURS = [['Sky blue', 0x5d8fc6], ['Ivory white', 0xe4eaf1], ['Mint green', 0x86c2a8], ['Steel grey', 0xb3bdc8]];
+export const PANEL_COLOURS = [['Stainless steel', 0xd3d9df, 0.85, 0.3], ['Gloss white', 0xf0f2f4, 0.1, 0.2], ['Sky blue', 0x5d8fc6, 0.12, 0.42], ['Mint green', 0x86c2a8, 0.12, 0.42]];
+
+// Scenic digital wallpaper (mountains, lake, meadow) as used on WIESPL OT and passage walls.
+function drawLandscape(g, w, h) {
+  const sky = g.createLinearGradient(0, 0, 0, h * 0.55); sky.addColorStop(0, '#1d5fd6'); sky.addColorStop(1, '#8cc8ff'); g.fillStyle = sky; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(255,255,255,.85)'; for (let i = 0; i < 6; i++) { const cx = Math.random() * w, cy = h * (0.06 + Math.random() * 0.18); for (let k = 0; k < 5; k++) { g.beginPath(); g.ellipse(cx + k * 18, cy + Math.sin(k) * 6, 30, 14, 0, 0, Math.PI * 2); g.fill(); } }
+  const ridge = (y0, amp, col, snow) => { g.fillStyle = col; g.beginPath(); g.moveTo(0, h * 0.58); const pts = []; for (let x = 0; x <= w; x += w / 14) { const y = h * y0 - Math.abs(Math.sin(x * 0.011 + y0 * 9)) * h * amp - Math.random() * h * 0.03; pts.push([x, y]); g.lineTo(x, y); } g.lineTo(w, h * 0.58); g.fill(); if (snow) { g.fillStyle = 'rgba(255,255,255,.9)'; for (const [x, y] of pts) { g.beginPath(); g.moveTo(x - 22, y + 26); g.lineTo(x, y); g.lineTo(x + 22, y + 26); g.fill(); } } };
+  ridge(0.42, 0.22, '#6b7f9e', true); ridge(0.5, 0.14, '#4d6a55', false);
+  const lake = g.createLinearGradient(0, h * 0.58, 0, h * 0.8); lake.addColorStop(0, '#2c73c9'); lake.addColorStop(1, '#174f99'); g.fillStyle = lake; g.fillRect(0, h * 0.58, w, h * 0.22);
+  g.save(); g.globalAlpha = 0.35; g.translate(0, h * 1.16); g.scale(1, -1); g.drawImage(g.canvas, 0, 0, w, h * 0.58, 0, 0, w, h * 0.58); g.restore();
+  const grass = g.createLinearGradient(0, h * 0.78, 0, h); grass.addColorStop(0, '#5fb53a'); grass.addColorStop(1, '#2f7d22'); g.fillStyle = grass; g.beginPath(); g.moveTo(0, h * 0.8); g.quadraticCurveTo(w * 0.5, h * 0.74, w, h * 0.82); g.lineTo(w, h); g.lineTo(0, h); g.fill();
+  for (let i = 0; i < 260; i++) { g.fillStyle = `rgba(255,255,${200 + Math.random() * 55},${0.6 + Math.random() * 0.4})`; g.beginPath(); g.arc(Math.random() * w, h * (0.84 + Math.random() * 0.16), 1.5 + Math.random() * 3, 0, Math.PI * 2); g.fill(); }
+}
 
 export async function mount3D(box, opts) {
   const isWard = !opts.types.some(t => ['ot', 'cathlab'].includes(t));
@@ -93,7 +106,7 @@ export async function mount3D(box, opts) {
     ss: new T.MeshStandardMaterial({ color: 0xdfe4ea, map: brushed, metalness: 0.9, roughness: 0.28, envMapIntensity: 1.1 }),
     ssDark: new T.MeshStandardMaterial({ color: 0x9aa4b0, metalness: 0.85, roughness: 0.35 }),
     chrome: new T.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.12 }),
-    panel: new T.MeshStandardMaterial({ color: (PANEL_COLOURS.find(c => c[0] === opts.panelColour) || PANEL_COLOURS[0])[1], metalness: 0.12, roughness: 0.42, envMapIntensity: 0.35 }),
+    panel: new T.MeshStandardMaterial({ color: 0xd3d9df, metalness: 0.85, roughness: 0.3, envMapIntensity: 0.9 }),
     cut: new T.MeshStandardMaterial({ color: (PANEL_COLOURS.find(c => c[0] === opts.panelColour) || PANEL_COLOURS[0])[1], metalness: 0.2, roughness: 0.5, envMapIntensity: 0.4 }),
     trim: new T.MeshStandardMaterial({ color: 0xe9edf2, metalness: 0.2, roughness: 0.4 }),
     seam: new T.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.4, roughness: 0.5 }),
@@ -112,6 +125,11 @@ export async function mount3D(box, opts) {
     copper: new T.MeshStandardMaterial({ color: 0xc8794a, metalness: 0.9, roughness: 0.3 }),
     blue: new T.MeshStandardMaterial({ color: 0x2f7fd8, metalness: 0.2, roughness: 0.45 }),
   };
+  const setFinish = name => {
+    const c = PANEL_COLOURS.find(x => x[0] === name) || PANEL_COLOURS[0];
+    for (const m of [M.panel, M.cut]) { m.color.setHex(c[1]); m.metalness = c[2]; m.roughness = c[3]; m.map = c[0] === 'Stainless steel' ? brushed : null; m.envMapIntensity = c[2] > 0.5 ? 0.9 : 0.35; m.needsUpdate = true; }
+  };
+  setFinish(opts.panelColour);
   const mats = [];
   const C = (color, o = {}) => { const m = new T.MeshStandardMaterial({ color, metalness: o.metal ?? 0.1, roughness: o.rough ?? 0.5, transparent: o.opacity != null, opacity: o.opacity ?? 1, depthWrite: o.opacity == null, emissive: o.emissive ?? 0, emissiveIntensity: o.ei ?? 1, side: o.side ?? T.FrontSide }); mats.push(m); return m; };
   const put = (parent, geo, mat, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0) => { const m = new T.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); m.castShadow = m.receiveShadow = !mat.transparent; parent.add(m); return m; };
@@ -160,7 +178,13 @@ export async function mount3D(box, opts) {
   const panels = comp('panels');
   const floorTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#5f84a8'; g.fillRect(0, 0, w, h); for (let i = 0; i < 4000; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '40,60,90'},${Math.random() * 0.09})`; g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6); } }, [W / 3, D / 3]);
   const flooring = comp('flooring');
-  put(flooring.group, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ map: floorTex, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.25 }), 0, 0, 0, -Math.PI / 2);
+  const patterned = tex(1024, 1024, (g, w, h) => {
+    const speck = (x0, y0, ww, hh, base, n) => { g.fillStyle = base; g.fillRect(x0, y0, ww, hh); for (let i = 0; i < n; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '60,70,85'},${Math.random() * 0.14})`; g.fillRect(x0 + Math.random() * ww, y0 + Math.random() * hh, 2, 2); } };
+    speck(0, 0, w, h, '#a7b3c0', 26000);
+    const band = isWard ? 0 : 0.17, inner = isWard ? 0 : 0.21;
+    if (!isWard) { g.fillStyle = '#8fb0cf'; g.beginPath(); g.roundRect ? g.roundRect(w * band, h * band, w * (1 - 2 * band), h * (1 - 2 * band), 40) : g.rect(w * band, h * band, w * (1 - 2 * band), h * (1 - 2 * band)); g.fill(); speck(w * inner, h * inner, w * (1 - 2 * inner), h * (1 - 2 * inner), '#cbc6b9', 14000); }
+  });
+  put(flooring.group, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ map: isWard ? floorTex : patterned, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.25 }), 0, 0, 0, -Math.PI / 2);
   flooring.anchor.set(W / 2 - 1.2, 0.05, D / 2 - 1.2);
   const slabTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#6f7884'; g.fillRect(0, 0, w, h); g.fillStyle = '#58606b'; for (let x = 40; x < w; x += 92) for (let y = 40; y < h; y += 92) { g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); } });
   put(flooring.group, B(W + 0.14, 0.18, D + 0.14), new T.MeshStandardMaterial({ map: slabTex, metalness: 0.35, roughness: 0.55 }), 0, -0.095, 0);
@@ -199,6 +223,14 @@ export async function mount3D(box, opts) {
   const ceiling = new T.Group(); room.add(ceiling);
   const cm = put(ceiling, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.5, metalness: 0.1, side: T.BackSide }), 0, H, 0, -Math.PI / 2);
   cm.castShadow = false;
+  {
+    const ch = 0.42; const chamMat = M.panel;
+    const back = put(ceiling, new T.PlaneGeometry(W, ch * Math.SQRT2), chamMat, 0, H - ch / 2, -D / 2 + 0.03 + ch / 2, -Math.PI / 4, 0, 0);
+    const left = put(ceiling, new T.PlaneGeometry(ch * Math.SQRT2, D), chamMat, -W / 2 + 0.03 + ch / 2, H - ch / 2, 0, -Math.PI / 2, Math.PI / 4, 0);
+    left.rotation.set(-Math.PI / 2, Math.PI / 4, 0); back.castShadow = left.castShadow = false;
+    const ledSpots = isWard ? [[-3, 1.2], [0, 1.2], [3, 1.2], [-3, -0.4], [3, -0.4]] : [[-2.0, 1.8], [2.0, 1.8], [-2.0, -1.6], [2.0, -1.6]];
+    for (const [x, z] of ledSpots) { put(ceiling, B(0.62, 0.02, 0.62), M.white, x, H - 0.011, z).castShadow = false; put(ceiling, new T.PlaneGeometry(0.56, 0.56), M.ledCool, x, H - 0.022, z, Math.PI / 2).castShadow = false; }
+  }
   // ground outside the room catches soft shadows
   const FLOAT = 0.85; // the room floats above the studio floor, like a product shot
   const ground = new T.Mesh(new T.PlaneGeometry(40, 40), new T.ShadowMaterial({ opacity: 0.16 }));
@@ -399,97 +431,137 @@ export async function mount3D(box, opts) {
     pendant(-1.85, 1.1, 0.25, 'surgeon'); pendant(1.95, -1.25, Math.PI + 0.2, 'anaesthesia');
     pend.anchor.set(-1.1, 2.55, 1.15); gas.anchor.set(-W / 2 + 0.1, 1.75, 1.95);
     pend.view = [V(0.6, 1.6, 3.0), V(-1.0, 1.6, 1.0)];
-    // wall gas & power panel
-    put(gas.group, RB(0.62, 0.36, 0.04, 0.02), M.white, -W / 2 + 0.06, 1.45, 1.95, 0, Math.PI / 2);
-    outlets(gas.group, -W / 2 + 0.085, 1.5, 1.95, 'x', 4, 0.12); sockets(gas.group, -W / 2 + 0.085, 1.33, 1.95, 3, 'x');
-    gas.view = [V(-1.3, 1.6, 2.4), V(-3, 1.45, 1.95)];
-    // hermetic sliding door (glides open and shut)
-    const door = comp('doors');
-    const dx = -1.5, dz = -D / 2 + 0.04;
-    put(door.group, B(1.85, 0.32, 0.18), M.ss, dx + 0.45, 2.38, dz + 0.1);
-    put(door.group, B(1.3, 2.22, 0.03), M.dark, dx, 1.11, dz + 0.02);
-    const leaf = new T.Group(); leaf.position.set(dx + 0.38, 0, dz + 0.1); door.group.add(leaf);
-    put(leaf, RB(1.25, 2.15, 0.06, 0.02), M.ss, 0, 1.1, 0);
-    put(leaf, RB(0.42, 0.42, 0.065, 0.2), M.glass, 0, 1.55, 0.002);
-    put(leaf, new T.TorusGeometry(0.21, 0.012, 8, 32), M.chrome, 0, 1.55, 0.035);
-    put(leaf, B(0.05, 0.45, 0.05), M.chrome, -0.52, 1.05, 0.06);
-    put(door.group, B(1.6, 0.03, 0.08), M.ssDark, dx + 0.38, 0.015, dz + 0.1);
-    door.anchor.set(dx + 0.38, 2.6, dz + 0.2);
-    door.view = [V(-0.9, 1.55, -0.6), V(-1.2, 1.25, -3)];
-    door.leaf = leaf;
-    // surgeon's control panel
+    // ---- everything on the walls is flush (as in WIESPL OTs): only a thin frame stands proud of the panel
+    const BZ = -D / 2 + 0.03, LX = -W / 2 + 0.03;       // back wall face (z), left wall face (x)
+    const onBack = (g, geo, mat, x, y, dz = 0.004) => put(g, geo, mat, x, y, BZ + dz);
+    const onLeft = (g, geo, mat, z, y, dx = 0.004) => put(g, geo, mat, LX + dx, y, z, 0, Math.PI / 2, 0);
+    const flat = (w, h) => new T.PlaneGeometry(w, h);
+    const frame = (w, h, t = 0.008) => B(w, h, t);
+    // surgeon's control panel: WIESPL frame (white with blue / green swoosh) and the touch screen inside
     const ctl = comp('control');
-    const ui = tex(640, 400, (g, w, h) => {
-      const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#0d2036'); gr.addColorStop(1, '#081422'); g.fillStyle = gr; g.fillRect(0, 0, w, h);
-      g.fillStyle = '#9fc4ec'; g.font = '24px sans-serif'; g.fillText('WIESPL  ·  OT 1', 24, 38); g.fillText('10:42', w - 92, 38);
-      const tile = (x, y, label, value, color) => { g.fillStyle = '#132e4c'; g.fillRect(x, y, 186, 120); g.fillStyle = color; g.font = 'bold 50px sans-serif'; g.fillText(value, x + 16, y + 70); g.fillStyle = '#9fb8d6'; g.font = '20px sans-serif'; g.fillText(label, x + 16, y + 104); };
-      tile(24, 60, 'TEMPERATURE', '21.5°', '#5ab0ff'); tile(226, 60, 'HUMIDITY', '50%', '#5ee09a'); tile(428, 60, 'PRESSURE', '+12Pa', '#ffd166');
-      ['LIGHTS', 'GASES', 'TIMER', 'MUSIC', 'CALL'].forEach((t, i) => { g.fillStyle = i === 2 ? '#1f6feb' : '#1a3b60'; g.fillRect(24 + i * 120, 210, 108, 74); g.fillStyle = '#eaf2fb'; g.font = 'bold 20px sans-serif'; g.fillText(t, 36 + i * 120, 254); });
-      g.fillStyle = '#0f2a44'; g.fillRect(24, 300, w - 48, 74); g.fillStyle = '#5ee09a'; g.font = 'bold 30px sans-serif'; g.fillText('SURGERY  00:47:12', 40, 348);
+    const bezel = tex(600, 420, (g, w, h) => {
+      g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, h);
+      g.fillStyle = '#1f6fd1'; g.beginPath(); g.moveTo(0, h * 0.86); g.quadraticCurveTo(w * 0.45, h * 0.7, w, h * 0.9); g.lineTo(w, h); g.lineTo(0, h); g.fill();
+      g.fillStyle = '#5cbf4a'; g.beginPath(); g.moveTo(0, h * 0.93); g.quadraticCurveTo(w * 0.5, h * 0.8, w, h * 0.96); g.lineTo(w, h); g.lineTo(0, h); g.fill();
+      g.fillStyle = '#1f6fd1'; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(w * 0.3, h * 0.08, w * 0.55, 0); g.fill();
+      g.fillStyle = '#ffffff'; g.beginPath(); g.arc(w * 0.18, h * 0.86, 44, 0, Math.PI * 2); g.fill(); g.strokeStyle = '#d0d8e2'; g.lineWidth = 3; g.stroke();
+      g.fillStyle = '#1f4e9a'; g.font = 'bold 26px sans-serif'; g.fillText('WIESPL', w * 0.18 - 46, h * 0.86 + 9);
     });
-    put(ctl.group, RB(1.05, 0.68, 0.04, 0.02), M.ss, 0.95, 1.5, -D / 2 + 0.07);
-    put(ctl.group, new T.PlaneGeometry(0.97, 0.6), new T.MeshBasicMaterial({ map: ui, toneMapped: false }), 0.95, 1.5, -D / 2 + 0.093);
-    ctl.anchor.set(0.95, 1.95, -D / 2 + 0.1);
-    ctl.view = [V(0.95, 1.55, -1.4), V(0.95, 1.5, -3)];
-    // room pressure gauge
+    const ui = tex(640, 400, (g, w, h) => {
+      const gr = g.createLinearGradient(0, 0, w, h); gr.addColorStop(0, '#2a2f9c'); gr.addColorStop(1, '#3d2a8a'); g.fillStyle = gr; g.fillRect(0, 0, w, h);
+      g.strokeStyle = '#c9d4ff'; g.lineWidth = 3; g.beginPath(); g.arc(70, 70, 40, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.moveTo(70, 70); g.lineTo(70, 42); g.moveTo(70, 70); g.lineTo(92, 78); g.stroke();
+      g.fillStyle = '#e6ebff'; g.font = '22px sans-serif'; g.fillText('04:48', 40, 140);
+      const tile = (x, y, a, b) => { g.strokeStyle = 'rgba(220,228,255,.55)'; g.lineWidth = 2; g.strokeRect(x, y, 120, 110); g.fillStyle = '#ffffff'; g.font = 'bold 30px sans-serif'; g.fillText(a, x + 14, y + 52); g.font = '20px sans-serif'; g.fillStyle = '#d8deff'; g.fillText(b, x + 14, y + 90); };
+      tile(190, 60, '19.9°C', 'Temp'); tile(320, 60, '47.3%', 'RH'); tile(450, 60, '💡', 'Lighting'); tile(190, 190, '⏱', 'Timer'); tile(320, 190, '♫', 'Music'); tile(450, 190, '⏻', 'Exhaust');
+      g.fillStyle = '#d8deff'; g.font = '20px sans-serif'; g.fillText('WIESPL', 40, 370);
+    });
+    onBack(ctl.group, frame(1.2, 0.84), M.dark, -1.9, 1.5, 0.006);
+    onBack(ctl.group, flat(1.17, 0.81), new T.MeshBasicMaterial({ map: bezel }), -1.9, 1.5, 0.0105);
+    onBack(ctl.group, flat(0.78, 0.48), new T.MeshBasicMaterial({ map: ui, toneMapped: false }), -1.81, 1.6, 0.012);
+    ctl.anchor.set(-1.9, 2.05, BZ + 0.05);
+    ctl.view = [V(-1.9, 1.55, -1.1), V(-1.9, 1.5, -3)];
+    // room pressure gauge and the automation display next to it (flush)
     const pr = comp('pressure');
     const gauge = tex(160, 160, g => { g.fillStyle = '#fff'; g.beginPath(); g.arc(80, 80, 76, 0, Math.PI * 2); g.fill(); g.strokeStyle = '#333'; g.lineWidth = 3; for (let a = 0; a <= 10; a++) { const t = Math.PI * (0.8 + a * 0.14); g.beginPath(); g.moveTo(80 + Math.cos(t) * 60, 80 + Math.sin(t) * 60); g.lineTo(80 + Math.cos(t) * 70, 80 + Math.sin(t) * 70); g.stroke(); } g.strokeStyle = '#c0392b'; g.lineWidth = 5; g.beginPath(); g.moveTo(80, 80); g.lineTo(122, 52); g.stroke(); g.fillStyle = '#333'; g.font = '16px sans-serif'; g.fillText('Pa', 70, 128); });
-    put(pr.group, Cy(0.12, 0.12, 0.05, 28), M.ssDark, -0.25, 2.15, -D / 2 + 0.07, Math.PI / 2);
-    put(pr.group, new T.CircleGeometry(0.105, 28), new T.MeshBasicMaterial({ map: gauge }), -0.25, 2.15, -D / 2 + 0.097);
-    pr.anchor.set(-0.25, 2.38, -D / 2 + 0.1);
-    // automation: ceiling sensor + wall display
+    onBack(pr.group, frame(0.26, 0.26), M.dark, -1.05, 1.62, 0.006);
+    onBack(pr.group, flat(0.22, 0.22), new T.MeshBasicMaterial({ map: gauge }), -1.05, 1.62, 0.0105);
+    pr.anchor.set(-1.05, 1.85, BZ + 0.05);
     const au = comp('automation');
-    put(au.group, new T.SphereGeometry(0.08, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), M.white, -1.2, H, -1.4, Math.PI);
-    put(au.group, new T.CircleGeometry(0.018, 12), new T.MeshBasicMaterial({ color: 0x2ecc71, toneMapped: false }), -1.2, H - 0.081, -1.4, Math.PI / 2);
     const mini = tex(200, 140, g => { g.fillStyle = '#0d2036'; g.fillRect(0, 0, 200, 140); g.fillStyle = '#5ee09a'; g.font = 'bold 30px sans-serif'; g.fillText('ALL OK', 30, 60); g.fillStyle = '#9fc4ec'; g.font = '18px sans-serif'; g.fillText('online', 62, 105); });
-    put(au.group, RB(0.3, 0.21, 0.03, 0.015), M.ssDark, 0.12, 1.55, -D / 2 + 0.065);
-    put(au.group, new T.PlaneGeometry(0.27, 0.18), new T.MeshBasicMaterial({ map: mini, toneMapped: false }), 0.12, 1.55, -D / 2 + 0.082);
+    onBack(au.group, frame(0.26, 0.19), M.dark, -1.05, 1.28, 0.006);
+    onBack(au.group, flat(0.23, 0.16), new T.MeshBasicMaterial({ map: mini, toneMapped: false }), -1.05, 1.28, 0.0105);
+    put(au.group, new T.SphereGeometry(0.07, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2), M.white, -1.2, H - 0.002, -1.4, Math.PI);
     au.anchor.set(-1.2, H - 0.18, -1.4);
-    // X-ray viewer
+    // digital wallpaper: a calm landscape panel, as in WIESPL OTs and passages
+    const mural = tex(1024, 560, drawLandscape);
+    onBack(panels.group, frame(2.1, 1.22), M.ssDark, 0.05, 1.82, 0.004);
+    onBack(panels.group, flat(2.04, 1.16), new T.MeshStandardMaterial({ map: mural, roughness: 0.15, metalness: 0.05, envMapIntensity: 0.6 }), 0.05, 1.82, 0.0085);
+    // gas outlet strip under the mural, sockets low on the wall
+    const gasW = comp('mgps');
+    onBack(gasW.group, frame(0.95, 0.2), M.white, 0.05, 1.02, 0.006);
+    outlets(gasW.group, -0.2, 1.02, BZ + 0.012, 'z', 5, 0.11);
+    sockets(gasW.group, 0.38, 1.02, BZ + 0.012, 2);
+    for (const x of [-2.6, -1.4, 1.25, 2.4]) put(panels.group, B(0.16, 0.08, 0.01), M.white, x, 0.45, BZ + 0.005);
+    gasW.anchor.set(0.05, 1.25, BZ + 0.05);
+    gasW.view = [V(0.2, 1.4, -1.0), V(0.05, 1.2, -3)];
+    // flush SS storage cabinets with slim glass slits
+    const st = comp('storage');
+    for (const [x, w] of [[1.55, 0.78], [2.4, 0.78]]) {
+      onBack(st.group, frame(w, 2.0, 0.01), M.ssDark, x, 1.15, 0.005);
+      for (const s of [-1, 1]) {
+        const dx = x + s * w / 4;
+        onBack(st.group, frame(w / 2 - 0.02, 1.96, 0.008), M.ss, dx, 1.15, 0.011);
+        onBack(st.group, flat(0.06, 1.15), M.glass, dx - s * 0.08, 1.2, 0.016);
+        onBack(st.group, frame(0.12, 0.05, 0.02), M.chrome, dx - s * 0.12, 2.0, 0.02);
+      }
+    }
+    st.anchor.set(1.95, 2.35, BZ + 0.05);
+    st.view = [V(1.9, 1.5, -1.0), V(1.95, 1.2, -3)];
+    // low return-air grilles (flush); the riser ducts run inside the wall
+    const ris = comp('risers');
+    const grille = tex(128, 192, g => { g.fillStyle = '#d9dee4'; g.fillRect(0, 0, 128, 192); g.fillStyle = '#4a5462'; for (let y = 10; y < 190; y += 12) g.fillRect(8, y, 112, 6); });
+    const gMat = new T.MeshStandardMaterial({ map: grille, metalness: 0.6, roughness: 0.35 });
+    onBack(ris.group, frame(0.52, 0.72), M.ssDark, -2.6, 0.5, 0.004); onBack(ris.group, flat(0.48, 0.68), gMat, -2.6, 0.5, 0.0085);
+    onLeft(ris.group, frame(0.52, 0.72), M.ssDark, 2.55, 0.5, 0.004); onLeft(ris.group, flat(0.48, 0.68), gMat, 2.55, 0.5, 0.0085);
+    ris.anchor.set(-2.6, 1.0, BZ + 0.05);
+    // hermetic sliding door in the left wall, into the clean passage
+    const door = comp('doors');
+    const dz0 = -1.55;
+    put(door.group, B(0.16, 0.3, 1.9), M.ss, LX + 0.08, 2.4, dz0 + 0.45);                    // operator housing
+    onLeft(door.group, frame(1.32, 2.22, 0.01), M.dark, dz0, 1.11, 0.005);                    // opening
+    const leaf = new T.Group(); leaf.position.set(LX + 0.05, 0, dz0 + 0.38); door.group.add(leaf);
+    put(leaf, RB(1.28, 2.16, 0.05, 0.015), M.ss, 0, 1.1, 0, 0, Math.PI / 2, 0);
+    put(leaf, RB(0.36, 0.46, 0.055, 0.03), M.glass, 0.003, 1.5, 0, 0, Math.PI / 2, 0);
+    put(leaf, B(0.05, 0.42, 0.04), M.chrome, 0.04, 1.05, 0.5);
+    door.anchor.set(LX + 0.1, 2.62, dz0 + 0.2);
+    door.view = [V(-1.0, 1.6, -0.9), V(-3, 1.2, -1.4)];
+    door.leaf = leaf; door.slide = { axis: 'z', base: dz0 + 0.38, amp: 0.95 };
+    // X-ray viewer and pass box, flush in the left wall
     const xr = comp('xray');
     const film = tex(256, 320, g => { g.fillStyle = '#0b0e12'; g.fillRect(0, 0, 256, 320); const gr = g.createRadialGradient(128, 150, 20, 128, 160, 150); gr.addColorStop(0, 'rgba(210,220,230,.85)'); gr.addColorStop(1, 'rgba(30,35,40,.2)'); g.fillStyle = gr; g.beginPath(); g.ellipse(90, 170, 55, 110, 0, 0, Math.PI * 2); g.ellipse(166, 170, 55, 110, 0, 0, Math.PI * 2); g.fill(); g.strokeStyle = 'rgba(230,235,240,.6)'; g.lineWidth = 4; for (let y = 70; y < 280; y += 22) { g.beginPath(); g.ellipse(128, y, 100, 14, 0, Math.PI * 0.05, Math.PI * 0.95); g.stroke(); } });
-    put(xr.group, RB(1.05, 0.66, 0.05, 0.02), M.ss, -W / 2 + 0.06, 1.6, 0.25, 0, Math.PI / 2);
-    for (const dzz of [-0.25, 0.25]) put(xr.group, new T.PlaneGeometry(0.44, 0.56), new T.MeshBasicMaterial({ map: film, toneMapped: false }), -W / 2 + 0.088, 1.6, 0.25 + dzz, 0, Math.PI / 2);
-    xr.anchor.set(-W / 2 + 0.1, 2.0, 0.25);
-    xr.view = [V(-1.4, 1.6, 0.4), V(-3, 1.6, 0.25)];
-    // pass box with interlock lights
+    onLeft(xr.group, frame(1.06, 0.68), M.ss, 1.45, 1.6, 0.005);
+    for (const dz of [-0.25, 0.25]) onLeft(xr.group, flat(0.46, 0.6), new T.MeshBasicMaterial({ map: film, toneMapped: false }), 1.45 + dz, 1.6, 0.011);
+    xr.anchor.set(LX + 0.05, 2.02, 1.45);
+    xr.view = [V(-1.2, 1.6, 1.5), V(-3, 1.6, 1.45)];
     const pb = comp('passbox');
-    put(pb.group, RB(0.62, 0.62, 0.18, 0.03), M.ss, -W / 2 + 0.1, 1.15, -1.3, 0, Math.PI / 2);
-    put(pb.group, RB(0.5, 0.5, 0.02, 0.02), M.glass, -W / 2 + 0.2, 1.15, -1.3, 0, Math.PI / 2);
-    put(pb.group, new T.CircleGeometry(0.02, 10), new T.MeshBasicMaterial({ color: 0x2ecc71, toneMapped: false }), -W / 2 + 0.205, 1.5, -1.12, 0, Math.PI / 2);
-    put(pb.group, new T.CircleGeometry(0.02, 10), new T.MeshBasicMaterial({ color: 0xe74c3c, toneMapped: false }), -W / 2 + 0.205, 1.5, -1.2, 0, Math.PI / 2);
-    pb.anchor.set(-W / 2 + 0.15, 1.6, -1.3);
-    // scrub station
-    const sc = comp('scrub');
-    put(sc.group, RB(1.25, 0.5, 0.55, 0.04), M.ss, -W / 2 + 0.33, 0.95, -2.25, 0, Math.PI / 2);
-    put(sc.group, RB(1.05, 0.12, 0.38, 0.05), M.chrome, -W / 2 + 0.38, 1.17, -2.25, 0, Math.PI / 2);
-    for (const dzz of [-0.3, 0.3]) { put(sc.group, Cy(0.018, 0.018, 0.32, 10), M.chrome, -W / 2 + 0.15, 1.38, -2.25 + dzz); put(sc.group, Cy(0.015, 0.015, 0.2, 10), M.chrome, -W / 2 + 0.25, 1.53, -2.25 + dzz, 0, 0, Math.PI / 2); }
-    put(sc.group, B(0.03, 0.9, 1.2), M.ss, -W / 2 + 0.08, 1.7, -2.25);
-    sc.anchor.set(-W / 2 + 0.45, 1.6, -2.25);
-    // storage cabinet with shelves and consumables
-    const st = comp('storage');
-    put(st.group, RB(1.3, 1.95, 0.38, 0.02), M.ss, 2.1, 1.3, -D / 2 + 0.24);
-    for (const y of [0.75, 1.2, 1.65]) put(st.group, B(1.18, 0.02, 0.3), M.chrome, 2.1, y, -D / 2 + 0.25);
-    for (const [x, y, c] of [[1.75, 0.82, 0x6aa9e9], [2.0, 0.84, 0xf0f2f5], [2.35, 0.8, 0x91d18b], [1.85, 1.27, 0xf6c66b], [2.3, 1.29, 0xf0f2f5]]) put(st.group, B(0.18, 0.12, 0.2), C(c, { rough: 0.7 }), x, y, -D / 2 + 0.26);
-    put(st.group, B(1.2, 1.8, 0.02), M.glass, 2.1, 1.3, -D / 2 + 0.44);
-    st.anchor.set(2.1, 2.45, -D / 2 + 0.3);
+    onLeft(pb.group, frame(0.66, 0.66, 0.01), M.ss, 0.15, 1.15, 0.005);
+    onLeft(pb.group, flat(0.5, 0.5), M.glass, 0.15, 1.15, 0.012);
+    onLeft(pb.group, flat(0.03, 0.03), new T.MeshBasicMaterial({ color: 0x2ecc71, toneMapped: false }), 0.36, 1.42, 0.012);
+    onLeft(pb.group, flat(0.03, 0.03), new T.MeshBasicMaterial({ color: 0xe74c3c, toneMapped: false }), 0.42, 1.42, 0.012);
+    pb.anchor.set(LX + 0.05, 1.6, 0.15);
+    pb.view = [V(-1.3, 1.5, 0.4), V(-3, 1.15, 0.15)];
     // fumigation fogger
     const fu = comp('fumigation');
     put(fu.group, RB(0.42, 0.34, 0.3, 0.05), M.blue, 2.25, 0.17, 2.1);
     put(fu.group, Cy(0.035, 0.06, 0.24, 14), M.dark, 2.25, 0.46, 2.1);
     fu.anchor.set(2.25, 0.8, 2.1);
-    // return-air risers in the back corners, grille low down
-    const ris = comp('risers');
-    const grille = tex(128, 192, g => { g.fillStyle = '#d9dee4'; g.fillRect(0, 0, 128, 192); g.fillStyle = '#626d7a'; for (let y = 10; y < 190; y += 12) g.fillRect(8, y, 112, 5); });
-    for (const x of [-2.55, 2.55]) {
-      put(ris.group, RB(0.62, H, 0.3, 0.02), M.panel, x, H / 2, -D / 2 + 0.2);
-      put(ris.group, new T.PlaneGeometry(0.5, 0.62), new T.MeshStandardMaterial({ map: grille, metalness: 0.5, roughness: 0.4 }), x, 0.5, -D / 2 + 0.352);
-    }
-    ris.anchor.set(2.55, 1.2, -D / 2 + 0.35);
-    // the air cycle: supply duct to the plenum, return ducts from the risers
+    // ---- clean passage outside the door, with the scrub station (scrubbing is done outside the OT)
+    const PW = 2.3, PX = -W / 2 - PW / 2 - 0.03;
+    const passage = comp('passage');
+    const wood = tex(512, 512, (g, w, h) => { g.fillStyle = '#c9a57c'; g.fillRect(0, 0, w, h); for (let i = 0; i < 160; i++) { g.strokeStyle = `rgba(${Math.random() > 0.5 ? '120,80,40' : '235,205,170'},${0.08 + Math.random() * 0.1})`; g.lineWidth = 1 + Math.random() * 2; const x = Math.random() * w; g.beginPath(); g.moveTo(x, 0); g.bezierCurveTo(x + 6, h * 0.3, x - 6, h * 0.7, x + 3, h); g.stroke(); } g.fillStyle = 'rgba(80,55,30,.35)'; for (let x = 0; x < w; x += 128) g.fillRect(x, 0, 2, h); }, [2, 1]);
+    const woodMat = new T.MeshStandardMaterial({ map: wood, roughness: 0.55, metalness: 0.05 });
+    put(passage.group, new T.PlaneGeometry(PW, D), new T.MeshStandardMaterial({ map: tex(512, 512, (g, w, h) => { g.fillStyle = '#b9c4cf'; g.fillRect(0, 0, w, h); for (let i = 0; i < 5000; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '70,85,105'},${Math.random() * 0.12})`; g.fillRect(Math.random() * w, Math.random() * h, 1.6, 1.6); } }, [1, 2]), roughness: 0.4 }), PX, 0.001, 0, -Math.PI / 2);
+    put(passage.group, B(PW + 0.1, 0.18, D + 0.14), flooring.group.children[1]?.material || M.dark, PX, -0.095, 0);
+    put(passage.group, B(0.06, 0.75, D), woodMat, -W / 2 - PW - 0.03, 0.375, 0);                 // outer wall, cut away
+    put(passage.group, B(0.01, 0.75, D), M.puf, -W / 2 - PW + 0.005, 0.375, 0);
+    put(passage.group, B(PW, H, 0.06), woodMat, PX, H / 2, -D / 2);                              // end wall …
+    put(passage.group, flat(PW - 0.2, 2.3), new T.MeshStandardMaterial({ map: tex(1024, 1100, drawLandscape), roughness: 0.15, metalness: 0.05 }), PX, 1.35, -D / 2 + 0.035); // … with a mural
+    put(passage.group, B(0.03, H, D), woodMat, -W / 2 - 0.045, H / 2, 0);                        // OT wall seen from the passage
+    for (let i = -2; i <= 2; i++) put(passage.group, flat(0.55, 0.55), M.led, PX, H - 0.01, i * 1.2, Math.PI / 2);
+    passage.anchor.set(PX, 2.2, -D / 2 + 0.4);
+    passage.view = [V(PX - 0.75, 1.7, 3.3), V(-W / 2 - 0.25, 1.0, 0.9)];
+    const sc = comp('scrub');
+    const sx = -W / 2 - 0.05, sz = 1.2;
+    put(sc.group, RB(1.3, 0.55, 0.55, 0.04), M.ss, sx - 0.3, 0.92, sz, 0, Math.PI / 2, 0);
+    put(sc.group, RB(1.1, 0.12, 0.4, 0.05), M.chrome, sx - 0.33, 1.15, sz, 0, Math.PI / 2, 0);
+    put(sc.group, B(0.02, 0.85, 1.3), M.ss, sx - 0.02, 1.62, sz);
+    for (const dz of [-0.32, 0.32]) { put(sc.group, Cy(0.016, 0.016, 0.28, 10), M.chrome, sx - 0.1, 1.42, sz + dz); put(sc.group, Cy(0.014, 0.014, 0.2, 10), M.chrome, sx - 0.2, 1.55, sz + dz, 0, 0, Math.PI / 2); put(sc.group, Cy(0.02, 0.02, 0.02, 10), new T.MeshBasicMaterial({ color: 0x2ecc71, toneMapped: false }), sx - 0.03, 1.3, sz + dz, 0, 0, Math.PI / 2); }
+    sc.anchor.set(sx - 0.4, 1.6, sz);
+    sc.view = [V(PX - 0.75, 1.7, 3.3), V(sx - 0.2, 1.0, sz - 0.3)];
+    // the air cycle: supply duct to the plenum, return ducts from the low grilles up inside the walls
     duct([V(AX + 0.5, AY + 0.1, AZ + 0.62), V(AX + 0.5, AY + 0.1, -1.0), V(0, AY + 0.1, -0.2), V(0, H + 0.28, 0)], 0.62, 0.42, 0x3aa0ff);
-    duct([V(-2.55, H, -D / 2 + 0.2), V(-2.55, H + 0.55, -D / 2 + 0.2), V(-2.55, H + 0.55, AZ + 0.35), V(AX - 1.1, AY - 0.35, AZ + 0.35)], 0.5, 0.3, 0xff8c42);
-    duct([V(2.55, H, -D / 2 + 0.2), V(2.55, H + 0.55, -D / 2 + 0.2), V(2.55, H + 0.55, AZ), V(AX + 1.4, AY - 0.1, AZ)], 0.5, 0.3, 0xff8c42);
+    duct([V(-2.6, 0.5, -D / 2 - 0.2), V(-2.6, H + 0.55, -D / 2 - 0.2), V(-2.6, H + 0.55, AZ + 0.35), V(AX - 1.1, AY - 0.35, AZ + 0.35)], 0.48, 0.28, 0xff8c42);
+    duct([V(-W / 2 - 0.2, 0.5, 2.55), V(-W / 2 - 0.2, H + 0.75, 2.55), V(-W / 2 - 0.2, H + 0.75, AZ), V(AX - 1.35, AY - 0.1, AZ)], 0.4, 0.26, 0xff8c42);
   }
 
   // ------------------------------------------------------------ ICU / NICU ward
@@ -536,6 +608,9 @@ export async function mount3D(box, opts) {
       put(hp.group, new T.PlaneGeometry(0.5, 0.5), M.ledCool, x, H - 0.045, -1.5, Math.PI / 2);
     }
     put(room, B(W - 2.8, 0.03, 0.03), M.chrome, -0.6, 2.28, -0.85);
+    // continuous bed-head strip along the wall (as in WIESPL NICUs / ICUs)
+    put(head.group, RB(W - 3.0, 0.24, 0.05, 0.03), M.white, -0.6 - 0.1, 1.42, -D / 2 + 0.055);
+    put(head.group, B(W - 3.1, 0.035, 0.012), M.blue, -0.7, 1.3, -D / 2 + 0.083);
     head.anchor.set(-W / 2 + 1.35, 1.75, -D / 2 + 0.15); gas.anchor.set(-W / 2 + 1.35 + span, 1.6, -D / 2 + 0.2); hp.anchor.set(-W / 2 + 1.35 + span, H - 0.1, -1.5);
     head.view = [V(-1.6, 1.7, 0.6), V(-2.6, 1.4, -2.6)];
     war?.anchor.set(-W / 2 + 1.35, nicu ? 1.35 : 0.6, nicu ? -1.95 : -2.35);
@@ -664,7 +739,7 @@ export async function mount3D(box, opts) {
     ? 'The AHU on the terrace filters and cools the air (blue arrows); it enters through HEPA diffusers over the beds and leaves through the return riser (orange) back to the AHU.'
     : 'The outdoor unit and AHU filter, cool and dry the air (pre-filter → fine filter → coil → blower). It comes down through the HEPA plenum over the table (blue), sweeps the surgical area and leaves low down through the return risers (orange) back to the AHU.' };
   const tourStops = () => {
-    const order = isWard ? ['bedhead', 'mgps', 'warmers', 'nurse', 'pressure', 'hepa', 'doors'] : ['laf', 'hepa', 'otlight', 'pendants', 'mgps', 'control', 'doors', 'xray'];
+    const order = isWard ? ['bedhead', 'mgps', 'warmers', 'nurse', 'pressure', 'hepa', 'doors'] : ['laf', 'hepa', 'otlight', 'pendants', 'control', 'mgps', 'storage', 'xray', 'passbox', 'doors', 'scrub'];
     const have = order.filter(k => comps[k] && info(k) && comps[k].group.visible);
     const chosen = have.filter(k => picked.has(k));
     const list = (chosen.length >= 2 ? chosen : have.slice(0, 5)).map(k => ({ key: k, view: comps[k].view || [comps[k].anchor.clone().add(V(1.6, 0, 2.0)), comps[k].anchor.clone()] }));
@@ -739,7 +814,7 @@ export async function mount3D(box, opts) {
         f.mesh.instanceMatrix.needsUpdate = true;
       }
     }
-    if (comps.doors?.leaf && comps.doors.group.visible) { doorT += dt; const s = (Math.sin(doorT * 0.6) + 1) / 2; comps.doors.leaf.position.x = -1.5 + 0.38 + s * 0.95; }
+    if (comps.doors?.leaf && comps.doors.group.visible) { doorT += dt; const s = (Math.sin(doorT * 0.6) + 1) / 2; const sl = comps.doors.slide || { axis: 'x', base: -1.12, amp: 0.95 }; comps.doors.leaf.position[sl.axis] = sl.base + s * sl.amp; }
     controls.update();
     renderer.render(scene, camera);
     const w = box.clientWidth, h = box.clientHeight;
@@ -767,7 +842,7 @@ export async function mount3D(box, opts) {
   document.addEventListener('visibilitychange', vis);
 
   return {
-    setPanelColour(name) { const c = PANEL_COLOURS.find(x => x[0] === name); if (c) { M.panel.color.setHex(c[1]); M.cut.color.setHex(c[1]); } },
+    setPanelColour(name) { setFinish(name); },
     controls: [
       { label: '🧱 Build it again', run: () => { playBuild(); } },
       { label: '▶ Take the tour', pressed: false, ref: b => { tourBtn = b; }, run: () => { if (tour) { stopTour(); card.hidden = true; return false; } buildPlay = null; controls.autoRotate = false; applyBuild(1); tour = { stops: tourStops(), i: 0 }; goStop(0); return true; } },
@@ -776,6 +851,7 @@ export async function mount3D(box, opts) {
       { label: 'All labels', pressed: allLabels, run: () => { allLabels = !allLabels; applyVisibility(); return allLabels; } },
       ...(isWard ? [] : [{ label: 'Clean air flow', pressed: !!air?.on, run: () => { air.on = !air.on; applyVisibility(); return air.on; } }]),
       { label: isWard ? '👁 Bed-side view' : "👁 Surgeon's view", run: () => { stopTour(); fly('eye'); } },
+      ...(isWard ? [] : [{ label: '🚿 Passage & scrub', run: () => { stopTour(); if (anatomy) { anatomy = false; applyVisibility(); } flyTo(comps.passage.view, 1300); showKey('scrub'); } }]),
       { label: '↺ Overview', run: () => { stopTour(); card.hidden = true; if (anatomy) { anatomy = false; applyVisibility(); } fly('overview'); } },
     ],
     dispose() {
