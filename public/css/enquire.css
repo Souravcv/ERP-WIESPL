@@ -220,3 +220,39 @@ button { font: inherit; color: inherit; }
   .eq-top, .eq-nav, .bf-row, .bf-tabs .unsure, .bf-saved { display: none !important; }
   .bf-main { padding: 0; } .eq-card { box-shadow: none; border: none; }
 }
+
+/* explainer videos on the 3D model */
+.eq-3d .vid { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px 10px; background: linear-gradient(180deg, rgba(10, 18, 30, 0) 0%, rgba(10, 18, 30, .82) 22%, rgba(10, 18, 30, .92) 100%); color: #fff; font-size: 13px; }
+.eq-3d .vid[hidden] { display: none; }
+.eq-3d .vid button { font: inherit; cursor: pointer; }
+.eq-3d .vtop { display: flex; align-items: center; gap: 8px; padding-top: 14px; }
+.eq-3d .vtop b { font-size: 14px; }
+.eq-3d .vlen { color: #b9c7da; font-size: 12px; }
+.eq-3d .vtop .x { margin-left: auto; background: none; border: none; color: #fff; font-size: 20px; line-height: 1; padding: 0 4px; }
+.eq-3d .vchap { display: flex; gap: 6px; overflow-x: auto; margin: 6px 0; scrollbar-width: none; }
+.eq-3d .vchap button { flex: none; border: 1px solid rgba(255, 255, 255, .25); background: rgba(255, 255, 255, .08); color: #dfe8f5; border-radius: 999px; padding: 3px 9px; font-size: 12px; }
+.eq-3d .vchap button.on { background: #2f7fd8; border-color: #2f7fd8; color: #fff; }
+.eq-3d .vchap button.done { color: #9fe0b5; }
+.eq-3d .vcap { font-size: 16px; line-height: 1.4; font-weight: 600; min-height: 3em; text-shadow: 0 1px 3px rgba(0, 0, 0, .6); }
+.eq-3d .vbar { height: 4px; background: rgba(255, 255, 255, .2); border-radius: 4px; margin: 8px 0; overflow: hidden; }
+.eq-3d .vbar i { display: block; height: 100%; width: 0; background: #5cbf4a; transition: width .2s linear; }
+.eq-3d .vctl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.eq-3d .vctl button, .eq-3d .vctl a { border: 1px solid rgba(255, 255, 255, .3); background: rgba(255, 255, 255, .1); color: #fff; border-radius: 8px; padding: 5px 10px; text-decoration: none; font-size: 13px; }
+.eq-3d .vctl .play { min-width: 40px; }
+.eq-3d .vctl .vadd { background: #1e7d3a; border-color: #1e7d3a; font-weight: 700; }
+.eq-3d .vadded { color: #9fe0b5; font-weight: 700; }
+.eq-3d .vnote { color: #f5d38a; font-size: 12px; }
+.eq-3d .info .explain { display: inline-block; margin-top: 8px; border: none; background: #1f4e9a; color: #fff; border-radius: 8px; padding: 6px 12px; font-weight: 700; cursor: pointer; }
+.eq-3d .info .vlist { display: grid; gap: 6px; margin-top: 8px; }
+.eq-3d .info .vlist button { text-align: left; border: 1px solid #c9d4e6; background: #fff; color: #15202f; border-radius: 8px; padding: 7px 10px; cursor: pointer; font-weight: 600; }
+.vmodal { position: fixed; inset: 0; z-index: 60; background: rgba(8, 14, 24, .7); display: grid; place-items: center; padding: 16px; }
+.vmodal-in { position: relative; width: min(960px, 100%); }
+.vmodal .eq-3d { height: min(78vh, 620px); }
+.vmodal-x { position: absolute; top: -12px; right: -12px; width: 34px; height: 34px; border-radius: 50%; border: none; background: #fff; color: #15202f; font-size: 20px; cursor: pointer; box-shadow: 0 4px 12px rgba(0, 0, 0, .3); z-index: 2; }
+@media (max-width: 599px) { .eq-3d .vcap { font-size: 14px; } .vmodal { padding: 10px; } .vmodal-x { top: -8px; right: -4px; } }
+.eq-explain { border: 1.5px solid var(--border); background: var(--surface); color: var(--brand-2); border-radius: 999px; padding: 4px 10px; font-size: 12px; font-weight: 700; cursor: pointer; }
+.eq-featwrap { position: relative; }
+.eq-featwrap .eq-explain { position: absolute; right: 10px; bottom: 10px; }
+.eq-featwrap .eq-feat { width: 100%; padding-bottom: 38px; }
+.bf-learn { margin-left: 6px; border: none; background: none; color: var(--brand-2); font-size: 12px; font-weight: 700; cursor: pointer; padding: 0; }
+.eq-3d.playing .build-bar, .eq-3d.playing .hint3d, .eq-3d.playing .info { display: none; }

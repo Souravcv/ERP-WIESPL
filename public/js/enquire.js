@@ -1,6 +1,7 @@
 // Client enquiry wizard: one question per screen, contact details last, progress saved as the visitor goes.
 // On submit the CRM creates an enquiry (with a lead score) and sales get a pop-up.
-import { mount3D, WALL_FINISHES } from './ot3d.js';
+import { mount3D, openExplainer, WALL_FINISHES } from './ot3d.js';
+import { VIDEOS, videoSecs, fmtSecs } from './explainers.js';
 import { otNorms, otType, NABH_SOURCE } from './nabh.js';
 
 const $ = id => document.getElementById(id);
@@ -221,16 +222,24 @@ function stepFeatures(n, total) {
   const feats = featuresFor();
   const unsure = h('button.eq-chip.unsure', { type: 'button', 'aria-pressed': String(!!D.features_unsure), onclick: () => { D.features_unsure = !D.features_unsure; unsure.setAttribute('aria-pressed', String(D.features_unsure)); summary(); sync(); feedback(D.features_unsure ? 'No problem: our engineer will recommend what your rooms need.' : ''); } }, 'I\'m not sure – please suggest');
   const list = h('div.eq-feats', feats.map(([k, label, hint, icon]) => {
+    const v = FEATURE_VIDEO[k];
     const b = h('button.eq-feat', { type: 'button', 'aria-pressed': String(D.features.includes(label)), onclick: () => {
       toggle(D.features, label); b.setAttribute('aria-pressed', String(D.features.includes(label))); summary(); sync();
       feedback(D.features.length >= 6 ? 'That is a complete, NABH-ready setup. You will see it in 3D next.' : k === 'laf' && D.features.includes(label) ? 'Laminar flow + HEPA is the standard for infection-sensitive surgery.' : k === 'shrm' && D.features.includes(label) ? 'SHRM is WIESPL’s patented energy saver: you will see it inside the AHU in 3D.' : '');
     } }, h('span.ico', icon), h('span', h('b', label), h('small', hint)));
-    return b;
+    return v ? h('div.eq-featwrap', b, explainBtn(v, () => render())) : b;
   }));
   return card(n, total, 'Which features interest you?', 'Tap to add. Each one has a one-line explanation.', [h('div', { style: { marginBottom: '12px' } }, unsure), list]);
 }
 
 let viewer = null;
+// explainer videos: which ones the visitor watched (and how far) go to the CRM with the enquiry
+const FEATURE_VIDEO = { shrm: 'shrm', ahu: 'ahu', doors: 'doors', passbox: 'passbox', laf: 'laf', hepa: 'laf' };
+const watched = (key, pct) => { D.videos = { ...(D.videos || {}) }; D.videos[key] = Math.max(D.videos[key] || 0, pct); sync(); summary(); };
+const addFeature = key => { const label = FEATURES.find(f => f[0] === key)?.[1]; if (label && !D.features.includes(label)) { D.features.push(label); sync(); summary(); } };
+const featureKeys = () => D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean);
+const info3D = () => Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }]));
+const explainBtn = (key, after) => h('button.eq-explain', { type: 'button', onclick: e => { e.stopPropagation(); openExplainer(key, { features: featureKeys(), info: info3D(), wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border }, onWatch: watched, onAdd: addFeature, onClose: after }); } }, `▶ Explain · ${fmtSecs(videoSecs(key))}`);
 const wallName = () => { const f = WALL_FINISHES.find(x => x.key === D.wall_finish) || WALL_FINISHES[0]; return f.colours.length > 1 && D.wall_colour ? `${f.name}, ${D.wall_colour}` : f.name; };
 function step3D(n, total) {
   const box = h('div.eq-3d', h('div.loading', 'Loading 3D view…'));
@@ -238,7 +247,7 @@ function step3D(n, total) {
   const bar = h('div.eq-3dbar');
   const look = h('div.eq-legend');
   const drawLook = () => look.replaceChildren(h('span', `🧱 Walls: ${wallName()}`), h('span', `⬛ Floor: ${D.floor_main || 'Beige'} with ${D.floor_border || 'Grey'} border`),
-    h('span', 'Tap a wall or the floor to change it · tap any part to learn what it does · double-tap the AHU to take it apart'));
+    h('span', 'Tap a wall or the floor to change it · tap any part to learn what it does · double-tap the AHU to take it apart · 🎬 short explainer videos with English / हिंदी captions'));
   drawLook();
   const norms = h('div');
   const drawNorms = () => norms.replaceChildren(nabhCard({ checklist: true, onAdd: () => render() }) || '');
@@ -247,8 +256,9 @@ function step3D(n, total) {
     viewer?.dispose?.();
     viewer = await mount3D(box, {
       wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border },
+      onWatch: watched, onAdd: key => { addFeature(key); drawNorms(); },
       onFinish: ({ wall, floor }) => { D.wall_finish = wall.finish; D.wall_colour = wall.colour; D.floor_main = floor.main; D.floor_border = floor.border; drawLook(); summary(); sync(); },
-      types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])),
+      types: D.types, features: featureKeys(), ots: D.ots, beds: D.beds, info: info3D(),
     });
     if (viewer?.controls) {
       const chip = (label, fn, pressed) => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!pressed), onclick: () => { const on = fn(); if (on !== undefined) b.setAttribute('aria-pressed', String(on)); } }, label); return b; };
@@ -331,7 +341,7 @@ function summaryItems() {
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
     D.specialties.length && ['Specialty', D.specialties.join(', ')], (D.features.length || D.features_unsure) && ['Features', D.features.length ? `${D.features.length} selected` : 'needs advice'],
-    D.wall_finish && ['Walls', wallName()], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
+    D.wall_finish && ['Walls', wallName()], Object.keys(D.videos || {}).length && ['Videos', Object.keys(D.videos).map(k => VIDEOS[k]?.title.split(' –')[0].replace('The ', '').replace(', explained', '')).join(', ')], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
 }
@@ -388,6 +398,7 @@ function thanks() {
     h('p.eq-sub', config.next_steps || 'Our team will call you within 24 hours.'),
     d.files && d.uploaded < d.files ? h('p.eq-err', 'Some files could not be uploaded; please send them on WhatsApp or email.') : null,
     d.estimate ? h('div.eq-range', h('div', 'Projects like yours typically fall between'), h('b', `${inrShort(d.estimate.low)} – ${inrShort(d.estimate.high)}`), h('div.eq-skip', 'Indicative only. Your exact price depends on the layout and the features you choose.')) : null,
+    h('div', { style: { margin: '6px 0 4px' } }, h('button.eq-btn', { type: 'button', onclick: () => openExplainer('delivery', { onWatch: watched }) }, `🎬 What you receive from WIESPL · ${fmtSecs(videoSecs('delivery'))}`)),
     d.brief ? h('div.eq-range', h('b', { style: { fontSize: '16px' } }, '📋 Are you the surgeon or from the hospital team?'), h('div', 'Add the detailed requirements now (room sizes, specialty, wall and floor finish, equipment). It takes about 5 minutes and gets you an exact proposal.'),
       h('a.eq-btn.primary', { href: `brief.html?t=${encodeURIComponent(d.brief)}`, style: { display: 'inline-block', marginTop: '10px', textDecoration: 'none' } }, 'Fill the detailed requirements ›')) : null,
     h('div.eq-actions',

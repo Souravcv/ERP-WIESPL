@@ -7,8 +7,10 @@ import { insertRow, HttpError } from './crud.js';
 import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
 import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
+import { VIDEOS } from '../public/js/explainers.js';
 
 const SPEC_OK = SPECIALTIES.filter(s => s !== 'Other');
+const VIDEO_NAMES = Object.fromEntries(Object.entries(VIDEOS).map(([k, v]) => [k, v.title]));
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const SYSTEM_USER = { name: 'Website form', role: 'admin' };
@@ -48,6 +50,7 @@ function cleanData(d = {}) {
     name: clip(d.name, 80), hospital: clip(d.hospital, 120), city: clip(d.city, 60), phone: clip(digits(d.phone), 16),
     whatsapp: !!d.whatsapp, email: clip(d.email, 120), best_time: clip(d.best_time, 40), contact_by: clip(d.contact_by, 20), notes: clip(d.notes, 1000),
     viewed_3d: !!d.viewed_3d, panel_colour: clip(d.panel_colour, 30),
+    videos: Object.fromEntries(Object.entries(d.videos && typeof d.videos === 'object' ? d.videos : {}).filter(([k]) => VIDEO_NAMES[k]).map(([k, v]) => [k, Math.max(0, Math.min(100, Math.round(Number(v) || 0)))]).filter(([, v]) => v > 0)),
     wall_finish: clip(d.wall_finish, 12), wall_colour: clip(d.wall_colour, 30), floor_main: clip(d.floor_main, 30), floor_border: clip(d.floor_border, 30),
   };
 }
@@ -63,6 +66,7 @@ export function leadScore(d) {
   if (d.has_drawing) s += 8;
   s += Math.min(6, d.features.length);
   if (d.viewed_3d) s += 2;
+  s += Math.min(4, Object.values(d.videos || {}).filter(p => p >= 50).length); // watched explainer videos
   if (d.email) s += 1;
   if (d.whatsapp) s += 2;
   return Math.min(100, s);
@@ -82,6 +86,7 @@ export function summaryText(d) {
     d.budget && `Budget: ${BUDGETS[d.budget]}`,
     `Contact: ${[d.phone, d.whatsapp && '(WhatsApp)', d.email].filter(Boolean).join(' ')}${d.best_time ? ` · best time: ${d.best_time}` : ''}${d.contact_by ? ` · prefers ${d.contact_by}` : ''}`,
     d.viewed_3d && `Explored the 3D view${d.wall_finish ? ` · walls: ${WALL_NAME[d.wall_finish] || d.wall_finish}${d.wall_colour && ['glass', 'wood'].includes(d.wall_finish) ? ` (${d.wall_colour})` : ''}` : ''}${d.floor_main ? ` · floor: ${d.floor_main} with ${d.floor_border} border` : ''}`,
+    Object.keys(d.videos || {}).length && `Watched: ${Object.entries(d.videos).map(([k, p]) => `${VIDEO_NAMES[k]} (${p}%)`).join(', ')}`,
     d.notes && `Notes: ${d.notes}`,
   ].filter(Boolean).join('\n');
 }

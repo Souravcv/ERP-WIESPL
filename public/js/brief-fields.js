@@ -2,6 +2,7 @@
 // Follows the WIESPL Basis of Design (Annexure II) and estimate (Annexure III). Shared by brief.js (browser)
 // and server/public.js (summary text for the Enquiry Register), so it must not touch the DOM.
 import { otNorms, otType } from './nabh.js';
+import { VIDEOS } from './explainers.js';
 
 export const SPECIALTIES = ['General surgery', 'Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Gynae / Obstetrics', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
 export const WALLS = ['SS 304', 'PPGI', 'Toughened glass', 'Wooden finish (HPL)'];
@@ -141,6 +142,8 @@ export function briefText(d = {}) {
   const s = d.site || {};
   const sv = SITE.map(f => val(f, s[f.key]) && `  ${f.label}: ${val(f, s[f.key])}`).filter(Boolean);
   if (sv.length) out.push('', 'SITE & SCOPE', ...sv);
+  const w = Object.entries(d.watched || {});
+  if (w.length) out.push('', `Explainer videos watched: ${w.map(([k, p]) => `${VIDEOS[k]?.title || k} (${p}%)`).join(', ')}`);
   return out.join('\n');
 }
 
@@ -149,5 +152,6 @@ export function cleanBrief(d = {}) {
   const clip = (v, n) => (v == null ? undefined : typeof v === 'number' ? (Number.isFinite(v) && Math.abs(v) < 1e6 ? v : undefined) : String(v).replace(/[\u0000-\u001f]+/g, ' ').trim().slice(0, n) || undefined);
   const pick = (src, fields) => { const o = {}; for (const f of fields) { const v = clip(src?.[f.key], f.type === 'textarea' ? 1500 : 120); if (v !== undefined) o[f.key] = f.type === 'number' ? (Number.isFinite(Number(v)) ? Number(v) : undefined) : v; } return o; };
   const roomFields = ROOM.flatMap(([, f]) => f);
-  return { project: pick(d.project, PROJECT), rooms: (Array.isArray(d.rooms) ? d.rooms : []).slice(0, 30).map(r => pick(r, roomFields)), site: pick(d.site, SITE) };
+  const watched = Object.fromEntries(Object.entries(d.watched && typeof d.watched === 'object' ? d.watched : {}).filter(([k]) => VIDEOS[k]).map(([k, v]) => [k, Math.max(0, Math.min(100, Math.round(Number(v) || 0)))]).filter(([, v]) => v > 0));
+  return { project: pick(d.project, PROJECT), rooms: (Array.isArray(d.rooms) ? d.rooms : []).slice(0, 30).map(r => pick(r, roomFields)), site: pick(d.site, SITE), watched };
 }

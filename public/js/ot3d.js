@@ -2,6 +2,7 @@
 // Realistic materials (reflective stainless steel, soft shadows), an "anatomy" view of the complete clean-air cycle
 // (outdoor unit → AHU stages → supply duct → HEPA plenum → laminar flow → return risers → AHU) and a guided tour.
 // three.js comes from the jsDelivr CDN; without it (offline / no WebGL) a plain list is shown instead.
+import { VIDEOS, VIDEO_FOR, sceneSecs, videoSecs, fmtSecs } from './explainers.js';
 const CDN = ['https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js', 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'];
 let loading = null;
 const loadScript = src => new Promise((ok, bad) => { const s = document.createElement('script'); s.src = src; s.async = true; s.onload = ok; s.onerror = bad; document.head.append(s); });
@@ -560,7 +561,7 @@ export async function mount3D(box, opts) {
     put(leaf, RB(0.36, 0.46, 0.055, 0.03), M.glass, 0.003, 1.5, 0, 0, Math.PI / 2, 0);
     put(leaf, B(0.05, 0.42, 0.04), M.chrome, 0.04, 1.05, 0.5);
     door.anchor.set(LX + 0.1, 2.62, dz0 + 0.2);
-    door.view = [V(-1.0, 1.6, -0.9), V(-3, 1.2, -1.4)];
+    door.view = [V(0.4, 1.7, 0.5), V(-3, 1.15, -1.5)]; // diagonal, clear of the IV stand
     door.leaf = leaf; door.slide = { axis: 'z', base: dz0 + 0.38, amp: 0.95 };
     // X-ray viewer and pass box, flush in the left wall
     const xr = comp('xray');
@@ -711,11 +712,12 @@ export async function mount3D(box, opts) {
     if (extra.step) card.append(el('div', 'yes', extra.step));
     card.append(el('b', null, `${i.icon ? i.icon + '  ' : ''}${i.label}`), el('div', null, i.hint));
     if (extra.mine) card.append(el('div', 'yes', '✓ In your plan'));
+    if (extra.video && VIDEOS[extra.video]) { const b = el('button', 'explain', `▶ Explain (${fmtSecs(videoSecs(extra.video))})`); b.type = 'button'; b.onclick = () => explain(extra.video); card.append(b); }
     if (extra.nav) card.append(extra.nav);
     const x = el('button', 'x', '×'); x.type = 'button'; x.setAttribute('aria-label', 'Close'); x.onclick = () => { card.hidden = true; stopTour(); }; card.append(x);
     card.hidden = false;
   };
-  const showKey = (key, extra) => showInfo(info(key) || { label: key, hint: '' }, { ...extra, mine: picked.has(key) });
+  const showKey = (key, extra) => showInfo(info(key) || { label: key, hint: '' }, { video: VIDEO_FOR[key], ...extra, mine: picked.has(key) });
   for (const key of Object.keys(comps)) {
     if (!info(key)) continue;
     const t = el('button', 'tag' + (picked.has(key) ? ' on' : ''));
@@ -856,13 +858,99 @@ export async function mount3D(box, opts) {
     ahuFocus = true; applyVisibility();
     flyTo(scaled(ahuView(), fit()), 1200);
     const i = info(key) || info('ahu');
-    showInfo(i, { step: explodeTo ? '💥 Exploded view · double-tap again to put it back' : '❄️ AHU close-up · double-tap it to take it apart', mine: picked.has(key) });
+    showInfo(i, { step: explodeTo ? '💥 Exploded view · double-tap again to put it back' : '❄️ AHU close-up · double-tap it to take it apart', mine: picked.has(key), video: VIDEO_FOR[key] || 'ahu' });
   };
   const toggleExplode = key => { explodeTo = explodeTo ? 0 : 1; applyVisibility(); ahuClose(explodeTo ? 'ahu' : key); if (explodeTo) showInfo({ icon: '💥', label: 'Inside the AHU', hint: 'Air moves left to right: pre-filter → fine filter → cooling coil → SHRM heat recovery → blower → UV lamps, then into the supply duct to the HEPA plenum. Tap any part to see what it does.' }, { step: 'Exploded view · double-tap to put it back' }); };
   // a short blue outline round whatever was tapped
   const sel = new T.BoxHelper(undefined, 0x2f7fd8); sel.visible = false; sel.material.depthTest = false; sel.material.transparent = true; sel.renderOrder = 10; scene.add(sel);
   let selT = 0;
   const flash = key => { const g = comps[key]?.group; if (!g || ['panels', 'flooring', 'props'].includes(key)) return; sel.setFromObject(g); sel.visible = true; selT = 2.2; };
+
+  // ------------------------------------------------------------ explainer videos, played on the model (see explainers.js)
+  let vid = null; // { key, i, lang, voice, playing, timer, start, secs }
+  const vidEl = el('div', 'vid'); vidEl.hidden = true; box.append(vidEl);
+  let vidLang = 'en', vidVoice = false;
+  try { vidLang = localStorage.getItem('wiespl-vid-lang') === 'hi' ? 'hi' : 'en'; vidVoice = localStorage.getItem('wiespl-vid-voice') === '1'; } catch { /* private mode */ }
+  const tts = 'speechSynthesis' in window ? window.speechSynthesis : null;
+  const voiceFor = lang => tts?.getVoices().find(v => v.lang?.toLowerCase().startsWith(lang === 'hi' ? 'hi' : 'en-in')) || (lang === 'en' ? tts?.getVoices().find(v => v.lang?.toLowerCase().startsWith('en')) : null);
+  const runAct = act => {
+    const [what, part] = String(act).split(':');
+    if (what === 'build') { if (anatomy) setAnatomy(false); playBuild(9000); controls.autoRotate = true; controls.autoRotateSpeed = 0.9; return; }
+    if (what === 'overview') { if (anatomy) setAnatomy(false); fly('overview'); return; }
+    if (what === 'anatomy') { explodeTo = 0; setAnatomy(true); fly('anatomy'); return; }
+    if (what === 'airflow') { if (anatomy) setAnatomy(false); if (air) { air.on = true; applyVisibility(); } flyTo(comps.laf?.view || viewOf('eye'), 1300); return; }
+    if (what === 'ahu' || what === 'explode' || (what === 'focus' && AHU_KEYS.has(part))) {
+      if (!anatomy) setAnatomy(true);
+      ahuFocus = true; explodeTo = what === 'ahu' ? 0 : 1; applyVisibility();
+      flyTo(scaled(ahuView(), fit()), 1300);
+      if (part) setTimeout(() => vid && flash(part), 900);
+      return;
+    }
+    const c = comps[part];
+    if (anatomy) setAnatomy(false);
+    if (!c) { fly('overview'); return; }
+    flyTo(scaled(c.view || [c.anchor.clone().add(V(1.6, 0, 2.0)), c.anchor.clone()], fit() * 1.45), 1300); // a little wider than the tap view, so captions do not hide the part
+    setTimeout(() => vid && flash(part), 900);
+  };
+  const stopVoice = () => { try { tts?.cancel(); } catch { /* ignore */ } };
+  const drawVid = () => {
+    const V0 = VIDEOS[vid.key], n = V0.scenes.length, s = V0.scenes[vid.i], hi = vid.lang === 'hi';
+    const btn = (t, fn, cls, label) => { const b = el('button', cls || null, t); b.type = 'button'; if (label) b.setAttribute('aria-label', label); b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
+    let at = 0;
+    const chaps = el('div', 'vchap');
+    V0.scenes.forEach((sc, k) => { const b = btn(`${fmtSecs(at)} ${hi ? sc.hiCh : sc.ch}`, () => goScene(k), k === vid.i ? 'on' : k < vid.i ? 'done' : null); chaps.append(b); at += sceneSecs(sc); });
+    const top = el('div', 'vtop');
+    top.append(el('b', null, `🎬 ${hi ? V0.hiTitle : V0.title}`), el('span', 'vlen', `${vid.i + 1} / ${n} · ${fmtSecs(videoSecs(vid.key))}`), btn('×', closeVid, 'x', 'Close video'));
+    const cap = el('div', 'vcap', hi ? s.hi : s.en);
+    const bar = el('div', 'vbar'); const fillEl = el('i'); bar.append(fillEl); vid.fill = fillEl;
+    const ctl = el('div', 'vctl');
+    ctl.append(btn('⏮', () => goScene(Math.max(0, vid.i - 1)), null, 'Previous part'), btn(vid.playing ? '⏸' : '▶', () => (vid.playing ? pauseVid() : goScene(vid.i)), 'play', vid.playing ? 'Pause' : 'Play'),
+      btn('⏭', () => goScene(Math.min(n - 1, vid.i + 1)), null, 'Next part'),
+      btn(hi ? 'EN' : 'हिंदी', () => { vid.lang = vidLang = hi ? 'en' : 'hi'; try { localStorage.setItem('wiespl-vid-lang', vidLang); } catch { /* ignore */ } goScene(vid.i); }, null, 'Language'),
+      ...(tts ? [btn(vidVoice ? '🔊' : '🔇', () => { vidVoice = !vidVoice; try { localStorage.setItem('wiespl-vid-voice', vidVoice ? '1' : '0'); } catch { /* ignore */ } goScene(vid.i); }, null, vidVoice ? 'Voice off' : 'Voice on')] : []));
+    if (V0.feature && opts.onAdd) ctl.append(picked.has(V0.feature) ? el('span', 'vadded', '✓ In your enquiry') : btn('＋ Add this to my enquiry', () => { picked.add(V0.feature); tags[V0.feature]?.classList.add('on'); opts.onAdd(V0.feature); drawVid(); }, 'vadd'));
+    if (V0.youtube) { const a = el('a', 'vyt', '▶ Real site footage'); a.href = V0.youtube; a.target = '_blank'; a.rel = 'noopener'; ctl.append(a); }
+    if (vid.noVoice) ctl.append(el('span', 'vnote', hi ? 'हिंदी आवाज़ इस डिवाइस पर नहीं है – कैप्शन पढ़ें' : 'No voice on this device – captions only'));
+    vidEl.replaceChildren(top, chaps, cap, bar, ctl);
+  };
+  const goScene = k => {
+    if (!vid) return;
+    clearTimeout(vid.timer); stopVoice();
+    const V0 = VIDEOS[vid.key], s = V0.scenes[k];
+    vid.i = k; vid.playing = true; vid.start = performance.now(); vid.secs = sceneSecs(s); vid.noVoice = false;
+    vid.seen = Math.max(vid.seen, k + 1);
+    opts.onWatch?.(vid.key, Math.round((vid.seen / V0.scenes.length) * 100));
+    runAct(s.act);
+    const next = () => { if (!vid || vid.i !== k) return; if (k < V0.scenes.length - 1) goScene(k + 1); else { vid.playing = false; vid.done = true; drawVid(); } };
+    let spoken = false;
+    if (vidVoice && tts) {
+      const v = voiceFor(vid.lang);
+      if (v) {
+        const u = new SpeechSynthesisUtterance(vid.lang === 'hi' ? s.hi : s.en); u.voice = v; u.lang = v.lang; u.rate = vid.lang === 'hi' ? 0.95 : 1;
+        u.onend = () => { vid && (vid.timer = setTimeout(next, 700)); };
+        tts.speak(u); spoken = true;
+        vid.timer = setTimeout(next, (vid.secs + 25) * 1000); // safety net if the voice never ends
+      } else vid.noVoice = true;
+    }
+    if (!spoken) vid.timer = setTimeout(next, vid.secs * 1000);
+    drawVid();
+  };
+  const pauseVid = () => { if (!vid) return; clearTimeout(vid.timer); stopVoice(); vid.playing = false; drawVid(); };
+  function closeVid() {
+    if (!vid) return;
+    clearTimeout(vid.timer); stopVoice(); vid = null; vidEl.hidden = true; box.classList.remove('playing');
+    explodeTo = 0; if (anatomy) setAnatomy(false); fly('overview');
+    opts.onVideoClose?.();
+  }
+  const explain = (key, o = {}) => {
+    if (!VIDEOS[key]) return;
+    stopTour(); card.hidden = true; fin.hidden = true;
+    if (vid) { clearTimeout(vid.timer); stopVoice(); }
+    vid = { key, i: 0, lang: o.lang || vidLang, playing: false, seen: 0 };
+    box.classList.add('playing');
+    vidEl.hidden = false;
+    goScene(0);
+  };
 
   // tap a part of the room
   const ray = new T.Raycaster(), mouse = new T.Vector2();
@@ -875,6 +963,7 @@ export async function mount3D(box, opts) {
     ray.setFromCamera(mouse, camera);
     const hit = ray.intersectObjects(Object.values(comps).map(c => c.group), true).find(i => { let o = i.object; while (o) { if (!o.visible) return false; o = o.parent; } return !!info(i.object.userData.key); });
     const now = performance.now();
+    if (vid) return;
     if (hit) {
       const key = hit.object.userData.key, dbl = now - lastTap < 400 && AHU_KEYS.has(lastKey);
       stopTour();
@@ -937,6 +1026,7 @@ export async function mount3D(box, opts) {
         else { g.position.set(p.base.x + p.x * 1.9 * exploded, p.base.y, p.base.z + exploded * 1.6); p.c.anchor.set(g.position.x, AY + 0.82, g.position.z + 0.6); }
       }
     }
+    if (vid?.fill && vid.playing) { const V0 = VIDEOS[vid.key]; let done = 0; for (let k = 0; k < vid.i; k++) done += sceneSecs(V0.scenes[k]); vid.fill.style.width = `${Math.min(100, ((done + Math.min(vid.secs, (now - vid.start) / 1000)) / videoSecs(vid.key)) * 100)}%`; }
     if (selT > 0) { selT -= dt; sel.material.opacity = Math.min(1, selT); if (selT <= 0) sel.visible = false; }
     if (comps.doors?.leaf && comps.doors.group.visible) { doorT += dt; const s = (Math.sin(doorT * 0.6) + 1) / 2; const sl = comps.doors.slide || { axis: 'x', base: -1.12, amp: 0.95 }; comps.doors.leaf.position[sl.axis] = sl.base + s * sl.amp; }
     controls.update();
@@ -948,7 +1038,7 @@ export async function mount3D(box, opts) {
     const tk = tour && !tour.stops[tour.i]?.anatomy ? tour.stops[tour.i]?.key : null; // on the tour only the current stop is labelled
     for (const key of order) {
       const t = tags[key];
-      if (build < 0.999 || (tk ? key !== tk : t.classList.contains('hidden'))) { t.style.display = 'none'; continue; }
+      if (build < 0.999 || vid || (tk ? key !== tk : t.classList.contains('hidden'))) { t.style.display = 'none'; continue; }
       v.copy(comps[key].anchor).project(camera);
       const tw = (t._w ||= t.offsetWidth || 120), th = 24;
       const x0 = ((v.x + 1) / 2) * w, y = ((1 - v.y) / 2) * h;
@@ -970,9 +1060,11 @@ export async function mount3D(box, opts) {
     setFinish(key, colour) { setFinish(key, colour); },
     setFloor(main, border) { setFloor(main, border); },
     openFinish,
+    explain,
     controls: [
       { label: '🧱 Build it again', run: () => { playBuild(); } },
       { label: '▶ Take the tour', pressed: false, ref: b => { tourBtn = b; }, run: () => { if (tour) { stopTour(); card.hidden = true; return false; } buildPlay = null; controls.autoRotate = false; applyBuild(1); tour = { stops: tourStops(), i: 0 }; goStop(0); return true; } },
+      { label: '🎬 Explainer videos', run: () => { stopTour(); fin.hidden = true; const list = el('div', 'vlist'); for (const [k, v0] of Object.entries(VIDEOS)) { const b = el('button', null, `▶ ${v0.title} · ${fmtSecs(videoSecs(k))}`); b.type = 'button'; b.onclick = () => explain(k); list.append(b); } showInfo({ icon: '🎬', label: 'Explainer videos', hint: 'Short guided videos on the model, with captions (English / हिंदी) and an optional voice.' }, { nav: list }); } },
       { label: '🎨 Walls & floor', run: () => { if (anatomy) setAnatomy(false); fly('overview'); openFinish('wall'); } },
       { label: '🔬 Anatomy: how air flows', pressed: false, ref: b => { anatBtn = b; }, run: () => { stopTour(); fin.hidden = true; if (build < 1) { buildPlay = null; applyBuild(1); } const on = ahuFocus || !anatomy; explodeTo = 0; setAnatomy(on); fly(anatomy ? 'anatomy' : 'overview'); if (anatomy) showInfo({ icon: '🔬', label: 'How the clean air flows', hint: 'Blue arrows: filtered, cooled air from the AHU to the HEPA filters. Orange arrows: used air going back from the room. Tap the AHU for a close-up; double-tap it to take it apart.' }); else card.hidden = true; return anatomy; } },
       { label: '❄️ AHU close-up', run: () => { if (explodeTo) { explodeTo = 0; applyVisibility(); } ahuClose('ahu'); } },
@@ -985,11 +1077,26 @@ export async function mount3D(box, opts) {
       { label: '↺ Overview', run: () => { stopTour(); card.hidden = true; fin.hidden = true; if (anatomy) setAnatomy(false); fly('overview'); } },
     ],
     dispose() {
-      stopTour(); cancelAnimationFrame(raf); ro.disconnect(); document.removeEventListener('visibilitychange', vis); controls.dispose();
+      stopTour(); if (vid) { clearTimeout(vid.timer); stopVoice(); vid = null; } cancelAnimationFrame(raf); ro.disconnect(); document.removeEventListener('visibilitychange', vis); controls.dispose();
       scene.traverse(o => { o.geometry?.dispose?.(); if (o.material?.map) o.material.map.dispose?.(); });
       for (const m of [...Object.values(M), ...mats]) m.dispose();
       scene.environment?.dispose?.();
       renderer.dispose(); renderer.forceContextLoss?.();
     },
   };
+}
+
+// Explainer video in a pop-up (feature cards, thank-you screen, detailed form). Closing it returns to the page as it was.
+export async function openExplainer(key, o = {}) {
+  const wrap = el('div', 'vmodal'); const inner = el('div', 'vmodal-in'); const box = el('div', 'eq-3d');
+  box.append(el('div', 'loading', 'Loading…'));
+  const x = el('button', 'vmodal-x', '×'); x.type = 'button'; x.setAttribute('aria-label', 'Close');
+  inner.append(box, x); wrap.append(inner); document.body.append(wrap);
+  let viewer = null, closed = false;
+  const close = () => { if (closed) return; closed = true; viewer?.dispose?.(); wrap.remove(); document.removeEventListener('keydown', esc); o.onClose?.(); };
+  const esc = e => { if (e.key === 'Escape') close(); };
+  x.onclick = close; wrap.onclick = e => { if (e.target === wrap) close(); }; document.addEventListener('keydown', esc);
+  viewer = await mount3D(box, { types: ['ot'], features: o.features || [], info: o.info || {}, noIntro: true, wall: o.wall, floor: o.floor, onWatch: o.onWatch, onAdd: o.onAdd, onVideoClose: close });
+  if (closed) { viewer?.dispose?.(); return; }
+  if (viewer?.explain) viewer.explain(key); else box.append(el('p', null, 'The video needs a recent browser with 3D (WebGL) turned on.'));
 }
