@@ -73,11 +73,13 @@ function linesEditor(f, value, { readonly, onTotals }) {
     const rows = lines.map((l, i) => {
       const amount = amounts ? h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0))) : null;
       const cells = f.columns.map(c => {
-        const inp = c.type === 'textarea' || c.key === 'description'
-          ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
-          : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : 'text', step: 'any', readOnly: readonly });
-        inp.value = l[c.key] ?? '';
-        inp.oninput = () => {
+        const inp = c.type === 'select' ? h('select', { disabled: readonly }, c.options.map(o => h('option', o)))
+          : c.type === 'textarea' || (c.key === 'description' && !f.schedule)
+            ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
+            : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : c.type === 'date' ? 'date' : 'text', step: 'any', readOnly: readonly });
+        inp.value = l[c.key] ?? (c.type === 'select' ? c.options[0] : '');
+        if (c.type === 'select' && l[c.key] == null) l[c.key] = c.options[0];
+        inp.oninput = inp.onchange = () => {
           l[c.key] = ['number', 'money'].includes(c.type) ? (inp.value === '' ? null : Number(inp.value)) : inp.value;
           if (amount) amount.textContent = inr((Number(l.qty) || 0) * (Number(l.rate) || 0));
           totals();
@@ -106,13 +108,13 @@ function linesEditor(f, value, { readonly, onTotals }) {
       const label = l.description ? String(++sr) : '';
       return h('tr', h('td.muted', label), itemCell, cells, amount, f.itemRef && amounts ? h('td.num', l.received ?? 0) : null,
         readonly ? null : h('td.nowrap',
-          h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
+          f.schedule ? null : h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
           h('button.icon-btn.del', { type: 'button', title: 'Remove line', onclick: () => { lines.splice(i, 1); render(); } }, '✕')));
     });
     wrap.replaceChildren(
       f.hint && !readonly ? h('div.muted', { style: { fontSize: '12px', marginBottom: '4px' } }, f.hint) : null,
       h('div.table-wrap', h('table.data.lines', h('thead', head), h('tbody', rows))),
-      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push({ description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); } }, '+ Add line'),
+      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push(f.schedule ? { due_date: '', description: '', percent: null, amount: null, status: 'Due' } : { description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); } }, f.schedule ? '+ Add payment' : '+ Add line'),
       amounts ? totalsBox : null);
     totals();
   }
@@ -194,6 +196,52 @@ function approvalStrip(docType, row) {
       const waiting = row.approval_stage === s.stage;
       return [h('span.muted', '→'), h('span.badge' + (who ? '.good' : waiting ? '.warn' : ''), `${s.stage}: ${who || (waiting ? 'waiting' : '—')}`)];
     }));
+}
+
+// ---------------------------------------------------------------- PO commercial step: prices, GST, payment terms, due dates
+const PAID_LATER = ['Approved', 'Sent', 'Partially Received', 'Received', 'Closed'];
+function commercialPanel(po, reload) {
+  const atStep = po.status === 'Pending Approval' && po.approval_stage === 'Commercial';
+  if (!hasFunction(state.user.role, 'po_commercial') || !(atStep || PAID_LATER.includes(po.status))) return null;
+  const schedField = ENTITIES.purchase_orders.fields.find(f => f.key === 'payment_schedule');
+  const sched = linesEditor(schedField, po.payment_schedule || [], { readonly: false });
+  const lines = (po.lines || []).map(l => ({ ...l }));
+  const totalsBox = h('div.totals');
+  const showTotals = () => {
+    const t = linesTotals(lines);
+    totalsBox.replaceChildren(h('span', 'Taxable value'), h('span.right', inr(t.subtotal)), h('span', 'GST'), h('span.right', inr(t.tax)), h('span.grand', 'Total'), h('span.right.grand', inr(Math.round(t.total))));
+  };
+  const terms = {};
+  const term = (k, label) => { terms[k] = h('input', { value: po[k] || '' }); return h('label', label, terms[k]); };
+  let heading = '';
+  const priceTable = atStep ? h('div.table-wrap', h('table.data.lines', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', 'Rate (₹) *', 'GST %', 'Amount'].map(x => h('th', x)))),
+    h('tbody', lines.map((l, i) => {
+      if (l.description) heading = l.description;
+      if (!(Number(l.qty) > 0)) return h('tr', h('td'), h('td', { colspan: 6, style: { fontWeight: 600 } }, l.description || ''));
+      const amt = h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0)));
+      const inp = (k, w) => { const x = h('input', { type: 'number', step: 'any', value: l[k] ?? '', style: { width: w } }); x.oninput = () => { l[k] = x.value === '' ? null : Number(x.value); amt.textContent = inr((Number(l.qty) || 0) * (Number(l.rate) || 0)); showTotals(); }; return h('td', x); };
+      return h('tr', h('td', i + 1), h('td', [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – ')), h('td.num', l.qty), h('td', l.uom || ''), inp('rate', '110px'), inp('gst', '70px'), amt);
+    })))) : null;
+  showTotals();
+  const body = () => ({ lines: lines.map(l => ({ rate: l.rate, gst: l.gst })), payment_schedule: sched.get(), ...Object.fromEntries(Object.entries(terms).map(([k, el]) => [k, el.value])) });
+  const saveCommercial = busy(async () => { await api(`/purchase_orders/${po.id}/commercial`, { method: 'POST', body: body() }); toast('Prices and payment terms saved'); reload(); });
+  const approve = busy(async () => {
+    if (lines.some(l => Number(l.qty) > 0 && !(Number(l.rate) > 0))) throw new Error('Enter the rate on every line before approving');
+    if (!sched.get().some(p => p.due_date)) throw new Error('Add at least one payment with its due date (Payment schedule), so payments can be planned');
+    await api(`/purchase_orders/${po.id}/commercial`, { method: 'POST', body: body() });
+    const ap = (await api(`/approvals?doc_type=${encodeURIComponent('Purchase Order')}&doc_id=${po.id}&status=Pending`))[0];
+    if (!ap) throw new Error('The approval request for this step was not found');
+    await api(`/approvals/${ap.id}/decide`, { method: 'POST', body: { decision: 'Approved', comments: 'Prices, payment terms and due dates entered' } });
+    toast('PO approved'); window.dispatchEvent(new Event('approvals-changed')); reload();
+  });
+  const saveSchedule = busy(async () => { await api(`/purchase_orders/${po.id}/payments`, { method: 'POST', body: { payment_schedule: sched.get().filter(p => p.due_date || p.amount || p.percent || p.description) } }); toast('Payment schedule saved'); reload(); });
+  return h('div.card', { style: { borderLeft: '4px solid #1f4e9a' } },
+    h('h2', atStep ? '💰 Commercial step: enter prices, payment terms and due dates' : '💰 Payment schedule'),
+    atStep ? h('p.muted', 'The material and quantities were checked by the Purchase Head and approved by the GM. Enter the vendor rates and GST, the payment terms, and when each payment is due, then approve.') : h('p.muted', 'Mark payments as Paid (with the date) so the accounts dashboard shows what is still due.'),
+    priceTable, atStep ? totalsBox : null,
+    atStep ? h('div.form-grid', { style: { marginTop: '10px' } }, term('term_advance', 'Payment – Advance'), term('term_balance', 'Payment – Balance'), term('term_delivery', 'Delivery'), term('term_freight', 'Freight')) : null,
+    h('div', { style: { marginTop: '10px' } }, h('b', 'Payment schedule (due dates)'), sched.el),
+    h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
 }
 
 // ---------------------------------------------------------------- actions per module
@@ -511,6 +559,7 @@ export async function recordView(root, entity, id) {
         writable ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save') : null,
         !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
+    !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
     h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },

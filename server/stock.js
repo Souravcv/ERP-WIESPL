@@ -254,3 +254,55 @@ export function storeDashboard(q = {}) {
       .map(r => ({ id: r.id, code: r.code, name: r.name, qty: r.closing, uom: r.uom, value: r.closing_value, fsn: r.fsn })),
   };
 }
+
+// ---------------------------------------------------------------- accounts dashboard
+// Vendor payments due (PO payment schedules), receivables, collections, POs waiting for the commercial step.
+export function accountsDashboard() {
+  const t = today();
+  const from = fyStart(fyOf(t));
+  const pos = db.prepare(`SELECT p.id, p.po_no, p.date, p.total, p.status, p.approval_stage, p.payment_schedule, v.name vendor
+    FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id WHERE p.status NOT IN ('Cancelled', 'Rejected', 'Draft')`).all();
+  const dues = [];
+  for (const p of pos) {
+    let sch = [];
+    try { sch = JSON.parse(p.payment_schedule || '[]'); } catch { /* ignore */ }
+    for (const s of sch) {
+      const amount = round2(Number(s.amount) || (Number(s.percent) || 0) * (p.total || 0) / 100);
+      dues.push({ po_id: p.id, po_no: p.po_no, vendor: p.vendor, due_date: s.due_date || null, description: s.description || '', amount, status: s.status || 'Due', paid_on: s.paid_on || null });
+    }
+  }
+  const open = dues.filter(d => d.status !== 'Paid');
+  const in30 = new Date(Date.now() + 30 * 864e5).toISOString().slice(0, 10);
+  const months = [];
+  const d0 = new Date(t.slice(0, 7) + '-01T00:00:00');
+  for (let i = 0; i < 6; i++) { const x = new Date(d0.getFullYear(), d0.getMonth() + i, 1); months.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
+  const pastMonths = [];
+  for (let i = 5; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth() - i, 1); pastMonths.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
+  const coll = db.prepare("SELECT substr(date, 1, 7) mo, SUM(amount) v FROM payments WHERE date >= ? GROUP BY 1").all(pastMonths[0] + '-01');
+  const inv = db.prepare(`SELECT i.id, i.invoice_no, i.date, i.due_date, i.total, c.name customer,
+      i.total - (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.invoice_id = i.id) balance
+    FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id WHERE i.type = 'Tax Invoice' AND i.status IN ('Issued', 'Partially Paid')`).all();
+  const sum = (rows, k = 'amount') => round2(rows.reduce((s, r) => s + (Number(r[k]) || 0), 0));
+  return {
+    today: t, from,
+    payables: {
+      overdue: sum(open.filter(d => d.due_date && d.due_date < t)), overdue_n: open.filter(d => d.due_date && d.due_date < t).length,
+      next30: sum(open.filter(d => d.due_date && d.due_date >= t && d.due_date <= in30)), next30_n: open.filter(d => d.due_date && d.due_date >= t && d.due_date <= in30).length,
+      open: sum(open), no_date: open.filter(d => !d.due_date).length,
+      paid_fy: sum(dues.filter(d => d.status === 'Paid' && (d.paid_on || d.due_date || '') >= from)),
+      by_month: months.map(m => ({ month: m, value: sum(open.filter(d => (d.due_date || '').startsWith(m))) })),
+      upcoming: open.sort((a, b) => String(a.due_date || '9999').localeCompare(String(b.due_date || '9999'))).slice(0, 15),
+    },
+    pos: {
+      waiting_commercial: pos.filter(p => p.status === 'Pending Approval' && p.approval_stage === 'Commercial').map(p => ({ id: p.id, po_no: p.po_no, vendor: p.vendor, total: p.total })),
+      approved_fy_value: round2(pos.filter(p => ['Approved', 'Sent', 'Partially Received', 'Received', 'Closed'].includes(p.status) && p.date >= from).reduce((s, p) => s + (p.total || 0), 0)),
+      without_schedule: pos.filter(p => ['Approved', 'Sent', 'Partially Received'].includes(p.status) && (!p.payment_schedule || p.payment_schedule === '[]')).length,
+    },
+    receivables: {
+      outstanding: sum(inv, 'balance'), overdue: sum(inv.filter(i => i.due_date && i.due_date < t), 'balance'),
+      overdue_list: inv.filter(i => i.due_date && i.due_date < t && i.balance > 0.5).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 10),
+      collected_fy: round2(db.prepare('SELECT COALESCE(SUM(amount), 0) v FROM payments WHERE date >= ?').get(from).v),
+      collected_by_month: pastMonths.map(m => ({ month: m, value: round2(coll.find(c => c.mo === m)?.v || 0) })),
+    },
+  };
+}

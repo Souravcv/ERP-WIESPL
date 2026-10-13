@@ -170,7 +170,9 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
     }
     case 'person': {
       const id = 'dl-' + ++dlCount;
-      el = h('span', h('input', { ...common, list: id, autocomplete: 'off' }), h('datalist', { id }, state.people.map(p => h('option', { value: p.name }))));
+      // CRM users plus the names used in the registers (e.g. Saurabh, Pratiksha, Ashwin/Jai)
+      const names = [...new Set([...state.people.map(p => p.name), ...(f.suggest || [])])];
+      el = h('span', h('input', { ...common, list: id, autocomplete: 'off' }), h('datalist', { id }, names.map(n => h('option', { value: n }))));
       const inp = el.firstChild; inp.value = value ?? ''; get = () => inp.value; el.style.display = 'contents'; break;
     }
     case 'number': case 'money':

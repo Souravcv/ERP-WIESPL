@@ -58,6 +58,10 @@ export function decide(approvalId, decision, comments, user) {
     throw new HttpError(403, `Your role is not allowed to give “${ap.stage || 'this'}” approval (${FUNCTIONS[step?.fn] || 'approval'}). An admin can allow it under Roles & Permissions.`);
   }
   const d = DOCS[ap.doc_type];
+  if (ap.doc_type === 'Purchase Order' && ap.stage === 'Commercial' && decision === 'Approved') {
+    const po = getRow('purchase_orders', ap.doc_id);
+    if ((po.lines || []).some(l => Number(l.qty) > 0 && !(Number(l.rate) > 0))) throw new HttpError(400, `Open PO ${po.po_no} and enter the prices in its Commercial step before approving`);
+  }
   return tx(() => {
     updateRow('approvals', approvalId, { status: decision, decided_by: user.name, decided_at: stamp(), comments: comments || ap.comments }, user, { system: true });
     if (!d) return getRow('approvals', approvalId);
@@ -182,4 +186,21 @@ export function invoiceFromSalesOrder(soId, body, user) {
     place_of_supply: cust.state || 'Maharashtra', notes: getSettings().invoice_terms || '',
     lines: [{ description: body?.description || `${pct}% of order value against ${so.so_no}${so.client_po_no ? ' / PO ' + so.client_po_no : ''}`, hsn: '', qty: 1, uom: 'Lot', rate: round2((so.order_value || 0) * pct / 100), gst: so.gst_rate ?? 18 }],
   }, user, { system: true });
+}
+
+// Commercial step of a PO: prices, GST, payment terms and the payment schedule (due dates) are entered here,
+// while the PO waits for this step. Approving the step then makes the PO Approved.
+export function poCommercial(id, body, user) {
+  const po = getRow('purchase_orders', id);
+  if (po.status !== 'Pending Approval' || po.approval_stage !== 'Commercial') throw new HttpError(400, 'Prices and payment terms are entered when the PO is at the Commercial step');
+  if (!canApprove('Purchase Order', 'Commercial', user)) throw new HttpError(403, 'Your role is not allowed to do the commercial step of POs');
+  const lines = (po.lines || []).map((l, i) => {
+    const c = (body?.lines || [])[i];
+    if (!c) return l;
+    return { ...l, ...(c.rate !== undefined && c.rate !== '' ? { rate: Number(c.rate) } : {}), ...(c.gst !== undefined && c.gst !== '' ? { gst: Number(c.gst) } : {}) };
+  });
+  const patch = { lines };
+  for (const k of ['term_advance', 'term_balance', 'term_delivery', 'term_freight', 'term_validity', 'quotation_ref', 'remarks']) if (body?.[k] !== undefined) patch[k] = body[k];
+  if (Array.isArray(body?.payment_schedule)) patch.payment_schedule = body.payment_schedule.filter(p => p.due_date || p.amount || p.percent || p.description);
+  return updateRow('purchase_orders', id, patch, user, { system: true });
 }

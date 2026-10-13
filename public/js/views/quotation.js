@@ -90,6 +90,8 @@ export async function quotationView(root, id) {
   // Cells updated in place on every keystroke (avoids re-rendering inputs)
   let live = { refresh: () => {} };
 
+  // the quotation GST %, used for lines without their own GST %
+  const quoteGst = () => head.gst_rate.get() ?? 18;
   function totals() {
     return quoteTotals(data, head.gst_rate.get() ?? 18, head.discount_pct.get() ?? 0);
   }
@@ -98,7 +100,7 @@ export async function quotationView(root, id) {
     strip.replaceChildren(
       h('span', 'Basic ', h('b', money(t.basic))),
       t.discount ? h('span', 'Discount ', h('b', '− ' + money(t.discount))) : null,
-      h('span', `GST ${head.gst_rate.get() ?? 18}% `, h('b', money(t.gst))),
+      h('span', `GST ${Object.keys(t.gstByRate || {}).filter(r => t.gstByRate[r]).map(r => r + '%').join(' + ') || (head.gst_rate.get() ?? 18) + '%'} `, h('b', money(t.gst))),
       h('span', 'Grand total ', h('b', { style: { fontSize: '16px' } }, money(t.grand))),
       dirty ? h('span.badge.warn', 'Unsaved changes') : null);
     live.refresh(t);
@@ -233,6 +235,7 @@ export async function quotationView(root, id) {
   const lineFromProduct = (p, prevHeading) => ({
     id: uid('l'), kind: p.kind === 'Heading' ? 'heading' : 'item', product_id: p.id, name: p.name, description: p.description || p.name,
     uom: p.uom, rate: p.rate || 0, install: round2((p.rate || 0) * (p.install_pct || 0) / 100), basis: p.qty_basis || 'manual',
+    gst: p.gst_rate != null && Number(p.gst_rate) !== Number(head.gst_rate.get() ?? 18) ? Number(p.gst_rate) : null,
     sub: !!(prevHeading && p.kind !== 'Heading' && p.sort != null && prevHeading.sort != null && Math.floor(p.sort / 10) === Math.floor(prevHeading.sort / 10)),
     qty: {}, default_qty: p.default_qty,
   });
@@ -263,10 +266,15 @@ export async function quotationView(root, id) {
     const bar = h('div.toolbar',
       editable ? [
         h('button.btn', { onclick: act(async () => {
-          if (lines.length && !(await confirmBox('Append the standard MOT BOQ items to the existing lines?'))) return;
-          const all = (await api('/products?active=Yes')).filter(p => p.sort != null && p.category !== 'Optional').sort((a, b) => a.sort - b.sort);
-          addProducts(all, lines); render();
-        }) }, '⚡ Load standard MOT BOQ'),
+          const prods = (await api('/products?active=Yes')).filter(p => p.sort != null && p.category !== 'Optional');
+          const sets = [...new Set(prods.map(p => p.boq_set || ''))].sort();
+          const sel = h('select', sets.map(s => h('option', { value: s }, s || 'MOT (main catalog)')));
+          const ok = await modal('Load a standard BOQ', h('div.grid', h('label', 'Standard BOQ', sel), lines.length ? h('p.muted', `The items are added below the ${lines.length} existing line(s).`) : null,
+            h('p.muted', 'Add more standard BOQs (e.g. from an estimate Excel like “SS 304_MOT”) under CRM → Product Catalog → 📥 Import estimate Excel.')),
+            [{ label: 'Cancel', value: false }, { label: 'Load', cls: 'primary', value: true }]);
+          if (!ok) return;
+          addProducts(prods.filter(p => (p.boq_set || '') === sel.value).sort((a, b) => a.sort - b.sort), lines); render();
+        }) }, '⚡ Load standard BOQ'),
         h('button.btn.primary', { onclick: act(async () => { addProducts(await pickProducts(), lines); render(); }) }, '+ Add from catalog'),
         h('button.btn', { onclick: () => { lines.push({ id: uid('l'), kind: 'item', name: 'Custom item', description: '', uom: 'Each', rate: 0, install: 0, basis: 'manual', qty: {} }); markDirty(); render(); } }, '+ Custom line'),
         h('button.btn', { onclick: () => { lines.push({ id: uid('l'), kind: 'heading', name: 'Heading', description: '', qty: {} }); markDirty(); render(); } }, '+ Heading'),
@@ -274,7 +282,7 @@ export async function quotationView(root, id) {
       rooms.length ? null : h('span.badge.warn', 'Add rooms first (Rooms & Basis of Design tab)'));
     const BOQ_TITLE = h('input', { readOnly: !editable, value: data.boq_title || '', placeholder: 'BOQ title printed on Annexure', oninput: e => { data.boq_title = e.target.value; markDirty(); } });
 
-    const head = h('tr', h('th', '#'), h('th', { style: { minWidth: '280px' } }, 'Particulars'), h('th.num', 'Rate'), h('th.num', 'Install.'), h('th.num', 'Basic rate'),
+    const head = h('tr', h('th', '#'), h('th', { style: { minWidth: '280px' } }, 'Particulars'), h('th.num', 'Rate'), h('th.num', 'Install.'), h('th.num', 'Basic rate'), h('th.num', { title: 'Blank = the quotation GST %' }, 'GST %'),
       h('th', 'UOM'), h('th', 'Qty basis'), rooms.map(r => h('th.num', { style: { minWidth: '76px' } }, r.name || 'Room')), h('th.num', 'Total qty'), h('th.num', 'Amount'), editable ? h('th') : null);
 
     const body = lines.map((l, i) => {
@@ -290,7 +298,7 @@ export async function quotationView(root, id) {
       const toggle = h('a', { href: 'javascript:void 0', style: { fontSize: '12px' }, onclick: () => { spec.style.display = spec.style.display === 'none' ? '' : 'none'; } }, 'specification ▾');
       const partCell = h('td', name, toggle, spec);
       if (l.kind === 'heading') {
-        return h('tr.heading', h('td', nums[i]), h('td', { colspan: 6 + rooms.length + 2 }, name, toggle, spec), ctl);
+        return h('tr.heading', h('td', nums[i]), h('td', { colspan: 7 + rooms.length + 2 }, name, toggle, spec), ctl);
       }
       const num = (key, w = 90) => {
         const inp = h('input', { type: 'number', step: 'any', readOnly: !editable, style: { width: w + 'px' } });
@@ -319,11 +327,14 @@ export async function quotationView(root, id) {
       qtyCells[l.id] = h('td.num');
       amountCells[l.id] = h('td.num');
       amountCells[l.id].basic = basicCellLine;
-      return h('tr', h('td', nums[i]), partCell, num('rate'), num('install', 80), basicCellLine,
+      const gstIn = h('input', { type: 'number', step: 'any', readOnly: !editable, style: { width: '58px' }, placeholder: String(quoteGst()) });
+      gstIn.value = l.gst ?? '';
+      gstIn.oninput = () => { l.gst = gstIn.value === '' ? null : Number(gstIn.value); markDirty(); };
+      return h('tr', h('td', nums[i]), partCell, num('rate'), num('install', 80), basicCellLine, h('td', gstIn),
         h('td', h('input', { value: l.uom || '', readOnly: !editable, style: { width: '70px' }, oninput: e => { l.uom = e.target.value; markDirty(); } })),
         h('td', basisSel), roomCells, qtyCells[l.id], amountCells[l.id], ctl);
     });
-    const foot = h('tr', h('td', { colspan: 7 }, 'Basic total (room-wise)'), rooms.map(r => (roomTotalCells[r.id] = h('td.num'))), h('td'), (basicCell = h('td.num')), editable ? h('td') : null);
+    const foot = h('tr', h('td', { colspan: 8 }, 'Basic total (room-wise)'), rooms.map(r => (roomTotalCells[r.id] = h('td.num'))), h('td'), (basicCell = h('td.num')), editable ? h('td') : null);
 
     live.refresh = t => {
       for (const l of lines) {
@@ -378,7 +389,7 @@ export async function quotationView(root, id) {
         h('tfoot',
           h('tr', h('td'), h('td', 'TOTAL BASIC AMOUNT'), h('td.num', inr(t.basic))),
           t.discount ? h('tr', h('td'), h('td', `Discount ${head.discount_pct.get()}%`), h('td.num', '− ' + inr(t.discount))) : null,
-          h('tr', h('td'), h('td', `GST @${gst}%`), h('td.num', inr(t.gst))),
+          Object.entries(t.gstByRate || { [gst]: t.gst }).filter(([, v]) => v).map(([rate, v]) => h('tr', h('td'), h('td', `GST @${rate}%`), h('td.num', inr(v)))),
           h('tr', h('td'), h('td', 'ALL INCLUSIVE TOTAL AMOUNT'), h('td.num', inr(t.grand))))),
         h('p', h('b', amountInWords(t.grand)))));
     };

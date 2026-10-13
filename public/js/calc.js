@@ -74,8 +74,16 @@ export function quoteTotals(data = {}, gstRate = 18, discountPct = 0) {
   const basic = round2(Object.values(roomTotals).reduce((a, b) => a + b, 0));
   const discount = round2(basic * num(discountPct) / 100);
   const taxable = round2(basic - discount);
-  const gst = round2(taxable * num(gstRate) / 100);
-  return { roomTotals, lineTotals, basic, discount, taxable, gst, grand: round2(taxable + gst) };
+  // GST per rate: a line's own GST % if set, otherwise the quotation's; the discount reduces every line alike.
+  const keep = 1 - num(discountPct) / 100;
+  const gstByRate = {};
+  for (const l of lines) {
+    const rate = l.gst === undefined || l.gst === null || l.gst === '' ? num(gstRate) : num(l.gst);
+    gstByRate[rate] = (gstByRate[rate] || 0) + (lineTotals[l.id]?.amount || 0) * keep * rate / 100;
+  }
+  for (const k in gstByRate) gstByRate[k] = round2(gstByRate[k]);
+  const gst = round2(Object.values(gstByRate).reduce((a, b) => a + b, 0));
+  return { roomTotals, lineTotals, basic, discount, taxable, gst, gstByRate, grand: round2(taxable + gst) };
 }
 
 // Simple item lines for PO / invoice: qty x rate + line GST

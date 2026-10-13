@@ -192,6 +192,13 @@ api.post('/quotations/:id/submit', need('quotations'), wrap(req => wf.submitForA
 api.post('/quotations/:id/revise', need('quotations'), wrap(req => wf.reviseQuotation(req.params.id, req.user)));
 api.post('/quotations/:id/convert', need('sales_orders'), wrap(req => wf.convertToSalesOrder(req.params.id, req.body, req.user)));
 api.post('/purchase_orders/:id/submit', need('purchase_orders'), wrap(req => wf.submitForApproval('Purchase Order', req.params.id, req.user)));
+api.post('/purchase_orders/:id/commercial', wrap(req => wf.poCommercial(req.params.id, req.body, req.user)));
+// Accounts marks scheduled vendor payments as paid (also after the PO is approved and locked).
+api.post('/purchase_orders/:id/payments', wrap(req => {
+  if (!hasFunction(req.user.role, 'po_commercial')) throw new HttpError(403, 'Only commercial / accounts can update the payment schedule');
+  if (!Array.isArray(req.body?.payment_schedule)) throw new HttpError(400, 'Send the payment schedule');
+  return updateRow('purchase_orders', req.params.id, { payment_schedule: req.body.payment_schedule }, req.user, { system: true });
+}));
 api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submitForApproval('Requisition', req.params.id, req.user)));
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
@@ -245,6 +252,8 @@ api.post('/stock/entry', need('stock_moves'), wrap(req => {
 }));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
 api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
+api.get('/dashboard/accounts', wrap(req => { if (!canView('invoices', req.user.role) && !hasFunction(req.user.role, 'po_commercial')) throw new HttpError(403, 'No access to accounts'); return stock.accountsDashboard(); }));
+api.post('/products/import-boq', need('products'), express.raw({ type: () => true, limit: '30mb' }), wrap(req => importer.importProductBoq(req.body, req.query.set, req.user)));
 api.get('/dashboard/store', wrap(req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); return stock.storeDashboard(req.query); }));
 api.get('/items/next-code', wrap(req => ({ code: nextItemCode(req.query.category) })));
 api.post('/stock/opening', wrap(req => {

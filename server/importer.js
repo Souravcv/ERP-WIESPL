@@ -621,3 +621,71 @@ export function commit(token, mode, user) {
   audit(user.name, 'import', null, plan.detected, JSON.stringify(result));
   return { ...result, batch };
 }
+
+// ---------------------------------------------------------------- quotation estimate → product catalog ("standard BOQ")
+// Reads a WIESPL estimate sheet (ANNEXURE III: Sr. No. | Particulars | Rate | Installation Charges | Basic Rate | GST | Qty | UOM | Total)
+// and saves its lines as a named standard BOQ, so "Load standard BOQ" in a quotation brings them in with their prices.
+export async function importProductBoq(buffer, setName, user) {
+  if (!buffer?.length) throw new HttpError(400, 'Upload the quotation Excel (.xlsx)');
+  const wb = new ExcelJS.Workbook();
+  try { await wb.xlsx.load(buffer); } catch { throw new HttpError(400, 'This is not a readable .xlsx file'); }
+  const n = v => String(cell(v) ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  let ws = null, hdr = null;
+  for (const s of wb.worksheets) {
+    for (let r = 1; r <= Math.min(15, s.rowCount) && !hdr; r++) {
+      const vals = Array.from(s.getRow(r).values, n);
+      const part = vals.findIndex(v => v === 'particulars' || v === 'description');
+      const rate = vals.findIndex(v => v.startsWith('rate'));
+      if (part > 0 && rate > 0) hdr = { row: r, sr: vals.findIndex(v => v === 'srno' || v === 'sr'), part, rate,
+        inst: vals.findIndex(v => v.startsWith('installation')), basic: vals.findIndex(v => v === 'basicrate'), gst: vals.findIndex(v => v === 'gst' || v.startsWith('gst')),
+        qty: vals.findIndex(v => v === 'qty' || v === 'quantity'), uom: vals.findIndex(v => v === 'uom' || v === 'unit') };
+    }
+    if (hdr) { ws = s; break; }
+  }
+  if (!ws) throw new HttpError(400, 'No estimate found: the sheet needs a header row with "Particulars" and "Rate"');
+  const name = String(setName || '').trim() || ws.name.trim();
+  const numOf = v => { const c = cell(v); if (c === null || c === '' || c === undefined) return null; const x = Number(String(c).replace(/,/g, '')); return Number.isFinite(x) ? x : null; };
+  const basisOf = (text, uomText) => {
+    const t = text.toLowerCase();
+    if (/\bwall/.test(t)) return 'walls';
+    if (/ceiling/.test(t)) return 'ceiling';
+    if (/coving/.test(t)) return 'coving';
+    if (/floor|self level/.test(t)) return 'flooring';
+    return /sq\.?\s*ft|r\.?\s*ft/i.test(uomText) ? 'walls' : 'manual';
+  };
+  const UOMS_OK = ['Each', 'No', 'Set', 'Sq. Ft', 'R. Ft', 'Rmt', 'Kg', 'Lot', 'Job'];
+  const uomOf = u => { const k = String(u || '').toLowerCase().replace(/[^a-z]/g, ''); return { each: 'Each', no: 'No', nos: 'No', set: 'Set', sqft: 'Sq. Ft', rft: 'R. Ft', rmt: 'Rmt', kg: 'Kg', lot: 'Lot', job: 'Job' }[k] || (UOMS_OK.includes(u) ? u : 'Each'); };
+  const out = [];
+  let main = 0, sub = 0;
+  for (let r = hdr.row + 1; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    const own = c => { if (c < 1) return null; const x = row.getCell(c); return x.isMerged && x.master !== x ? null : x.value; };
+    const text = String(cell(own(hdr.part)) ?? '').replace(/\r/g, '').trim();
+    const srRaw = cell(own(hdr.sr > 0 ? hdr.sr : 1));
+    if (/basic total|grand|authori[sz]ed/i.test(`${srRaw ?? ''} ${text}`)) break;
+    if (!text) continue;
+    let sr = srRaw == null ? '' : String(typeof srRaw === 'number' ? Math.round(srRaw * 10) / 10 : srRaw).trim();
+    if (/^[A-Z]$/.test(sr)) continue; // section letter row ("A  Laminar Air Flow System …")
+    const rate = numOf(own(hdr.rate)), inst = numOf(own(hdr.inst)), basic = numOf(own(hdr.basic)), gstAmt = numOf(own(hdr.gst));
+    const qtyCell = cell(own(hdr.qty)), qty = numOf(qtyCell), uomText = String(cell(own(hdr.uom)) ?? '').trim();
+    const isSub = /^\d+\.\d+$/.test(sr);
+    if (isSub) sub = Math.min(sub + 1, 9); else { main++; sub = 0; }
+    const kind = rate == null && qty == null ? 'Heading' : 'Item';
+    const title = text.split(/\n|:|(?<=\.)\s/)[0].replace(/\s+/g, ' ').trim().slice(0, 90) || text.slice(0, 90);
+    out.push({
+      name: title, description: text, kind, boq_set: name, sort: main * 10 + (isSub ? sub : 0), category: 'Other',
+      uom: uomOf(uomText), rate: rate || 0, install_pct: rate ? round2(((inst || 0) / rate) * 100) : 0,
+      gst_rate: basic && gstAmt != null ? Math.round((gstAmt / basic) * 100) : 18,
+      qty_basis: kind === 'Item' && qty == null && /basis/i.test(String(qtyCell ?? '')) ? basisOf(text, uomText) : 'manual',
+      default_qty: qty ?? 1, active: 'Yes',
+    });
+  }
+  if (!out.some(p => p.kind === 'Item')) throw new HttpError(400, 'No priced lines found under the header');
+  return tx(() => {
+    const removed = db.prepare('DELETE FROM products WHERE boq_set = ?').run(name).changes;
+    for (const p of out) insertRow('products', p, user, { system: true });
+    audit(user.name, 'products', null, 'import standard BOQ', `${name}: ${out.length} lines (${removed} replaced)`);
+    return { set: name, lines: out.length, items: out.filter(p => p.kind === 'Item').length, replaced: removed,
+      gst_rates: [...new Set(out.filter(p => p.kind === 'Item').map(p => p.gst_rate))] };
+  });
+}

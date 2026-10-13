@@ -1,4 +1,4 @@
-import { h, api, state, display, fail, download, toast, confirmBox, clearRefCache, busy } from '../ui.js';
+import { h, api, state, display, fail, download, toast, confirmBox, clearRefCache, busy, modal } from '../ui.js';
 import { ENTITIES, fieldMap, canWrite, canDelete } from '../schema.js';
 import { inr } from '../calc.js';
 
@@ -67,6 +67,22 @@ export async function newRecord(entity, preset = {}) {
   location.hash = `#/edit/${entity}/new${qs ? '?' + qs : ''}`;
 }
 
+// A WIESPL estimate (ANNEXURE III, e.g. "SS 304_MOT.xlsx") becomes a standard BOQ with prices for quotations.
+async function importEstimate() {
+  const set = h('input', { value: 'SS 304 MOT' });
+  const file = h('input', { type: 'file', accept: '.xlsx' });
+  const ok = await modal('Import estimate Excel as a standard BOQ', h('div.grid',
+    h('p', 'Reads the estimate sheet (Sr. No. | Particulars | Rate | Installation | Basic Rate | GST | Qty | UOM). Rates, installation %, GST % (e.g. 28% for AC / AHU) and "As per basis of design" quantities are kept. In a quotation, choose this standard BOQ under “⚡ Load standard BOQ”.'),
+    h('label', 'Name of this standard BOQ', set), h('label', 'Estimate Excel', file),
+    h('p.muted', 'Importing again under the same name replaces that standard BOQ (quotations already made are not changed).')),
+  [{ label: 'Cancel', value: false }, { label: 'Import', cls: 'primary', value: true }]);
+  if (!ok) return;
+  if (!file.files[0]) throw new Error('Choose the Excel file');
+  const r = await api(`/products/import-boq?set=${encodeURIComponent(set.value)}`, { method: 'POST', raw: await file.files[0].arrayBuffer() });
+  toast(`Standard BOQ "${r.set}": ${r.items} priced items, ${r.lines - r.items} headings; GST ${r.gst_rates.join('% / ')}%`);
+  location.hash = `#/list/products?boq_set=${encodeURIComponent(r.set)}&t=${Date.now()}`;
+}
+
 export async function listView(root, entity) {
   const ent = ENTITIES[entity];
   if (!ent) throw new Error('Unknown module');
@@ -123,6 +139,7 @@ export async function listView(root, entity) {
     h('div.page-head', h('h1', `${ent.icon} ${ent.label}`), h('div.actions',
       h('button.btn', { onclick: () => download(`/api/export/${entity}?${query()}`) }, '⬇ Export Excel'),
       delBtn,
+      entity === 'products' && canWrite(entity, state.user.role) ? h('button.btn', { onclick: busy(importEstimate) }, '📥 Import estimate Excel') : null,
       IMPORTABLE[entity] && canWrite(entity, state.user.role) ? h('a.btn', { href: `#/import?kind=${IMPORTABLE[entity]}` }, '📥 Import Excel') : null,
       canWrite(entity, state.user.role) && !ent.noCreate ? h('button.btn.primary', { onclick: () => newRecord(entity).catch(fail) }, `+ New ${ent.singular}`) : null)),
     h('div.toolbar', q, statusSel, from ? h('span.muted', 'From') : null, from, to ? h('span.muted', 'to') : null, to),

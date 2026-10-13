@@ -94,7 +94,7 @@ function quotationDoc(q, s) {
     h('tfoot',
       h('tr', h('td', { colspan: 6 }, h('b', 'BASIC TOTAL')), rooms.map(r => h('td.num', h('b', inr(t.roomTotals[r.id])))), h('td'), h('td.num', h('b', inr(t.basic)))),
       t.discount ? h('tr', h('td', { colspan: cols - 1 }, `Discount @${q.discount_pct}%`), h('td.num', '− ' + inr(t.discount))) : null,
-      h('tr', h('td', { colspan: cols - 1 }, `GST @${q.gst_rate}%`), h('td.num', inr(t.gst))),
+      Object.entries(t.gstByRate || { [q.gst_rate]: t.gst }).filter(([, v]) => v).map(([rate, v]) => h('tr', h('td', { colspan: cols - 1 }, `GST @${rate}%`), h('td.num', inr(v)))),
       h('tr', h('td', { colspan: cols - 1 }, h('b', 'GRAND ALL INCLUSIVE TOTAL')), h('td.num', h('b', inr(t.grand)))))),
     h('p', h('b', amountInWords(t.grand))),
     s.boq_note ? h('p', s.boq_note) : null,
@@ -110,7 +110,7 @@ function quotationDoc(q, s) {
         h('tbody', rooms.map((r, i) => h('tr', h('td', i + 1), h('td', r.name), h('td.num', inr(t.roomTotals[r.id]))))),
         h('tfoot', h('tr', h('td', { colspan: 2 }, h('b', 'TOTAL BASIC AMOUNT')), h('td.num', h('b', inr(t.basic)))),
           t.discount ? h('tr', h('td', { colspan: 2 }, `Discount @${q.discount_pct}%`), h('td.num', '− ' + inr(t.discount))) : null,
-          h('tr', h('td', { colspan: 2 }, `GST @${q.gst_rate}%`), h('td.num', inr(t.gst))),
+          Object.entries(t.gstByRate || { [q.gst_rate]: t.gst }).filter(([, v]) => v).map(([rate, v]) => h('tr', h('td', { colspan: 2 }, `GST @${rate}%`), h('td.num', inr(v)))),
           h('tr', h('td', { colspan: 2 }, h('b', 'ALL INCLUSIVE TOTAL AMOUNT')), h('td.num', h('b', inr(t.grand)))))),
       h('p', h('b', amountInWords(t.grand)))));
   }
@@ -212,9 +212,9 @@ function poDoc(po, v, s) {
       td([h('b', 'Note: '), po.project_note || ''], { style: { width: '50%' } }),
       td([h('b', 'Rupees in words: '), amountInWords(t.total).replace(/^Rupees /, '')])))),
     h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
-      h('tr', ['Prepared By', 'Technical Approval', 'Approved By'].map(x => h('th', { style: { width: '33%' } }, x))),
-      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
-      h('tr', ['Purchase Executive', 'Technical Manager', 'General Manager'].map(x => h('td', x))))),
+      h('tr', ['Prepared By', 'Checked By', 'Approved By', 'Commercial'].map(x => h('th', { style: { width: '25%' } }, x))),
+      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.approved_by), plainName(po.comm_approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
+      h('tr', ['Purchase Executive', 'Purchase Head', 'General Manager', 'Accounts'].map(x => h('td', x))))),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
 }

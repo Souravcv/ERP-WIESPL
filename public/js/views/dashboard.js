@@ -1,7 +1,8 @@
 import { h, api, money, fmtDate, badge, tip, state, fail } from '../ui.js';
 import { fyOf } from '../calc.js';
-import { canView } from '../schema.js';
+import { canView, hasFunction } from '../schema.js';
 import { storeDashboard } from './storedash.js';
+import { accountsDashboard } from './accountsdash.js';
 
 const MONTHS = ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec', 'Jan', 'Feb', 'Mar'];
 
@@ -33,11 +34,22 @@ function monthly(rows, fy) {
 // Each person sees the dashboard of their work: sales / CRM, store, or both (as tabs).
 export async function dashboardView(root) {
   const role = state.user.role;
-  const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store']].filter(Boolean);
+  const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store'],
+    (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts']].filter(Boolean);
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
   let tab = sessionStorage.getItem('dash-tab');
-  if (!views.some(v => v[0] === tab)) tab = role === 'store' || !views.some(v => v[0] === 'crm') ? 'store' : views[0][0];
+  if (!views.some(v => v[0] === tab)) {
+    const pref = { accounts: 'accounts', store: 'store' }[role];
+    tab = views.some(v => v[0] === pref) ? pref : views[0][0];
+  }
   if (tab === 'crm') return crmDashboard(root, views);
+  if (tab === 'accounts') {
+    const abox = h('div', h('div.muted', 'Loading…'));
+    root.replaceChildren(h('div.page-head', h('h1', '💼 Accounts Dashboard'), h('div.actions', h('a.btn', { href: '#/list/purchase_orders' }, '🛒 Purchase Orders'), h('a.btn', { href: '#/list/invoices' }, '💳 Invoices'))),
+      tabsOf(views, 'accounts', root), abox);
+    await accountsDashboard(abox).catch(e => { abox.replaceChildren(h('div.card', e.message)); fail(e); });
+    return;
+  }
   const box = h('div', h('div.muted', 'Loading…'));
   root.replaceChildren(h('div.page-head', h('h1', '📊 Store Dashboard'), h('div.actions', h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn.primary', { href: '#/stock-entry' }, '🔁 Stock Entry'))),
     tabsOf(views, 'store', root), box);

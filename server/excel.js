@@ -113,7 +113,15 @@ const STATUS_OPTS = ENTITIES.enquiries.fields.find(f => f.key === 'status').opti
 export async function importEnquiries(buffer, user) {
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
-  const ws = wb.worksheets[0];
+  // Every sheet of the register (e.g. 25-26 and 26-27) that has the header row.
+  const result = { imported: 0, skipped: 0, duplicates: 0, errors: [], sheets: [] };
+  const counter = { carry: 0 };
+  for (const ws of wb.worksheets) importEnquirySheet(ws, user, result, counter);
+  if (!result.sheets.length) throw Object.assign(new Error('Could not find the header row (expected "Enquiry No." and "Date" columns)'), { status: 400 });
+  return result;
+}
+
+function importEnquirySheet(ws, user, result, counter) {
   let headerRow = 0;
   const colMap = {};
   ws.eachRow((row, n) => {
@@ -128,11 +136,9 @@ export async function importEnquiries(buffer, user) {
       });
     }
   });
-  if (!headerRow) throw Object.assign(new Error('Could not find the header row (expected "Enquiry No." and "Date" columns)'), { status: 400 });
-
-  const result = { imported: 0, skipped: 0, duplicates: 0, errors: [] };
+  if (!headerRow) return;
+  result.sheets.push(ws.name);
   const exists = db.prepare('SELECT 1 FROM enquiries WHERE enquiry_no = ?');
-  let carry = 0;
   tx(() => {
     for (let n = headerRow + 1; n <= ws.rowCount; n++) {
       const row = ws.getRow(n);
@@ -151,7 +157,7 @@ export async function importEnquiries(buffer, user) {
         }
         if (rec.status) {
           const s = norm(rec.status);
-          rec.status = STATUS_OPTS.find(o => norm(o) === s) || (s.startsWith('inprocess') ? 'In Process' : String(rec.status).trim());
+          rec.status = STATUS_OPTS.find(o => norm(o) === s) || (s.startsWith('inprocess') ? 'In Process' : s.startsWith('order') ? 'Won' : String(rec.status).trim());
         } else rec.status = 'New';
         for (const k of Object.keys(rec)) {
           if (typeof rec[k] !== 'string') continue;
@@ -173,16 +179,15 @@ export async function importEnquiries(buffer, user) {
           bumpSeq('enquiry', rec.fy, rec.seq);
         } else if (!rec.enquiry_no) {
           // Carried-forward active enquiries from an earlier year have no number in the register.
-          rec.enquiry_no = `CF/${++carry}/${fyOf(rec.date)}`;
+          rec.enquiry_no = `CF/${++counter.carry}/${fyOf(rec.date)}`;
           rec.fy = fyOf(rec.date);
         }
         if (exists.get(String(rec.enquiry_no))) { result.duplicates++; continue; }
         insertRow('enquiries', rec, user, { system: true });
         result.imported++;
       } catch (e) {
-        result.errors.push(`Row ${n}: ${e.message}`);
+        result.errors.push(`${ws.name} row ${n}: ${e.message}`);
       }
     }
   });
-  return result;
 }
