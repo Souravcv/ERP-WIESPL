@@ -127,8 +127,12 @@ button { font: inherit; color: inherit; }
 @media (max-width: 959px) { body.has-pill .eq-wrap { padding-bottom: 80px; } }
 
 /* 3D */
-.eq-3d { position: relative; height: min(64vh, 560px); min-height: 360px; border-radius: 12px; overflow: hidden; background: radial-gradient(ellipse at top, #e9f0fb, #cbd7ea); touch-action: none; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .eq-3d { background: radial-gradient(ellipse at top, #22324a, #111a27); } }
+.eq-3d { position: relative; height: min(64vh, 560px); min-height: 360px; border-radius: 12px; overflow: hidden; background: radial-gradient(ellipse at 50% 30%, #ffffff 0%, #f1f4f8 45%, #d9e0e8 100%); touch-action: none; }
+.eq-3d .build-bar { position: absolute; top: 10px; right: 10px; display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,.92); color: #15202f; border: 1px solid #c9d4e6; border-radius: 999px; padding: 4px 12px; font-size: 12px; font-weight: 600; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
+.eq-3d .build-range { width: 110px; accent-color: #1f4e9a; }
+.eq-swatches { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; font-size: 14px; color: var(--text-2); }
+.eq-swatch { width: 30px; height: 30px; border-radius: 50%; border: 3px solid var(--surface); box-shadow: 0 0 0 1.5px var(--border); cursor: pointer; padding: 0; }
+.eq-swatch[aria-pressed="true"] { box-shadow: 0 0 0 2.5px var(--brand); }
 .eq-3d canvas { display: block; width: 100%; height: 100%; }
 .eq-3d .tag { position: absolute; transform: translate(-50%, -100%); background: rgba(255, 255, 255, .94); color: #15202f; border: 1px solid #c9d4e6; border-radius: 999px; padding: 3px 9px 3px 6px; font-size: 12px; font-weight: 600; white-space: nowrap; cursor: pointer; box-shadow: 0 2px 8px rgba(0, 0, 0, .15); display: flex; align-items: center; gap: 5px; }
 .eq-3d .tag i { width: 9px; height: 9px; border-radius: 50%; background: #9aa7ba; display: inline-block; }
@@ -140,7 +144,7 @@ button { font: inherit; color: inherit; }
 .eq-3d .info b { display: block; font-size: 15px; margin-bottom: 2px; }
 .eq-3d .info .x { position: absolute; top: 6px; right: 8px; border: none; background: none; font-size: 18px; cursor: pointer; color: #4b5a70; }
 .eq-3d .info .yes { color: #1e7d3a; font-weight: 700; font-size: 12px; }
-.eq-3d .hint3d { position: absolute; top: 10px; left: 10px; background: rgba(15, 25, 40, .7); color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 999px; pointer-events: none; }
+.eq-3d .hint3d { position: absolute; top: 52px; left: 10px; background: rgba(15, 25, 40, .7); color: #fff; font-size: 12px; padding: 5px 10px; border-radius: 999px; pointer-events: none; }
 .eq-3d .loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-2); }
 .eq-3dbar { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 0; }
 .eq-3dbar .eq-chip { font-size: 13px; padding: 7px 12px; }

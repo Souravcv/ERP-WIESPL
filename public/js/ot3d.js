@@ -38,6 +38,9 @@ function fallback(box, opts, keys) {
   return { dispose() {} };
 }
 
+// Wall panel colours the visitor can try (PPGL / SS finishes).
+export const PANEL_COLOURS = [['Sky blue', 0x5d8fc6], ['Ivory white', 0xe4eaf1], ['Mint green', 0x86c2a8], ['Steel grey', 0xb3bdc8]];
+
 export async function mount3D(box, opts) {
   const isWard = !opts.types.some(t => ['ot', 'cathlab'].includes(t));
   const nicu = opts.types.includes('nicu') && !opts.types.some(t => ['icu', 'picu'].includes(t));
@@ -90,8 +93,9 @@ export async function mount3D(box, opts) {
     ss: new T.MeshStandardMaterial({ color: 0xdfe4ea, map: brushed, metalness: 0.9, roughness: 0.28, envMapIntensity: 1.1 }),
     ssDark: new T.MeshStandardMaterial({ color: 0x9aa4b0, metalness: 0.85, roughness: 0.35 }),
     chrome: new T.MeshStandardMaterial({ color: 0xffffff, metalness: 1, roughness: 0.12 }),
-    panel: new T.MeshStandardMaterial({ color: 0xe4eaf1, metalness: 0.12, roughness: 0.42, envMapIntensity: 0.35 }),
-    cut: new T.MeshStandardMaterial({ color: 0xcfd8e2, metalness: 0.2, roughness: 0.5, envMapIntensity: 0.4 }),
+    panel: new T.MeshStandardMaterial({ color: (PANEL_COLOURS.find(c => c[0] === opts.panelColour) || PANEL_COLOURS[0])[1], metalness: 0.12, roughness: 0.42, envMapIntensity: 0.35 }),
+    cut: new T.MeshStandardMaterial({ color: (PANEL_COLOURS.find(c => c[0] === opts.panelColour) || PANEL_COLOURS[0])[1], metalness: 0.2, roughness: 0.5, envMapIntensity: 0.4 }),
+    trim: new T.MeshStandardMaterial({ color: 0xe9edf2, metalness: 0.2, roughness: 0.4 }),
     seam: new T.MeshStandardMaterial({ color: 0x9aa6b4, metalness: 0.4, roughness: 0.5 }),
     white: new T.MeshStandardMaterial({ color: 0xf2f4f7, metalness: 0.05, roughness: 0.45, envMapIntensity: 0.45 }),
     grey: new T.MeshStandardMaterial({ color: 0x5d6876, metalness: 0.3, roughness: 0.55 }),
@@ -158,6 +162,8 @@ export async function mount3D(box, opts) {
   const flooring = comp('flooring');
   put(flooring.group, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ map: floorTex, roughness: 0.55, metalness: 0.0, envMapIntensity: 0.25 }), 0, 0, 0, -Math.PI / 2);
   flooring.anchor.set(W / 2 - 1.2, 0.05, D / 2 - 1.2);
+  const slabTex = tex(512, 512, (g, w, h) => { g.fillStyle = '#6f7884'; g.fillRect(0, 0, w, h); g.fillStyle = '#58606b'; for (let x = 40; x < w; x += 92) for (let y = 40; y < h; y += 92) { g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); } });
+  put(flooring.group, B(W + 0.14, 0.18, D + 0.14), new T.MeshStandardMaterial({ map: slabTex, metalness: 0.35, roughness: 0.55 }), 0, -0.095, 0);
   // panel walls: 1.2 m wide panels with slim seams
   const panelWall = (len, axis, fixed, h, thick = 0.06) => {
     const n = Math.round(len / 1.2), pw = len / n;
@@ -194,8 +200,12 @@ export async function mount3D(box, opts) {
   const cm = put(ceiling, new T.PlaneGeometry(W, D), new T.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.5, metalness: 0.1, side: T.BackSide }), 0, H, 0, -Math.PI / 2);
   cm.castShadow = false;
   // ground outside the room catches soft shadows
-  const ground = new T.Mesh(new T.PlaneGeometry(40, 40), new T.ShadowMaterial({ opacity: 0.18 }));
-  ground.rotation.x = -Math.PI / 2; ground.position.y = -0.002; ground.receiveShadow = true; scene.add(ground);
+  const FLOAT = 0.85; // the room floats above the studio floor, like a product shot
+  const ground = new T.Mesh(new T.PlaneGeometry(40, 40), new T.ShadowMaterial({ opacity: 0.16 }));
+  ground.rotation.x = -Math.PI / 2; ground.position.y = -FLOAT; ground.receiveShadow = true; scene.add(ground);
+  const blob = tex(256, 256, g => { const gr = g.createRadialGradient(128, 128, 10, 128, 128, 128); gr.addColorStop(0, 'rgba(20,30,45,0.45)'); gr.addColorStop(0.55, 'rgba(20,30,45,0.18)'); gr.addColorStop(1, 'rgba(20,30,45,0)'); g.fillStyle = gr; g.fillRect(0, 0, 256, 256); });
+  const shadowBlob = new T.Mesh(new T.PlaneGeometry(W * 1.7, D * 1.7), new T.MeshBasicMaterial({ map: blob, transparent: true, depthWrite: false }));
+  shadowBlob.rotation.x = -Math.PI / 2; shadowBlob.position.y = -FLOAT + 0.003; scene.add(shadowBlob);
 
   // ------------------------------------------------------------ terrace: AHU with its stages, outdoor unit, ducts
   const ahu = comp('ahu');
@@ -276,6 +286,48 @@ export async function mount3D(box, opts) {
       put(sg, B(len, 0.025, 0.02), M.chrome, 0, -0.01, 0.29); put(sg, B(len, 0.025, 0.02), M.chrome, 0, -0.01, -0.29);
     }
     table.anchor.set(0.7, 1.05, 0.3);
+    // equipment around the table for scale: anaesthesia workstation, IV stands, monitor & instrument trolleys
+    const props = comp('props');
+    const wheels = (g, w, d) => { for (const [ex, ez] of [[-w / 2, -d / 2], [w / 2, -d / 2], [-w / 2, d / 2], [w / 2, d / 2]]) put(g, Cy(0.045, 0.045, 0.035, 14), M.rubber, ex, 0.045, ez, Math.PI / 2); };
+    const screen = (fn) => tex(256, 170, fn);
+    const vitals = screen((g, w, h) => { g.fillStyle = '#071220'; g.fillRect(0, 0, w, h); ['#3ce07a', '#ffd166', '#5ab0ff'].forEach((c, r) => { g.strokeStyle = c; g.lineWidth = 2.5; g.beginPath(); for (let k = 0; k < 180; k++) { const t = (k + r * 13) % 45; g.lineTo(k, 30 + r * 45 + (t === 10 ? -18 : t === 12 ? 16 : Math.sin(k / 6) * 3)); } g.stroke(); g.fillStyle = c; g.font = 'bold 24px sans-serif'; g.fillText(['72', '120/80', '98%'][r], 186, 40 + r * 45); }); });
+    { // anaesthesia workstation
+      const a = new T.Group(); a.position.set(1.3, 0, -1.15); a.rotation.y = -0.6; props.group.add(a);
+      put(a, RB(0.62, 0.82, 0.55, 0.04), M.white, 0, 0.55, 0);
+      put(a, B(0.64, 0.05, 0.57), M.blue, 0, 0.2, 0); put(a, B(0.64, 0.05, 0.57), M.blue, 0, 0.98, 0);
+      for (const y of [0.42, 0.62, 0.82]) put(a, B(0.5, 0.012, 0.02), M.grey, 0, y, 0.285);
+      put(a, RB(0.66, 0.05, 0.58, 0.02), M.ssDark, 0, 1.0, 0);
+      for (const dx of [-0.18, 0.0]) put(a, RB(0.12, 0.24, 0.12, 0.03), C(dx ? 0x3a7bd5 : 0xf2c200, { rough: 0.4 }), dx, 1.15, 0.12);
+      put(a, Cy(0.02, 0.02, 0.5, 10), M.chrome, 0.2, 1.25, -0.18);
+      put(a, RB(0.46, 0.32, 0.04, 0.02), M.dark, 0.2, 1.55, -0.12);
+      put(a, new T.PlaneGeometry(0.42, 0.28), new T.MeshBasicMaterial({ map: vitals, toneMapped: false }), 0.2, 1.55, -0.098);
+      put(a, Cy(0.012, 0.012, 0.5, 8), M.chrome, -0.33, 0.95, 0, 0, 0, Math.PI / 2);
+      wheels(a, 0.5, 0.42);
+    }
+    const ivStand = (x, z) => {
+      const s = new T.Group(); s.position.set(x, 0, z); props.group.add(s);
+      for (let i = 0; i < 5; i++) put(s, B(0.3, 0.02, 0.025), M.chrome, Math.cos(i * 1.2566) * 0.15, 0.06, Math.sin(i * 1.2566) * 0.15, 0, -i * 1.2566, 0);
+      for (let i = 0; i < 5; i++) put(s, Cy(0.025, 0.025, 0.03, 10), M.rubber, Math.cos(i * 1.2566) * 0.3, 0.03, Math.sin(i * 1.2566) * 0.3, Math.PI / 2);
+      put(s, Cy(0.012, 0.012, 1.9, 10), M.chrome, 0, 1.0, 0);
+      put(s, B(0.36, 0.012, 0.012), M.chrome, 0, 1.92, 0);
+      put(s, RB(0.12, 0.2, 0.04, 0.02), C(0xdcefff, { opacity: 0.75 }), 0.12, 1.72, 0);
+    };
+    ivStand(-0.95, -0.95); ivStand(1.05, 1.15);
+    { // monitor trolley
+      const m = new T.Group(); m.position.set(-1.55, 0, -0.35); m.rotation.y = 0.5; props.group.add(m);
+      put(m, RB(0.5, 0.06, 0.42, 0.02), M.white, 0, 0.12, 0); put(m, Cy(0.03, 0.03, 0.85, 10), M.ssDark, 0, 0.55, 0);
+      put(m, RB(0.48, 0.2, 0.38, 0.03), M.white, 0, 0.98, 0); put(m, B(0.5, 0.03, 0.4), M.blue, 0, 0.89, 0);
+      put(m, RB(0.42, 0.3, 0.05, 0.02), M.dark, 0, 1.28, 0.02);
+      put(m, new T.PlaneGeometry(0.38, 0.26), new T.MeshBasicMaterial({ map: vitals, toneMapped: false }), 0, 1.28, 0.047);
+      wheels(m, 0.4, 0.34);
+    }
+    { // instrument (Mayo) trolley
+      const t = new T.Group(); t.position.set(0.95, 0, 0.85); props.group.add(t);
+      put(t, B(0.7, 0.02, 0.45), M.ss, 0, 0.9, 0); put(t, B(0.7, 0.02, 0.45), M.ss, 0, 0.35, 0);
+      for (const [ex, ez] of [[-0.33, -0.2], [0.33, -0.2], [-0.33, 0.2], [0.33, 0.2]]) put(t, Cy(0.012, 0.012, 0.85, 8), M.chrome, ex, 0.47, ez);
+      put(t, B(0.5, 0.03, 0.3), C(0x2f6f8f, { rough: 0.8 }), 0, 0.925, 0);
+      wheels(t, 0.6, 0.38);
+    }
     // LAF plenum: steel box, perforated diffuser over the HEPA filters, LED edge, glass air-curtain skirt
     const laf = comp('laf'), hepa = comp('hepa');
     put(laf.group, RB(2.5, 1.9, 0.26, 0.03), M.ss, 0, H - 0.13, 0, -Math.PI / 2);
@@ -460,7 +512,7 @@ export async function mount3D(box, opts) {
         for (const ddx of [-0.2, 0.2]) put(inc, new T.TorusGeometry(0.06, 0.012, 8, 20), M.white, ddx, 0.86, 0.27);
         put(inc, RB(0.3, 0.2, 0.05, 0.02), M.dark, 0.32, 1.2, -0.05);
       } else {
-        const bed = new T.Group(); bed.position.set(x, 0, -1.85); room.add(bed);
+        const bed = new T.Group(); bed.position.set(x, 0, -1.85); comp('props').group.add(bed);
         put(bed, RB(0.95, 2.0, 0.12, 0.04), M.ssDark, 0, 0.5, 0, -Math.PI / 2);
         put(bed, RB(0.88, 1.9, 0.14, 0.06), M.mattress, 0, 0.62, 0.0, -Math.PI / 2);
         const back = put(bed, RB(0.88, 0.7, 0.12, 0.05), M.mattress, 0, 0.8, -0.62, -Math.PI / 2 + 0.45);
@@ -479,7 +531,7 @@ export async function mount3D(box, opts) {
       const mon = tex(200, 130, g => { g.fillStyle = '#071220'; g.fillRect(0, 0, 200, 130); g.strokeStyle = '#3ce07a'; g.lineWidth = 2.5; g.beginPath(); for (let k = 0; k < 200; k++) { const t = k % 50; g.lineTo(k, t === 15 ? 20 : t === 17 ? 80 : 50); } g.stroke(); g.fillStyle = '#3ce07a'; g.font = 'bold 22px sans-serif'; g.fillText('72', 10, 120); g.fillStyle = '#5ab0ff'; g.fillText('98%', 120, 120); });
       put(head.group, RB(0.44, 0.3, 0.05, 0.02), M.dark, x, 1.98, -D / 2 + 0.12);
       put(head.group, new T.PlaneGeometry(0.4, 0.26), new T.MeshBasicMaterial({ map: mon, toneMapped: false }), x, 1.98, -D / 2 + 0.147);
-      if (i < shown - 1) put(room, B(0.01, 2.0, 2.0), curtain, x + span / 2, 1.25, -1.9);
+      if (i < shown - 1) put(comp('props').group, B(0.01, 2.0, 2.0), curtain, x + span / 2, 1.25, -1.9);
       put(hp.group, RB(0.6, 0.6, 0.04, 0.02), M.white, x, H - 0.02, -1.5, Math.PI / 2);
       put(hp.group, new T.PlaneGeometry(0.5, 0.5), M.ledCool, x, H - 0.045, -1.5, Math.PI / 2);
     }
@@ -551,22 +603,47 @@ export async function mount3D(box, opts) {
     t.onclick = e => { e.stopPropagation(); stopTour(); showKey(key); };
     tags[key] = t; box.append(t);
   }
-  box.append(el('div', 'hint3d', opts.moreBeds ? `Showing 6 of ${opts.moreBeds + 6} beds · drag to turn` : 'Drag to turn · tap a part'), card);
+  const hintEl = el('div', 'hint3d', opts.moreBeds ? `Showing 6 of ${opts.moreBeds + 6} beds · drag to turn` : 'Drag to turn · tap a part');
+  box.append(hintEl, card);
   const narrow = box.clientWidth < 600;
-  let onlyMine = false, anatomy = false, allLabels = !narrow;
+  let onlyMine = false, anatomy = false, allLabels = !narrow, build = 1, buildPlay = null;
   const ANATOMY_LABELS = new Set([...anatomyTags, 'ahu', 'laf', 'hepa', 'risers']);
   const applyVisibility = () => {
     for (const [key, c] of Object.entries(comps)) {
       const always = ['panels', 'flooring', 'table', 'risers', 'ahu'].includes(key) || anatomyTags.has(key);
-      if (!anatomyTags.has(key)) c.group.visible = always || !onlyMine || picked.has(key);
+      if (!anatomyTags.has(key)) c.group.visible = (always || key === 'props' || !onlyMine || picked.has(key)) && !c.buildHidden;
       const shown = anatomyTags.has(key) ? anatomy : c.group.visible;
       const hide = !shown || (key === 'ahu' && !anatomy) || (anatomy ? !ANATOMY_LABELS.has(key) : (!allLabels && !picked.has(key)));
       tags[key]?.classList.toggle('hidden', hide);
     }
     for (const g of extras) g.visible = anatomy;
-    ceiling.visible = !anatomy;
-    if (air) air.points.visible = (air.on || anatomy) && comps.laf.group.visible;
+    ceiling.visible = !anatomy && build > 0.9;
+    if (air) air.points.visible = (air.on || anatomy) && comps.laf.group.visible && build > 0.985;
   };
+  const PHASE = { flooring: 0, table: 1, props: 1, warmers: 1, nurse: 1, fumigation: 1, laf: 2, hepa: 2, otlight: 2, pendants: 2 };
+  const built = Object.entries(comps).filter(([k]) => !anatomyTags.has(k) && k !== 'ahu')
+    .map(([k, c]) => ({ c, phase: PHASE[k] ?? 3, base: c.group.position.clone() }));
+  const easeOut = p => 1 - Math.pow(1 - p, 3);
+  const applyBuild = t => {
+    build = Math.max(0, Math.min(1, t));
+    for (const a of built) {
+      const p = Math.max(0, Math.min(1, (build * 4.6 - a.phase) / 1.25)), e = easeOut(p), g = a.c.group;
+      g.position.copy(a.base); g.scale.set(1, 1, 1);
+      if (a.phase === 0) g.position.y -= (1 - e) * 1.4;
+      else if (a.phase === 1) g.position.y += (1 - e) * 1.6;
+      else if (a.phase === 2) g.position.y += (1 - e) * 3.2;
+      else g.scale.y = Math.max(0.001, e); // walls and everything on them rise from the floor
+      a.c.buildHidden = p <= 0;
+    }
+    applyVisibility();
+    if (slider && document.activeElement !== slider) slider.value = String(Math.round(build * 100));
+  };
+  const slider = el('input', 'build-range'); slider.type = 'range'; slider.min = '0'; slider.max = '100'; slider.value = '100';
+  slider.setAttribute('aria-label', 'Build the room');
+  slider.oninput = () => { buildPlay = null; controls.autoRotate = false; applyBuild(Number(slider.value) / 100); };
+  const buildBox = el('label', 'build-bar'); buildBox.append(el('span', null, '🧱 Build'), slider);
+  box.append(buildBox);
+  const playBuild = (ms = 3600) => { stopTour(); applyBuild(0); buildPlay = { start: performance.now(), ms }; controls.autoRotate = true; controls.autoRotateSpeed = 1.6; };
   applyVisibility();
 
   const views = {
@@ -639,6 +716,7 @@ export async function mount3D(box, opts) {
       camera.position.lerpVectors(anim.p0, anim.p, e); controls.target.lerpVectors(anim.t0, anim.t, e);
       if (k >= 1) anim = null;
     }
+    if (buildPlay) { const k = Math.min(1, (now - buildPlay.start) / buildPlay.ms); applyBuild(k); if (k >= 1) { buildPlay = null; controls.autoRotate = false; } }
     if (air?.points.visible) {
       const p = air.points.geometry.attributes.position.array;
       for (let i = 0; i < air.n; i++) {
@@ -665,10 +743,12 @@ export async function mount3D(box, opts) {
     controls.update();
     renderer.render(scene, camera);
     const w = box.clientWidth, h = box.clientHeight;
-    const placed = [];
+    // keep labels clear of the build slider and the hint
+    const br = box.getBoundingClientRect(), keepOut = el => { const r = el.getBoundingClientRect(); return [r.left - br.left, r.top - br.top, r.right - br.left, r.bottom - br.top]; };
+    const placed = [keepOut(buildBox), keepOut(hintEl)];
     for (const key of order) {
       const t = tags[key];
-      if (t.classList.contains('hidden') || (tour && tour.stops[tour.i]?.key !== key && !tour.stops[tour.i]?.anatomy)) { t.style.display = 'none'; continue; }
+      if (t.classList.contains('hidden') || build < 0.999 || (tour && tour.stops[tour.i]?.key !== key && !tour.stops[tour.i]?.anatomy)) { t.style.display = 'none'; continue; }
       v.copy(comps[key].anchor).project(camera);
       const tw = (t._w ||= t.offsetWidth || 120), th = 24;
       const x0 = ((v.x + 1) / 2) * w, y = ((1 - v.y) / 2) * h;
@@ -681,14 +761,17 @@ export async function mount3D(box, opts) {
       t.classList.toggle('dim', !picked.has(key) && !anatomyTags.has(key));
     }
   };
+  if (!opts.noIntro) playBuild();
   raf = requestAnimationFrame(loop);
   const vis = () => { if (document.hidden) cancelAnimationFrame(raf); else { last = performance.now(); raf = requestAnimationFrame(loop); } };
   document.addEventListener('visibilitychange', vis);
 
   return {
+    setPanelColour(name) { const c = PANEL_COLOURS.find(x => x[0] === name); if (c) { M.panel.color.setHex(c[1]); M.cut.color.setHex(c[1]); } },
     controls: [
-      { label: '▶ Take the tour', pressed: false, ref: b => { tourBtn = b; }, run: () => { if (tour) { stopTour(); card.hidden = true; return false; } tour = { stops: tourStops(), i: 0 }; goStop(0); return true; } },
-      { label: '🔬 Anatomy: how air flows', pressed: false, run: () => { stopTour(); anatomy = !anatomy; applyVisibility(); fly(anatomy ? 'anatomy' : 'overview'); if (anatomy) showInfo({ icon: '🔬', label: 'How the clean air flows', hint: 'Blue arrows: filtered, cooled air from the AHU to the HEPA filters. Orange arrows: used air going back from the room. Tap the numbered AHU stages to see what each one does.' }); else card.hidden = true; return anatomy; } },
+      { label: '🧱 Build it again', run: () => { playBuild(); } },
+      { label: '▶ Take the tour', pressed: false, ref: b => { tourBtn = b; }, run: () => { if (tour) { stopTour(); card.hidden = true; return false; } buildPlay = null; controls.autoRotate = false; applyBuild(1); tour = { stops: tourStops(), i: 0 }; goStop(0); return true; } },
+      { label: '🔬 Anatomy: how air flows', pressed: false, run: () => { stopTour(); if (build < 1) { buildPlay = null; applyBuild(1); } anatomy = !anatomy; applyVisibility(); fly(anatomy ? 'anatomy' : 'overview'); if (anatomy) showInfo({ icon: '🔬', label: 'How the clean air flows', hint: 'Blue arrows: filtered, cooled air from the AHU to the HEPA filters. Orange arrows: used air going back from the room. Tap the numbered AHU stages to see what each one does.' }); else card.hidden = true; return anatomy; } },
       { label: 'Show only my choices', pressed: false, run: () => { onlyMine = !onlyMine; applyVisibility(); return onlyMine; } },
       { label: 'All labels', pressed: allLabels, run: () => { allLabels = !allLabels; applyVisibility(); return allLabels; } },
       ...(isWard ? [] : [{ label: 'Clean air flow', pressed: !!air?.on, run: () => { air.on = !air.on; applyVisibility(); return air.on; } }]),

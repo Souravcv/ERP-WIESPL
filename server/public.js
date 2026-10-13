@@ -44,7 +44,7 @@ function cleanData(d = {}) {
     timeline: TIMELINES[d.timeline] ? d.timeline : null, budget: BUDGETS[d.budget] ? d.budget : null,
     name: clip(d.name, 80), hospital: clip(d.hospital, 120), city: clip(d.city, 60), phone: clip(digits(d.phone), 16),
     whatsapp: !!d.whatsapp, email: clip(d.email, 120), best_time: clip(d.best_time, 40), contact_by: clip(d.contact_by, 20), notes: clip(d.notes, 1000),
-    viewed_3d: !!d.viewed_3d,
+    viewed_3d: !!d.viewed_3d, panel_colour: clip(d.panel_colour, 30),
   };
 }
 
@@ -77,7 +77,7 @@ export function summaryText(d) {
     d.timeline && `Timeline: ${TIMELINES[d.timeline]}`,
     d.budget && `Budget: ${BUDGETS[d.budget]}`,
     `Contact: ${[d.phone, d.whatsapp && '(WhatsApp)', d.email].filter(Boolean).join(' ')}${d.best_time ? ` · best time: ${d.best_time}` : ''}${d.contact_by ? ` · prefers ${d.contact_by}` : ''}`,
-    d.viewed_3d && 'Explored the 3D view',
+    d.viewed_3d && `Explored the 3D view${d.panel_colour ? ` (liked ${d.panel_colour} wall panels)` : ''}`,
     d.notes && `Notes: ${d.notes}`,
   ].filter(Boolean).join('\n');
 }

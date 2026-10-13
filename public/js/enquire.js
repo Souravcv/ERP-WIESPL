@@ -1,6 +1,6 @@
 // Client enquiry wizard: one question per screen, contact details last, progress saved as the visitor goes.
 // On submit the CRM creates an enquiry (with a lead score) and sales get a pop-up.
-import { mount3D } from './ot3d.js';
+import { mount3D, PANEL_COLOURS } from './ot3d.js';
 
 const $ = id => document.getElementById(id);
 function h(tag, attrs, ...kids) {
@@ -213,17 +213,23 @@ function step3D(n, total) {
   const box = h('div.eq-3d', h('div.loading', 'Loading 3D view…'));
   D.viewed_3d = true; sync();
   const bar = h('div.eq-3dbar');
+  const sw = h('div.eq-swatches', h('span', 'Wall panel colour:'), PANEL_COLOURS.map(([name, hex]) => {
+    const b = h('button.eq-swatch', { type: 'button', title: name, 'aria-label': name, 'aria-pressed': String((D.panel_colour || PANEL_COLOURS[0][0]) === name), style: { background: '#' + hex.toString(16).padStart(6, '0') }, onclick: () => {
+      D.panel_colour = name; viewer?.setPanelColour?.(name); sw.querySelectorAll('.eq-swatch').forEach(x => x.setAttribute('aria-pressed', String(x === b))); sw.querySelector('b').textContent = name; sync(); summary();
+    } });
+    return b;
+  }), h('b', D.panel_colour || PANEL_COLOURS[0][0]));
   const legend = h('div.eq-legend', h('span', h('i', { style: { background: '#1e7d3a' } }), 'in your plan'), h('span', h('i', { style: { background: '#9aa7ba' } }), 'available'), h('span', 'Drag to turn · pinch or scroll to zoom · tap a label'));
   setTimeout(async () => {
     viewer?.dispose?.();
-    viewer = await mount3D(box, { types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])) });
+    viewer = await mount3D(box, { panelColour: D.panel_colour, types: D.types, features: D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean), ots: D.ots, beds: D.beds, info: Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }])) });
     if (viewer?.controls) {
       const chip = (label, fn, pressed) => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!pressed), onclick: () => { const on = fn(); if (on !== undefined) b.setAttribute('aria-pressed', String(on)); } }, label); return b; };
       bar.replaceChildren(...viewer.controls.map(c => { const b = chip(c.label, c.run, c.pressed); c.ref?.(b); return b; }));
     }
   }, 30);
   return card(n, total, has('ot', 'cathlab') ? 'Look inside your OT' : `Look inside your ${has('nicu') && !has('icu', 'picu') ? 'NICU' : has('picu') && !has('icu') ? 'PICU' : 'ICU'}`, 'This is how a WIESPL room is put together. Items you picked are marked in green; tap any label to learn what it does.',
-    [box, bar, legend], { next: 'Looks good – next' });
+    [box, bar, sw, legend], { next: 'Looks good – next' });
 }
 
 function stepPlan(n, total) {
@@ -298,6 +304,7 @@ function summaryItems() {
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
     D.specialties.length && ['Specialty', D.specialties.join(', ')], (D.features.length || D.features_unsure) && ['Features', D.features.length ? `${D.features.length} selected` : 'needs advice'],
+    D.panel_colour && ['Panels', D.panel_colour],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
 }
