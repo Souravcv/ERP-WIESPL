@@ -68,3 +68,15 @@ All data is in `data/wiespl.db` (plus `-wal` / `-shm` files while running). Stop
 - `public/js/calc.js`: Basis of Design and BOQ / GST math, shared by browser and server.
 - `server/hooks.js`: numbering and totals. `server/workflows.js`: approvals, revise, convert, GRN, invoicing.
 - `server/seed.js`: default catalog, USP, terms and scope from the WIESPL quotation format.
+
+## Office mini PC as the server (crm.wiespl.com)
+
+1. Install **Node.js 24 LTS** (nodejs.org) and **Git** on the mini PC, then `git clone https://github.com/Souravcv/ERP-WIESPL.git C:\WIESPL\crm`.
+2. Right-click **install-server.bat → Run as administrator**. The CRM now starts by itself at boot (no login needed),
+   restarts if it stops, keeps the PC awake, and backs up the database every night at 1:30 am to `data\backups\daily` (30 days kept).
+   Log: `data\server.log`. Do not also run start-crm.bat on that PC.
+3. Put it on the internet with a free **Cloudflare Tunnel**: add wiespl.com to Cloudflare (check every DNS record — website and email — was copied),
+   switch the nameservers at BigRock to Cloudflare's, then Zero Trust → Networks → Tunnels → create a tunnel, run the Windows install command
+   it shows on the mini PC, and add the public hostname `crm.wiespl.com` → `http://localhost:3000`.
+4. Update later: `git pull`, then restart the PC (or Task Scheduler → WIESPL CRM → End, Run).
+5. Now and then copy the whole `data` folder (database + uploaded drawings and photos) to a USB drive or cloud storage.
