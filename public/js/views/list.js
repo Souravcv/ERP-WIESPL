@@ -156,6 +156,7 @@ export async function listView(root, entity) {
       delBtn,
       entity === 'enquiries' ? h('button.btn', { onclick: busy(shareForm) }, '🔗 Client enquiry form') : null,
       entity === 'products' && canWrite(entity, state.user.role) ? h('button.btn', { onclick: busy(importEstimate) }, '📥 Import estimate Excel') : null,
+      entity === 'material_lists' && canWrite(entity, state.user.role) ? h('button.btn', { onclick: busy(() => import('./mlimport.js').then(m => m.importMaterialLists())) }, '📥 From bill of material Excel') : null,
       IMPORTABLE[entity] && canWrite(entity, state.user.role) ? h('a.btn', { href: `#/import?kind=${IMPORTABLE[entity]}` }, '📥 Import Excel') : null,
       canWrite(entity, state.user.role) && !ent.noCreate ? h('button.btn.primary', { onclick: () => newRecord(entity).catch(fail) }, `+ New ${ent.singular}`) : null)),
     h('div.toolbar', q, statusSel, from ? h('span.muted', 'From') : null, from, to ? h('span.muted', 'to') : null, to),

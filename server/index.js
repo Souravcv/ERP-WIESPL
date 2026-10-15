@@ -270,6 +270,11 @@ api.post('/boms/:id/requisition-shortage', need('requisitions'), wrap(req => {
   if (!r.requisition) throw new HttpError(400, 'Nothing to requisition: everything is reserved from stock or already on a requisition / PO');
   return r;
 }));
+api.post('/material_lists/import-preview', need('material_lists'), express.raw({ type: () => true, limit: '60mb' }), wrap(req => {
+  if (!req.body?.length) throw new HttpError(400, 'Upload the bill of material .xlsx');
+  return flow.importPreview(req.body);
+}));
+api.post('/material_lists/import', need('material_lists'), wrap(req => flow.importLists(req.body, req.user)));
 api.get('/store/boq-check', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.storeOverview(); }));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
