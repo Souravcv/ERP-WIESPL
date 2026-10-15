@@ -38,6 +38,41 @@ export async function newBoqDialog(preset = {}) {
   location.hash = `#/boq/${r.boq.id}`;
 }
 
+// "Generate BOQ": each work-order line → its Standard Material List (matched by the list's match words; can be changed here),
+// components × the line's quantity. Lines without a list are copied as they are for design to detail.
+async function generateBomDialog(boqId) {
+  const p = await api(`/boqs/${boqId}/bom-preview`);
+  if (!p.rows.length) throw new Error('This work order has no material lines yet');
+  const choice = new Map(p.rows.map(r => [r.id, r.list_id]));
+  const client = h('input', { value: p.work_order.title || '' });
+  const reqBy = h('input', { type: 'date' });
+  const count = h('b');
+  const recount = () => { const m = [...choice.values()].filter(Boolean).length; count.textContent = `${m} of ${p.rows.length} line(s) have a material list`; };
+  const listSel = r => {
+    const sel = h('select', { style: { width: '100%', minWidth: '220px' } }, h('option', { value: '' }, '— no list: copy the line for design to detail —'),
+      p.lists.map(l => h('option', { value: l.id }, `${l.label} (${l.components})`)));
+    sel.value = r.list_id || '';
+    sel.onchange = () => { choice.set(r.id, sel.value ? Number(sel.value) : null); recount(); };
+    return sel;
+  };
+  recount();
+  const ok = await modal(`Generate BOQ from ${p.work_order.boq_no}`, h('div.grid',
+    p.existing.length ? h('p', { style: { color: 'var(--warn)' } }, `This work order already has: ${p.existing.map(b => `${b.bom_no} (${b.status})`).join(', ')}. A new BOQ is created next to it.`) : null,
+    p.lists.length ? null : h('p', { style: { color: 'var(--warn)' } }, 'There are no Standard Material Lists yet (Sales & Projects → 🧩 Standard Material Lists). Every line is copied for design to detail.'),
+    h('div.form-grid', h('label', 'Client / site (BOQ title)', client), h('label', 'Material required by', reqBy)),
+    h('div', count, h('span.muted', ' · ✔ matched automatically by the list’s match words; change any line here (the choice is remembered on the work order).')),
+    h('div.table-wrap', { style: { maxHeight: '50vh' } }, h('table.data', h('thead', h('tr', ['Section', 'Sr', 'Work-order line', 'Qty', 'Standard material list', ''].map(x => h('th', x)))),
+      h('tbody', p.rows.map(r => h('tr', h('td.muted', r.section || ''), h('td', r.sr_no || ''), h('td', { style: { maxWidth: '360px' } }, r.description),
+        h('td.num.nowrap', r.qty == null ? h('span.muted', 'TBD') : `${r.qty} ${r.uom || ''}`), h('td', listSel(r)),
+        h('td.muted', { title: r.how }, r.how === 'matched' ? '✔ auto' : r.how === 'chosen' ? 'saved' : ''))))))),
+  [{ label: 'Cancel', value: false }, { label: '⚙️ Generate BOQ', cls: 'primary', value: true }], { wide: true });
+  if (!ok) return;
+  const r = await api(`/boqs/${boqId}/generate-bom`, { method: 'POST', body: { client: client.value, required_by: reqBy.value || null, mapping: Object.fromEntries(choice) } });
+  clearRefCache('boms');
+  toast(`${r.bom.bom_no}: ${r.components} components (${r.matched} line(s) from material lists, ${r.unmatched} to detail) · departments: ${r.departments.join(', ')}`);
+  location.hash = `#/bom/${r.bom.id}`;
+}
+
 export async function boqView(root, boqId) {
   const [boq, rows, challans, items, boms] = await Promise.all([
     api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), api(`/challans?boq_id=${boqId}`), refOptions('items'), api(`/boms?work_order_id=${boqId}`).catch(() => []),
@@ -190,8 +225,9 @@ export async function boqView(root, boqId) {
         canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
         canEdit ? h('a.btn', { href: `#/edit/boq_items/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '+ Line') : null,
         canEdit ? h('a.btn', { href: `#/edit/boqs/${boqId}?details=1` }, '✏️ Details') : null,
-        canWrite('boms', state.user.role) ? h('button.btn', { onclick: () => import('./bom.js').then(m => m.newBomDialog({ work_order_id: Number(boqId), project_id: boq.project_id })).catch(fail) }, '📑 + BOQ for this work order') : null,
-        canSend && rows.length ? h('button.btn.primary', { onclick: () => dispatchSelected().catch(fail) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
+        canWrite('boms', state.user.role) && rows.length ? h('button.btn.primary', { onclick: () => generateBomDialog(boqId).catch(fail), title: 'BOQ from the Standard Material Lists × work-order quantities' }, '⚙️ Generate BOQ') : null,
+        canWrite('boms', state.user.role) ? h('button.btn', { onclick: () => import('./bom.js').then(m => m.newBomDialog({ work_order_id: Number(boqId), project_id: boq.project_id })).catch(fail) }, '📑 + BOQ (Excel / by hand)') : null,
+        canSend && rows.length ? h('button.btn', { onclick: () => dispatchSelected().catch(fail) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
     h('div.muted', { style: { marginBottom: '10px' } }, [boq.project_id_label && `Project: ${boq.project_id_label}`, boq.customer_id_label && `Customer: ${boq.customer_id_label}`, boq.wo_no && `WO: ${boq.wo_no}`].filter(Boolean).join('   ·   '),
       boms.length ? h('div', 'BOQs (bill of material): ', boms.map((b, i) => [i ? ', ' : '', h('a', { href: `#/bom/${b.id}` }, `${b.bom_no} ${b.client || ''}`)])) : null),
     rows.length ? h('div.kpis',

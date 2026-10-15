@@ -69,6 +69,16 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_store_crm_v1', '\"1\"')").run();
   }
+  // Work order → BOQ → design review → Final → store check: give the built-in roles the new functions once.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_boq_flow_v1'").get()) {
+    const NEW = ['boq_review', 'boq_final', 'notify_store_check', 'notify_boq'];
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const p = parse(r.perms);
+      const add = (DEFAULT_FUNCTIONS[r.name] || []).filter(fn => NEW.includes(fn));
+      if (add.length) db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...new Set([...(p.functions || []), ...add])] }), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_boq_flow_v1', '\"1\"')").run();
+  }
   loadRoles();
 }
 

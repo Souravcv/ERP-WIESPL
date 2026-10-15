@@ -9,6 +9,7 @@ import { usersView, rolesView, settingsView, auditView, importView, searchView }
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
+import { storeCheckView } from './views/storecheck.js';
 
 const $ = id => document.getElementById(id);
 
@@ -16,7 +17,7 @@ const $ = id => document.getElementById(id);
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
   Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -84,6 +85,7 @@ async function route() {
       case 'po-tracker': await poTrackerView(view); break;
       case 'boq': await boqView(view, a); break;
       case 'bom': await bomView(view, a); break;
+      case 'store-check': await storeCheckView(view); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }

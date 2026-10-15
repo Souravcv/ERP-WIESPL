@@ -89,18 +89,23 @@ export const FUNCTIONS = {
   notify_boq: 'Pop-up: new BOQ (bill of material)',
   notify_work_order: 'Pop-up: new work order',
   notify_enquiry: 'Pop-up: new enquiry from the client website form',
+  boq_review: 'BOQ – review / edit department sections (design review)',
+  boq_final: 'BOQ – make Final (freeze, reserve stock, auto requisition) and reopen',
+  notify_store_check: 'Pop-up: BOQ final – store stock check & auto requisition',
 };
+// Departments a BOQ section belongs to; each one is reviewed before the BOQ can be made Final.
+export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels', 'Doors', 'MGPS', 'Flooring / Civil', 'Lighting', 'Bought-out'];
 // Pop-up notifications per new document; approval requests always go to whoever may approve that step.
 export const NOTIFY_FUNCTIONS = { requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
-  purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order'],
-  technical: ['notify_work_order'],
+  purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final'],
   accounts: ['po_commercial', 'import', 'notify_po'],
-  store: ['stock_opening', 'import', 'notify_po', 'notify_boq', 'notify_work_order'],
+  store: ['stock_opening', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
-  engineer: ['notify_work_order'],
+  engineer: ['notify_work_order', 'boq_review'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -429,6 +434,7 @@ export const ENTITIES = {
       { key: 'qty', label: 'WO Qty', type: 'number', hint: 'Blank = quantity not fixed (UR)' },
       { key: 'area_qty', label: 'Qty per area', type: 'text', hint: 'e.g. Mj OT 1: 1, Mj OT 2: 1' },
       { key: 'item_id', label: 'Store item (for stock)', type: 'ref', ref: 'items', hint: 'Link to deduct store stock when dispatched' },
+      { key: 'material_list_id', label: 'Standard material list', type: 'ref', ref: 'material_lists', hint: 'Used by “Generate BOQ”: its components × this line’s qty' },
       { key: 'dispatched', label: 'Dispatched', type: 'number', computed: BOQ_SENT("'Dispatched','Delivered'") },
       { key: 'delivered', label: 'Delivered (site confirmed)', type: 'number', computed: BOQ_SENT("'Delivered'") },
       { key: 'pending', label: 'Pending', type: 'number', computed: `CASE WHEN {t}.qty IS NULL THEN NULL ELSE MAX({t}.qty - ${BOQ_SENT("'Dispatched','Delivered'")}, 0) END` },
@@ -441,12 +447,40 @@ export const ENTITIES = {
       { key: 'sort', label: 'Order', type: 'number', hidden: true },
     ],
   },
+  // Standard material list ("recipe") per product the design department keeps: the components for ONE unit of a
+  // work-order item (one door, one Sq. Ft of wall panel …). "Generate BOQ" multiplies them by the work-order qty.
+  material_lists: {
+    label: 'Standard Material Lists', singular: 'Material List', group: 'Sales & Projects', icon: '🧩', write: ENG.concat('purchase_head'),
+    display: "COALESCE({t}.code || ' · ', '') || {t}.name",
+    search: ['code', 'name', 'department', 'match_words', 'notes'],
+    list: ['code', 'name', 'department', 'per_uom', 'match_words', 'components', 'active'],
+    fields: [
+      { key: 'code', label: 'Code', type: 'text', hint: 'e.g. ML-DOOR-HS' },
+      { key: 'name', label: 'Product / Item', type: 'text', required: true, hint: 'e.g. Hermetically sealed sliding door (automatic)' },
+      { key: 'department', label: 'Department', type: 'select', options: DEPARTMENTS, default: 'Design', hint: 'Its components go to this department for review' },
+      { key: 'per_uom', label: 'Quantities are per 1', type: 'text', default: 'Nos', suggest: ['Nos', 'Set', 'Sq. Ft', 'Sq. Mtr', 'RFt', 'Mtr', 'Lot'], hint: 'Unit of the work-order line, e.g. 1 Nos door or 1 Sq. Ft of panel' },
+      { key: 'match_words', label: 'Match words', type: 'text', span: 2, hint: 'Comma-separated words found in work-order descriptions, e.g. sliding door, hermetic. Used to pick this list automatically' },
+      { key: 'active', label: 'Active', type: 'yn', default: 'Yes' },
+      { key: 'lines', label: 'Components for 1 unit', type: 'lines', span: 2, itemRef: true, amounts: false, hint: 'Pick the store item where there is one, so stock can be checked and reserved', columns: [
+        { key: 'description', label: 'Component', type: 'text', width: 220 },
+        { key: 'spec', label: 'Specification', type: 'textarea', width: 240 },
+        { key: 'dimensions', label: 'Dimensions', type: 'text', width: 100 },
+        { key: 'qty', label: 'Qty per 1 unit', type: 'number', width: 80 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 64 },
+        { key: 'moc', label: 'MOC', type: 'text', width: 90 },
+        { key: 'make', label: 'Make', type: 'text', width: 90 },
+        { key: 'department', label: 'Department (if different)', type: 'select', options: ['', ...DEPARTMENTS], width: 130 },
+      ] },
+      { key: 'components', label: 'Components', type: 'number', computed: "json_array_length(COALESCE(NULLIF({t}.lines, ''), '[]'))" },
+      { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+    ],
+  },
   // BOQ / Bill of Material prepared by WIESPL engineers (format: SR.NO, COMPONENT NAME, SPECIFICATIONS, DIMENSIONS, QTY, UOM, MOC, DRAWING MODEL NO, Remark, MAKE).
   boms: {
     label: 'BOQ / Bill of Material', singular: 'BOQ', group: 'Sales & Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'bom',
     display: "{t}.bom_no || ' · ' || COALESCE({t}.client, '')",
     search: ['bom_no', 'client', 'remarks', 'prepared_by'],
-    list: ['bom_no', 'date', 'client', 'project_id', 'work_order_id', 'lines', 'procured_lines', 'sent_lines', 'progress', 'status'],
+    list: ['bom_no', 'date', 'client', 'project_id', 'work_order_id', 'required_by', 'lines', 'procured_lines', 'sent_lines', 'progress', 'status'],
     statusField: 'status', print: 'bom',
     related: [['requisitions', 'bom_id'], ['purchase_orders', 'bom_id'], ['challans', 'bom_id']],
     fields: [
@@ -456,7 +490,12 @@ export const ENTITIES = {
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'work_order_id', label: 'Against Work Order', type: 'ref', ref: 'boqs' },
       { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Approved', 'In Progress', 'Completed', 'On Hold'], default: 'Draft' },
+      // Draft → Design Review (each department reviews its section) → Final (locked; stock reserved, shortages requisitioned).
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Design Review', 'Final', 'Approved', 'In Progress', 'Completed', 'On Hold'], default: 'Draft', hint: 'Design Review and Final are set with the buttons on the BOQ' },
+      { key: 'required_by', label: 'Material Required By', type: 'date', hint: 'When the material is needed in production / at site; order-by dates are counted back from it with each item’s lead time' },
+      { key: 'reviews', label: 'Department Reviews', type: 'json', hidden: true },
+      { key: 'finalized_by', label: 'Made Final By', type: 'text', readonly: true },
+      { key: 'finalized_at', label: 'Made Final At', type: 'text', readonly: true },
       { key: 'prepared_by', label: 'Prepared By', type: 'person', default: 'me' },
       { key: 'approved_by', label: 'Approved By', type: 'person' },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
@@ -470,10 +509,11 @@ export const ENTITIES = {
     label: 'BOQ Components', singular: 'BOQ Component', group: 'Hidden', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "COALESCE({t}.sr_no || ' ', '') || COALESCE({t}.component, '') || COALESCE(' ' || NULLIF({t}.dimensions, ''), '')",
     search: ['section', 'sr_no', 'component', 'spec', 'dimensions', 'moc', 'drawing_no', 'make', 'remark'],
-    list: ['section', 'sr_no', 'component', 'spec', 'dimensions', 'qty', 'uom', 'on_po', 'received', 'dispatched', 'pending', 'delivery_status'],
+    list: ['department', 'section', 'sr_no', 'component', 'spec', 'dimensions', 'qty', 'uom', 'on_po', 'received', 'dispatched', 'pending', 'delivery_status'],
     statusField: 'delivery_status',
     fields: [
       { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', required: true },
+      { key: 'department', label: 'Department', type: 'select', options: ['', ...DEPARTMENTS], hint: 'The department that reviews this component' },
       { key: 'section', label: 'Section', type: 'text', hint: 'e.g. PLENUM, RISER, SWING DOOR' },
       { key: 'sr_no', label: 'Sr. No.', type: 'text' },
       { key: 'component', label: 'Component Name', type: 'text', span: 2 },
@@ -487,6 +527,7 @@ export const ENTITIES = {
       { key: 'remark', label: 'Remark', type: 'text' },
       { key: 'make', label: 'Make', type: 'text' },
       { key: 'item_id', label: 'Store item', type: 'ref', ref: 'items', hint: 'Link to see store stock, order it and issue it from stock' },
+      { key: 'wo_line_id', label: 'From work order line', type: 'ref', ref: 'boq_items', readonly: true },
       { key: 'in_store', label: 'In Store', type: 'number', computed: `(SELECT ${STOCK_SQL.replaceAll('{t}', 'si')} FROM items si WHERE si.id = {t}.item_id)` },
       { key: 'requested', label: 'Requisitioned', type: 'number', computed: BOM_ON('requisitions', REQ_LIVE) },
       { key: 'req_open', label: 'On open requisitions', type: 'number', hidden: true, computed: BOM_ON('requisitions', "'Draft','Submitted','Approved'") },
@@ -737,6 +778,7 @@ export const ENTITIES = {
       { key: 'gst_rate', label: 'GST %', type: 'number', default: 18 },
       { key: 'hsn', label: 'HSN Code', type: 'text', hint: 'Optional; pre-filled on POs' },
       { key: 'reorder_level', label: 'Minimum Stock Level', type: 'number', default: 0 },
+      { key: 'lead_days', label: 'Lead Time (days)', type: 'number', hint: 'Days from requisition to material in store; BOQ order-by date = required-by − lead time (blank = 7)' },
       { key: 'preferred_vendor_id', label: 'Preferred Vendor', type: 'ref', ref: 'vendors' },
       { key: 'location', label: 'Store Location / Rack', type: 'text' },
       { key: 'description', label: 'Specification', type: 'textarea', span: 2 },

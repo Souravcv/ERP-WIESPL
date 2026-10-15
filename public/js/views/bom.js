@@ -1,7 +1,7 @@
 // BOQ / Bill of Material window (WIESPL engineers' format): components by section, what is procured
 // (requisition → PO → GRN), what is sent to site and what is pending. Dispatch makes the challan automatically.
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy } from '../ui.js';
-import { canWrite } from '../schema.js';
+import { canWrite, hasFunction } from '../schema.js';
 import { itemPicker, attachments, bomRows, toProcure } from './form.js';
 
 const firstLine = s => String(s || '').split('\n')[0];
@@ -52,15 +52,22 @@ const PROC = b => {
 };
 
 export async function bomView(root, bomId) {
-  const [bom, raw, challans, items] = await Promise.all([
+  const [bom, raw, challans, items, check] = await Promise.all([
     api(`/boms/${bomId}`), api(`/bom_items?bom_id=${bomId}&limit=20000`), api(`/challans?bom_id=${bomId}`), refOptions('items'),
+    api(`/boms/${bomId}/stock-check`).catch(() => null),
   ]);
   const rows = bomRows(raw);
-  const canEdit = canWrite('boms', state.user.role), canSend = canWrite('challans', state.user.role);
+  const role = state.user.role;
+  const locked = !!bom.finalized_at;
+  // Final BOQs are locked; during design review only reviewers change components.
+  const canEdit = canWrite('boms', role) && !locked && (bom.status !== 'Design Review' || hasFunction(role, 'boq_review'));
+  const canSend = canWrite('challans', role);
   const sections = [...new Set(rows.map(r => r.section || '—'))];
+  const depts = [...new Set(rows.map(r => r.department || 'Design'))];
   const picks = new Map(); // component id → { qty, item_id }
   const pickCount = h('b', '0');
   const filter = h('select', { style: { width: 'auto' } }, ['All components', 'To procure', 'On PO / not received', 'Procured', 'Pending to send', 'Sent / in transit', 'Delivered ✓'].map(t => h('option', t)));
+  const deptSel = h('select', { style: { width: 'auto' } }, h('option', { value: '' }, 'All departments'), depts.map(d => h('option', d)));
   const cols = h('select', { style: { width: 'auto' } }, h('option', { value: 'all' }, 'All columns'), h('option', { value: 'boq' }, 'BOQ details only'), h('option', { value: 'track' }, 'Procurement & dispatch only'));
   const search = h('input.grow', { type: 'search', placeholder: 'Search component, size, make …' });
   const out = h('div');
@@ -71,6 +78,7 @@ export async function bomView(root, bomId) {
     const f = filter.value;
     const showBoq = cols.value !== 'track', showTrack = cols.value !== 'boq';
     const keep = r => {
+      if (deptSel.value && (r.department || 'Design') !== deptSel.value) return false;
       if (q && !`${r.sr_no} ${r.component_name} ${r.spec} ${r.dimensions} ${r.make} ${r.moc} ${r.remark}`.toLowerCase().includes(q)) return false;
       const p = PROC(r);
       if (f === 'To procure') return toProcure(r) > 0;
@@ -81,7 +89,7 @@ export async function bomView(root, bomId) {
       if (f === 'Delivered ✓') return r.delivery_status === 'Delivered';
       return true;
     };
-    const head = [canSend ? '' : null, 'Sr', 'Component', ...(showBoq ? ['Specifications', 'Dimensions'] : []), 'Qty', 'UOM',
+    const head = [canSend ? '' : null, 'Sr', 'Dept', 'Component', ...(showBoq ? ['Specifications', 'Dimensions'] : []), 'Qty', 'UOM',
       ...(showBoq ? ['MOC', 'Drawing / Model', 'Remark', 'Make'] : []),
       ...(showTrack ? ['Store item / in store', 'Requisitioned', 'On PO', 'Received', 'Procurement', 'Sent', 'Pending', 'Dispatch'] : []), canSend ? 'Send now' : null, canEdit ? '' : null].filter(x => x !== null);
     const num = new Set(['Qty', 'Requisitioned', 'On PO', 'Received', 'Sent', 'Pending', 'Send now']);
@@ -103,6 +111,7 @@ export async function bomView(root, bomId) {
             return h('tr', { style: { opacity: r.qty > 0 ? 1 : 0.6 } },
               canSend ? h('td', chk) : null,
               h('td.nowrap', r.sr_no || ''),
+              h('td.nowrap.muted', { style: { fontSize: '12px' } }, r.department || 'Design'),
               h('td', { style: { minWidth: '160px' } }, r.component ? h('b', r.component) : h('span.muted', `↳ ${r.component_name}`)),
               showBoq ? [h('td', { style: { maxWidth: '280px', whiteSpace: 'pre-wrap', fontSize: '12px' } }, r.spec || ''), h('td', r.dimensions || '')] : null,
               h('td.num', r.qty_text ? `${r.qty ?? ''} (${r.qty_text})` : r.qty ?? ''), h('td', r.uom || ''),
@@ -166,11 +175,133 @@ export async function bomView(root, bomId) {
     bomView(root, bomId);
   }
 
+  // ---------------------------------------------------------------- Draft → Design Review (per department) → Final
+  const reload = () => bomView(root, bomId);
+  const post = (path, body) => api(`/boms/${bomId}/${path}`, { method: 'POST', body });
+
+  async function makeFinal(force = false) {
+    const ok = await modal(`Make ${bom.bom_no} Final?`, h('div.grid',
+      h('p', 'The BOQ is locked. Free store stock is reserved for it, and a Draft material requisition is raised for whatever is short (not in free stock and not already on a requisition / PO). The store checks that requisition and submits it to the Purchase Head.'),
+      bom.required_by ? h('p.muted', `Material required by ${fmtDate(bom.required_by)}: order-by dates are counted back from it with each item’s lead time.`)
+        : h('p', { style: { color: 'var(--warn)' } }, 'Tip: set “Material Required By” under ✏️ Details first, so the requisition gets order-by dates.')),
+    [{ label: 'Cancel', value: false }, { label: force ? '🔒 Make Final anyway' : '🔒 Make Final', cls: 'good', value: true }]);
+    if (!ok) return;
+    let r;
+    try { r = await post('final', { force }); } catch (e) {
+      if (!force && /Not reviewed yet/.test(e.message) && hasFunction(role, 'boq_final')) {
+        if (await modal('Not reviewed by every department', h('p', e.message), [{ label: 'Cancel', value: false }, { label: 'Make Final anyway', cls: 'danger solid', value: true }])) return makeFinal(true);
+        return;
+      }
+      throw e;
+    }
+    const c = r.check;
+    await modal(`${bom.bom_no} is Final`, h('div.grid',
+      h('p', `${c.reserved_lines} component(s) reserved from store stock · ${c.short_lines} short · ${c.late_lines} past their order-by date.`),
+      r.requisition ? h('p', 'Requisition ', h('a', { href: `#/view/requisitions/${r.requisition.id}` }, r.requisition.req_no), ` (Draft) was raised for ${r.requisition.lines.length} material(s). The store has been notified to check and submit it.`)
+        : h('p', 'Nothing had to be requisitioned: everything is in free stock or already ordered.')),
+    [r.requisition ? { label: '📝 Open requisition', action: () => { location.hash = `#/view/requisitions/${r.requisition.id}`; return true; } } : null, { label: 'OK', cls: 'primary', value: true }].filter(Boolean));
+    if (!location.hash.startsWith('#/view/requisitions')) reload();
+  }
+
+  async function review(dept, decision) {
+    const comments = h('textarea', { rows: 3, placeholder: decision === 'Reviewed' ? 'Optional remarks' : 'What has to change?' });
+    const ok = await modal(`${dept}: ${decision === 'Reviewed' ? 'mark as reviewed' : 'changes needed'}`, h('div.grid',
+      h('p.muted', decision === 'Reviewed' ? `You confirm the ${dept} components of ${bom.bom_no} (quantities, specifications, store items) are correct.` : 'The person who prepared the BOQ is notified.'),
+      h('label', 'Remarks', comments)), [{ label: 'Cancel', value: false }, { label: decision === 'Reviewed' ? '✔ Reviewed' : '✎ Changes needed', cls: decision === 'Reviewed' ? 'good' : 'primary', value: true }]);
+    if (!ok) return;
+    if (decision !== 'Reviewed' && !comments.value.trim()) throw new Error('Write what has to change');
+    await post('review', { department: dept, decision, comments: comments.value });
+    toast(`${dept}: ${decision}`);
+    reload();
+  }
+
+  async function copyFrom() {
+    const boms = (await refOptions('boms')).filter(o => o.id !== Number(bomId));
+    let fromId = null;
+    const factor = h('input', { type: 'number', step: 'any', value: 1, style: { width: '100px' } });
+    const ok = await modal('Copy components from an earlier BOQ', h('div.grid',
+      h('p', 'For one-off items without a standard material list: take the components of a similar earlier BOQ (e.g. the same OT size) and edit them.'),
+      h('label', 'Earlier BOQ', itemPicker(boms, null, { onPick: id => { fromId = id; } })), h('label', 'Multiply quantities by', factor)),
+    [{ label: 'Cancel', value: false }, { label: 'Copy', cls: 'primary', value: true }]);
+    if (!ok) return;
+    if (!fromId) throw new Error('Choose the BOQ to copy from');
+    const r = await post('copy-from', { from_bom_id: fromId, factor: Number(factor.value) || 1 });
+    toast(`${r.copied} components copied`);
+    reload();
+  }
+
+  async function reopenBom() {
+    const reason = h('textarea', { rows: 3, placeholder: 'Why does it change? (client revision, drawing change …)' });
+    const ok = await modal(`Reopen ${bom.bom_no}?`, h('div.grid',
+      h('p', 'It goes back to design review and every department reviews again. Its stock is no longer reserved until it is Final again. Requisitions and POs already made stay as they are.'),
+      h('label', 'Reason *', reason)), [{ label: 'Cancel', value: false }, { label: '🔓 Reopen', cls: 'danger solid', value: true }]);
+    if (!ok) return;
+    if (!reason.value.trim()) throw new Error('Write the reason');
+    await post('reopen', { reason: reason.value });
+    reload();
+  }
+
+  function flowCard() {
+    const steps = ['Draft', 'Design Review', 'Final'];
+    const cur = locked ? 'Final' : bom.status === 'Design Review' ? 'Design Review' : 'Draft';
+    const reviews = check?.reviews || {};
+    const mayReview = hasFunction(role, 'boq_review') && bom.status === 'Design Review';
+    const buttons = [
+      cur === 'Draft' && canWrite('boms', role) && rows.length ? h('button.btn.primary', { onclick: busy(async () => { await post('submit-review'); toast('Sent for design review; reviewers are notified'); reload(); }) }, '📤 Send for design review') : null,
+      cur === 'Draft' && canEdit ? h('button.btn', { onclick: busy(copyFrom) }, '📋 Copy from earlier BOQ') : null,
+      cur !== 'Final' && hasFunction(role, 'boq_final') && rows.length ? h('button.btn.good', { onclick: busy(() => makeFinal(false)) }, '🔒 Make Final') : null,
+      cur === 'Final' && hasFunction(role, 'boq_final') ? h('button.btn', { onclick: busy(reopenBom) }, '🔓 Reopen') : null,
+    ].filter(Boolean);
+    const chips = Object.entries(reviews).map(([d, r]) => h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center', border: '1px solid var(--border)', borderRadius: '6px', padding: '4px 8px' } },
+      h('b', d), badge(r.status), r.by ? h('span.muted', { style: { fontSize: '12px' }, title: r.comments || '' }, `${r.by} ${r.at || ''}${r.comments ? ' · ' + r.comments : ''}`) : r.note ? h('span.muted', { style: { fontSize: '12px' } }, r.note) : null,
+      mayReview && r.status !== 'Reviewed' ? h('button.btn.small.good', { onclick: busy(() => review(d, 'Reviewed')), title: `Mark the ${d} section as reviewed` }, '✔') : null,
+      mayReview ? h('button.btn.small', { onclick: busy(() => review(d, 'Changes needed')), title: 'Changes needed' }, '✎') : null));
+    return h('div.card', { style: { padding: '12px 16px' } },
+      h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+        h('b', 'Workflow:'), steps.map((s, i) => [i ? h('span.muted', '→') : null,
+          h('span.badge' + (s === cur ? (s === 'Final' ? '.good' : '.warn') : steps.indexOf(s) < steps.indexOf(cur) ? '.good' : ''), s)]),
+        locked ? h('span.muted', `by ${bom.finalized_by || ''} · ${bom.finalized_at || ''}`) : null,
+        bom.required_by ? h('span.muted', `· material required by ${fmtDate(bom.required_by)}`) : null,
+        h('span', { style: { marginLeft: 'auto', display: 'flex', gap: '6px', flexWrap: 'wrap' } }, buttons)),
+      cur !== 'Draft' && chips.length ? h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '10px' } }, h('span.muted', { style: { alignSelf: 'center' } }, 'Department review:'), chips)
+        : h('div.muted', { style: { marginTop: '6px', fontSize: '12px' } }, `Sections: ${depts.join(', ') || '—'}. When the components are complete, send the BOQ for design review; each department reviews its section, then it is made Final (locked, stock reserved, shortage requisitioned).`));
+  }
+
+  // ---------------------------------------------------------------- store check: free stock, reserved, short, on order, order-by
+  function stockCard() {
+    if (!check?.rows?.length) return null;
+    const s = check.summary;
+    const open = check.rows.filter(r => r.still_needed > 0);
+    const toReq = check.rows.filter(r => r.to_requisition > 0);
+    const n = v => (v == null ? '' : Math.round(v * 1000) / 1000);
+    const reqBtn = locked && toReq.length && canWrite('requisitions', role) ? h('button.btn.primary', { onclick: busy(async () => {
+      const r = await post('requisition-shortage');
+      toast(`Requisition ${r.requisition.req_no} (Draft) for ${r.requisition.lines.length} material(s)`);
+      location.hash = `#/view/requisitions/${r.requisition.id}`;
+    }) }, `📝 Requisition shortage (${toReq.length})`) : null;
+    return h('details.card', { open: locked && (s.to_requisition_lines > 0 || s.late_lines > 0) },
+      h('summary', { style: { cursor: 'pointer' } }, h('b', '📦 Store check '),
+        h('span.muted', `${locked ? `${s.reserved_lines} reserved` : `${s.in_stock_lines} available in free stock`} · ${s.short_lines} short · ${s.to_requisition_lines} still to requisition${s.late_lines ? ` · ${s.late_lines} late` : ''}${s.no_item_lines ? ` · ${s.no_item_lines} without store item` : ''}`)),
+      h('p.muted', { style: { fontSize: '12px' } }, locked
+        ? 'Stock is reserved for Final BOQs in order of their required-by date. Short = still needed − reserved; “to requisition” leaves out what is already on requisitions or POs.'
+        : 'Preview against FREE stock (stock not reserved for other Final BOQs). Nothing is reserved until this BOQ is Final.'),
+      h('div.toolbar', reqBtn),
+      h('div.table-wrap', h('table.data', h('thead', h('tr', ['Dept', 'Component', 'Store item', 'Still needed', 'Free stock', locked ? 'Reserved' : 'Can take', 'Short', 'On order', 'To requisition', 'Lead', 'Order by', ''].map(x => h('th' + (['Still needed', 'Free stock', 'Reserved', 'Can take', 'Short', 'On order', 'To requisition', 'Lead'].includes(x) ? '.num' : ''), x)))),
+        h('tbody', open.map(r => h('tr',
+          h('td.muted', { style: { fontSize: '12px' } }, r.department), h('td', [r.component, r.dimensions].filter(Boolean).join(' ')),
+          h('td', { style: { fontSize: '12px' } }, r.item_label || h('span.muted', 'not linked')),
+          h('td.num', `${n(r.still_needed)} ${r.uom || ''}`), h('td.num', n(r.free_stock)), h('td.num', n(r.reserved)),
+          h('td.num', { style: { color: r.shortage > 0 ? 'var(--bad)' : '' } }, n(r.shortage) || ''), h('td.num', n(r.on_order) || ''),
+          h('td.num', { style: { fontWeight: 600, color: r.to_requisition > 0 ? 'var(--warn)' : '' } }, n(r.to_requisition) || ''),
+          h('td.num.muted', r.lead_days != null ? `${r.lead_days} d` : ''), h('td.nowrap', { style: { color: r.late ? 'var(--bad)' : '' } }, fmtDate(r.order_by), r.late ? ' ⚠' : ''),
+          h('td', badge(r.late ? 'Late' : r.state))))))));
+  }
+
   const procureLink = entity => () => {
     const ids = [...picks.keys()];
     location.hash = `#/edit/${entity}/new?bom_id=${bomId}${bom.project_id ? '&project_id=' + bom.project_id : ''}${ids.length ? '&bom_items=' + ids.join(',') : ''}`;
   };
-  filter.onchange = draw; cols.onchange = draw; search.oninput = draw;
+  filter.onchange = draw; cols.onchange = draw; search.oninput = draw; deptSel.onchange = draw;
   const items_ = rows.filter(r => r.qty > 0);
   const k = (label, v, sub) => h('div.kpi', h('div.label', label), h('div.value', v), sub ? h('div.sub', sub) : null);
   root.replaceChildren(
@@ -180,12 +311,14 @@ export async function bomView(root, bomId) {
         h('a.btn', { href: `#/print/bom/${bomId}`, target: '_blank' }, '🖨 Print BOQ'),
         canEdit ? h('button.btn', { onclick: busy(addFile) }, '📥 Import Excel') : null,
         canEdit ? h('a.btn', { href: `#/edit/bom_items/new?bom_id=${bomId}` }, '+ Component') : null,
-        canEdit ? h('a.btn', { href: `#/edit/boms/${bomId}?details=1` }, '✏️ Details') : null,
+        canWrite('boms', role) ? h('a.btn', { href: `#/edit/boms/${bomId}?details=1`, title: locked ? 'A Final BOQ: only status (In Progress / Completed / On Hold), remarks and required-by date can change' : '' }, '✏️ Details') : null,
         canWrite('requisitions', state.user.role) ? h('button.btn', { onclick: procureLink('requisitions'), title: 'Ticked components, or everything still to procure' }, '📝 Requisition') : null,
         canWrite('purchase_orders', state.user.role) ? h('button.btn', { onclick: procureLink('purchase_orders'), title: 'Ticked components, or everything still to procure' }, '🛒 PO') : null,
         canSend && rows.length ? h('button.btn.primary', { onclick: busy(dispatchSelected) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
     h('div.muted', { style: { marginBottom: '10px' } }, [bom.project_id_label && `Project: ${bom.project_id_label}`, bom.work_order_id_label && `Work order: ${bom.work_order_id_label}`,
       bom.customer_id_label && `Customer: ${bom.customer_id_label}`, `Date: ${fmtDate(bom.date)}`, bom.prepared_by && `Prepared by: ${bom.prepared_by}`, bom.approved_by && `Approved by: ${bom.approved_by}`].filter(Boolean).join('   ·   ')),
+    flowCard(),
+    stockCard(),
     rows.length ? h('div.kpis',
       k('Components', items_.length, `${rows.length - items_.length} with qty 0`),
       k('To procure', items_.filter(r => toProcure(r) > 0).length, 'not on PO / requisition yet'),
@@ -194,7 +327,7 @@ export async function bomView(root, bomId) {
       k('Sent to site', items_.filter(r => ['Dispatched', 'Delivered'].includes(r.delivery_status)).length, `${items_.filter(r => r.delivery_status === 'Delivered').length} delivered ✓`),
       k('Pending to send', items_.filter(r => r.pending > 0).length),
       k('Challans', challans.length)) : null,
-    rows.length ? h('div.toolbar', search, filter, cols, h('span.muted', 'Tick components → “Requisition”, “PO” or “Dispatch selected”.')) : null,
+    rows.length ? h('div.toolbar', search, depts.length > 1 ? deptSel : null, filter, cols, h('span.muted', 'Tick components → “Requisition”, “PO” or “Dispatch selected”.')) : null,
     out,
     challans.length ? h('div.card', h('h2', '🚚 Challans of this BOQ'), h('table.data', h('thead', h('tr', ['Challan', 'Date', 'Vehicle', 'Items', 'Status', 'Delivered', 'Received by', ''].map(x => h('th', x)))),
       h('tbody', challans.map(c => h('tr',

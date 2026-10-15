@@ -20,6 +20,7 @@ import { migratePhotos, listPhotos, addPhoto, removePhoto } from './photos.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
+import * as flow from './boqflow.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
 import * as roles from './roles.js';
@@ -240,12 +241,36 @@ api.post('/boms/upload', need('boms'), express.raw({ type: () => true, limit: '6
 }));
 api.post('/boms/:id/import', need('boms'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
   if (!req.body?.length) throw new HttpError(400, 'Upload the bill of material .xlsx');
+  bomEditable(req.params.id, req.user);
   const r = await dispatch.importBom(req.params.id, req.body, req.query.mode, req.user);
   roles.saveAttachment('boms', req.params.id, { filename: req.query.name || 'Bill of material.xlsx', mime: req.headers['x-file-type'], note: 'Bill of material (imported)' }, req.body, req.user);
   return r;
 }));
 api.post('/boms/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBom(req.params.id, req.body, req.user)));
 api.post('/challans/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchChallan(req.params.id, req.body, req.user)));
+
+// ---------------------------------------------------------------- work order → BOQ → design review → Final → store check
+// Components of a Final BOQ are locked; during design review only reviewers may change them.
+function bomEditable(bomId, user) {
+  const bom = db.prepare('SELECT bom_no, status, finalized_at FROM boms WHERE id = ?').get(Number(bomId));
+  if (!bom) return;
+  if (flow.isLocked(bom)) throw new HttpError(409, `${bom.bom_no} is Final and locked. Use “Reopen” (BOQ – make Final permission) to change it.`);
+  if (bom.status === 'Design Review' && !hasFunction(user.role, 'boq_review')) throw new HttpError(403, `${bom.bom_no} is in design review; only reviewers can change its components`);
+}
+api.get('/boqs/:id/bom-preview', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.matchPreview(req.params.id); }));
+api.post('/boqs/:id/generate-bom', need('boms'), wrap(req => flow.generateBom(req.params.id, req.body, req.user)));
+api.post('/boms/:id/copy-from', need('boms'), wrap(req => { bomEditable(req.params.id, req.user); return flow.copyFromBom(req.params.id, req.body, req.user); }));
+api.post('/boms/:id/submit-review', need('boms'), wrap(req => flow.submitReview(req.params.id, req.user)));
+api.post('/boms/:id/review', wrap(req => flow.reviewSection(req.params.id, req.body, req.user)));
+api.post('/boms/:id/final', wrap(req => flow.makeFinal(req.params.id, req.body, req.user)));
+api.post('/boms/:id/reopen', wrap(req => flow.reopen(req.params.id, req.body, req.user)));
+api.get('/boms/:id/stock-check', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return { ...flow.stockCheck(req.params.id), reviews: flow.reviewsOf(getRow('boms', req.params.id)) }; }));
+api.post('/boms/:id/requisition-shortage', need('requisitions'), wrap(req => {
+  const r = flow.requisitionShortage(req.params.id, req.user);
+  if (!r.requisition) throw new HttpError(400, 'Nothing to requisition: everything is reserved from stock or already on a requisition / PO');
+  return r;
+}));
+api.get('/store/boq-check', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.storeOverview(); }));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- store
@@ -417,8 +442,11 @@ api.get('/:entity/:id', wrap(req => { viewable(req); return getRow(req.params.en
 api.post('/:entity', wrap(req => {
   const ent = entityOr404(req.params.entity);
   if (!canWrite(req.params.entity, req.user.role) || ent.noCreate) throw new HttpError(403, 'You do not have permission to create this');
+  if (req.params.entity === 'bom_items') bomEditable(req.body?.bom_id, req.user);
+  if (req.params.entity === 'boms' && ['Design Review', 'Final'].includes(req.body?.status)) throw new HttpError(400, 'Save the BOQ as Draft; Design Review and Final are set with the buttons on the BOQ');
   const row = insertRow(req.params.entity, req.body || {}, req.user);
   notify.notifyNew(req.params.entity, row, req.user);
+  if (req.params.entity === 'bom_items') flow.touchReview(row.bom_id, [row.department], req.user);
   return row;
 }));
 api.put('/:entity/:id', wrap(req => {
@@ -429,19 +457,49 @@ api.put('/:entity/:id', wrap(req => {
     const st = db.prepare(`SELECT status FROM ${entity} WHERE id = ?`).get(Number(id))?.status;
     if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked.${entity === 'quotations' ? ' Use Revise to make changes.' : ''}`);
   }
-  return updateRow(entity, id, req.body || {}, req.user);
+  const body = { ...(req.body || {}) };
+  if (entity === 'bom_items') {
+    const cur = db.prepare('SELECT bom_id, department FROM bom_items WHERE id = ?').get(Number(id));
+    bomEditable(cur?.bom_id, req.user);
+    if (body.bom_id && Number(body.bom_id) !== cur?.bom_id) bomEditable(body.bom_id, req.user);
+    const row = updateRow(entity, id, body, req.user);
+    flow.touchReview(row.bom_id, [cur?.department, row.department], req.user);
+    return row;
+  }
+  if (entity === 'boms') {
+    // Reviews and the Final stamp only change through the review / Final / Reopen actions.
+    delete body.reviews;
+    const cur = db.prepare('SELECT status, finalized_at FROM boms WHERE id = ?').get(Number(id));
+    const to = body.status;
+    const FLOW = ['Design Review', 'Final'];
+    if (to !== undefined && to !== cur?.status && (FLOW.includes(to) || (FLOW.includes(cur?.status) && !cur?.finalized_at))) {
+      throw new HttpError(400, 'Use the BOQ buttons for design review and Final');
+    }
+    if (cur?.finalized_at) {
+      // A Final BOQ: only its progress (In Progress / Completed / On Hold), remarks and required-by date may change.
+      const stored = db.prepare('SELECT * FROM boms WHERE id = ?').get(Number(id));
+      const keys = new Set(ENTITIES.boms.fields.filter(f => !f.computed && !f.readonly).map(f => f.key));
+      const extra = Object.keys(body).filter(k => keys.has(k) && !['status', 'remarks', 'required_by'].includes(k) && String(body[k] ?? '') !== String(stored[k] ?? ''));
+      if (extra.length) throw new HttpError(409, `This BOQ is Final and locked (${extra.join(', ')}). Use “Reopen” to change it.`);
+      if (to !== undefined && to !== cur.status && !['Final', 'In Progress', 'Completed', 'On Hold'].includes(to)) throw new HttpError(400, `A Final BOQ cannot go back to ${to}; use “Reopen”`);
+    }
+  }
+  return updateRow(entity, id, body, req.user);
 }));
 api.delete('/:entity/:id', wrap(req => {
   const { entity, id } = req.params;
   const ent = entityOr404(entity);
   const row = db.prepare(`SELECT * FROM ${entity} WHERE id = ?`).get(Number(id));
   if (!row) throw new HttpError(404, 'Record not found');
+  if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
+  if (entity === 'boms' && flow.isLocked(row)) throw new HttpError(409, `${row.bom_no} is Final; Reopen it before deleting`);
   const full = canDelete(entity, req.user.role) || (['bom_items', 'boq_items'].includes(entity) && canWrite(entity, req.user.role));
   if (!canRemove(entity, row, req.user, full && canWrite(entity, req.user.role))) {
     throw new HttpError(403, `Only the person who created this ${ent.singular.toLowerCase()} (while it is a Draft) or someone with full access to ${ent.label} can delete it`);
   }
   deleteRow(entity, id, req.user);
   roles.removeAttachmentsOf(entity, id);
+  if (entity === 'bom_items') flow.touchReview(row.bom_id, [row.department], req.user);
   return { ok: true };
 }));
 
