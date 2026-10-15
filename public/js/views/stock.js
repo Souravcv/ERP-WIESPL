@@ -209,9 +209,9 @@ export async function stockEntryView(root) {
     recalc();
   }
 
-  async function save(allowNegative = false) {
+  async function save(allowNegative = false, allowReserved = false) {
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (type === 'INWARD' && !po && !String(header.po_no || '').trim()) throw new Error('Inward needs a purchase order: choose it under “Against PO” (or type its PO number)');
@@ -238,7 +238,13 @@ export async function stockEntryView(root) {
         const ok = await modal('Not enough stock', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
           h('p', may ? 'Save anyway? Stock will go negative for these items.' : 'Reduce the quantity, record the inward first, or ask someone allowed to issue more than the available stock.')),
           may ? [{ label: 'Cancel', value: false }, { label: 'Save anyway', cls: 'danger solid', value: true }] : [{ label: 'OK', value: false }]);
-        if (ok) return save(true);
+        if (ok) return save(true, allowReserved);
+        return;
+      }
+      if (/^Reserved for other projects/.test(e.message) && !allowReserved) {
+        const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
+          [{ label: 'Cancel', value: false }, { label: 'Issue anyway', cls: 'danger solid', value: true }]);
+        if (ok) return save(allowNegative, true);
         return;
       }
       throw e;

@@ -10,6 +10,7 @@ import { hasFunction, DEPARTMENTS } from '../public/js/schema.js';
 import { notify, notifyNew } from './notify.js';
 import { stockOf } from './stock.js';
 import { readBomWorkbook } from './dispatch.js';
+import { quoteTotals, lineQty } from '../public/js/calc.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
@@ -42,16 +43,68 @@ function bestList(line, all) {
 const woItems = boqId => db.prepare("SELECT * FROM boq_items WHERE boq_id = ? AND COALESCE(kind, 'Item') = 'Item' ORDER BY COALESCE(sort, id), id").all(Number(boqId))
   .filter(l => !(l.qty == null && /^[A-Z]{1,2}\.?$/i.test(String(l.sr_no || '').trim())));
 
+// Work order straight from the won quotation of a sales order: every BOQ line with its total quantity over the rooms
+// (areas from the Basis of Design), the quantity per room, and its catalog product (which picks the material list).
+export function workOrderFromSalesOrder(soId, user) {
+  const so = getRow('sales_orders', soId);
+  if (!so.quotation_id) throw new HttpError(400, 'This sales order has no quotation. Upload the client work order Excel instead (Work Orders → + New).');
+  const done = db.prepare('SELECT id, boq_no FROM boqs WHERE sales_order_id = ?').get(so.id);
+  if (done) throw new HttpError(409, `Work order ${done.boq_no} was already made from this sales order`);
+  const q = getRow('quotations', so.quotation_id);
+  const data = parse(q.data, {});
+  const rooms = data.rooms || [];
+  const totals = quoteTotals(data, q.gst_rate, q.discount_pct).lineTotals;
+  const project = db.prepare('SELECT id FROM projects WHERE sales_order_id = ? ORDER BY id LIMIT 1').get(so.id);
+  const section = 'MOT';
+  return tx(() => {
+    const wo = insertRow('boqs', {
+      title: `${so.customer_id_label || 'Client'} – ${q.quote_no}`, project_id: project?.id || null, customer_id: so.customer_id, sales_order_id: so.id,
+      wo_no: so.client_po_no || null, status: 'Open', remarks: `Made from quotation ${q.quote_no} (sales order ${so.so_no}). Optional items are not included.`,
+    }, user, { system: true });
+    let sort = 0, sr = 0, items = 0;
+    let heading = null;
+    for (const l of data.lines || []) {
+      if (l.kind === 'heading') {
+        heading = l.name || firstLine(l.description);
+        insertRow('boq_items', { boq_id: wo.id, project_id: wo.project_id, section, kind: 'Heading', description: l.name || l.description || 'Heading', sort: ++sort }, user, { system: true });
+        continue;
+      }
+      const qty = totals[l.id]?.qty || 0;
+      if (!(qty > 0)) continue;
+      const perRoom = rooms.map(r => [r.name, lineQty(l, r)]).filter(([, v]) => v > 0);
+      const desc = l.name && l.description && !String(l.description).startsWith(l.name) ? `${l.name}\n${l.description}` : (l.description || l.name || '');
+      insertRow('boq_items', {
+        boq_id: wo.id, project_id: wo.project_id, section, sr_no: String(++sr), kind: 'Item', heading: l.sub ? heading : null, description: desc, uom: l.uom || null,
+        qty: r3(qty), area_qty: perRoom.length > 1 ? perRoom.map(([n, v]) => `${n}: ${r3(v)}`).join(', ') : null, product_id: l.product_id || null, sort: ++sort,
+      }, user, { system: true });
+      items++;
+    }
+    if (!items) throw new HttpError(400, `Quotation ${q.quote_no} has no lines with a quantity`);
+    audit(user.name, 'boqs', wo.id, 'from quotation', `${q.quote_no}: ${items} line(s)`);
+    const out = getRow('boqs', wo.id);
+    notifyNew('boqs', out, user);
+    return { boq: out, lines: items };
+  });
+}
+
+// List for a work-order line: the one chosen on the line, else the list of its catalog product, else by match words.
+function suggest(line, all) {
+  const chosen = line.material_list_id && all.find(l => l.id === line.material_list_id);
+  if (chosen) return { list: chosen, how: 'chosen' };
+  const prod = line.product_id && all.find(l => l.product_id === line.product_id);
+  if (prod) return { list: prod, how: 'product' };
+  const words = bestList(line, all);
+  return { list: words, how: words ? 'matched' : 'none' };
+}
+
 // Preview for the "Generate BOQ" window: every work-order line with its chosen or suggested list.
 export function matchPreview(boqId) {
   const wo = getRow('boqs', boqId);
   const all = lists();
-  const byId = new Map(all.map(l => [l.id, l]));
   const rows = woItems(boqId).map(line => {
-    const chosen = line.material_list_id && byId.get(line.material_list_id);
-    const sug = chosen || bestList(line, all);
+    const { list: sug, how } = suggest(line, all);
     return { id: line.id, section: line.section, sr_no: line.sr_no, description: firstLine(line.description), uom: line.uom, qty: line.qty,
-      list_id: sug?.id || null, list_label: sug ? `${sug.code ? sug.code + ' · ' : ''}${sug.name}` : null, how: chosen ? 'chosen' : sug ? 'matched' : 'none',
+      list_id: sug?.id || null, list_label: sug ? `${sug.code ? sug.code + ' · ' : ''}${sug.name}` : null, how,
       components: sug ? sug.lines.length : 0 };
   });
   const existing = db.prepare('SELECT id, bom_no, status FROM boms WHERE work_order_id = ? ORDER BY id').all(wo.id);
@@ -101,7 +154,7 @@ export function generateBom(boqId, body = {}, user) {
       });
     };
     for (const line of lines) {
-      const picked = line.id in choice ? choice[line.id] : (line.material_list_id || bestList(line, all)?.id || null);
+      const picked = line.id in choice ? choice[line.id] : (suggest(line, all).list?.id || null);
       const list = picked ? byId.get(Number(picked)) : null;
       if (Number(picked || 0) !== Number(line.material_list_id || 0)) db.prepare('UPDATE boq_items SET material_list_id = ? WHERE id = ?').run(list?.id || null, line.id);
       const ref = `WO ${line.sr_no || ''}${line.qty == null ? ' (qty TBD)' : ''}`.trim();
@@ -266,7 +319,37 @@ function allocate() {
     pool.set(l.item_id, r3(pool.get(l.item_id) - alloc));
     res.set(l.id, r3(l.own + alloc));
   }
-  return { reserved: res, free: pool };
+  return { reserved: res, free: pool, lines };
+}
+
+// Store issue check: would this take stock reserved for ANOTHER project's Final BOQ?
+// `lines` = [{ item_id, qty }]; the issuing project's / BOQ's own reservation counts as available to it.
+// Returns a message (or null). Plain "not enough stock" is left to the normal stock check.
+export function reservedConflicts(lines, { projectId = null, bomId = null } = {}) {
+  const need = {};
+  for (const l of lines || []) if (l.item_id && Number(l.qty) > 0) need[l.item_id] = (need[l.item_id] || 0) + Number(l.qty);
+  if (!Object.keys(need).length) return null;
+  const a = allocate();
+  const out = [];
+  for (const [id, qty] of Object.entries(need)) {
+    const itemId = Number(id);
+    const stock = stockOf(itemId);
+    if (qty > stock + 1e-9) continue;
+    const others = new Map();
+    for (const l of a.lines.filter(x => x.item_id === itemId)) {
+      const q = a.reserved.get(l.id) || 0;
+      const b = db.prepare('SELECT id, bom_no, client, project_id FROM boms WHERE id = ?').get(l.bom.id);
+      if (!(q > 0) || b.id === Number(bomId) || (projectId && b.project_id === Number(projectId))) continue;
+      const k = b.id;
+      others.set(k, { label: `${b.bom_no}${b.client ? ' (' + b.client + ')' : ''}`, qty: r3((others.get(k)?.qty || 0) + q) });
+    }
+    const reserved = [...others.values()].reduce((s, o) => s + o.qty, 0);
+    if (qty > stock - reserved + 1e-9) {
+      const it = db.prepare('SELECT code, name, uom FROM items WHERE id = ?').get(itemId);
+      out.push(`${it?.code || ''} ${it?.name || itemId}: issuing ${qty}, in stock ${r3(stock)}, reserved for ${[...others.values()].map(o => `${o.label} ${o.qty}`).join(', ')} → free ${r3(Math.max(0, stock - reserved))}`);
+    }
+  }
+  return out.length ? `Reserved for other projects:\n${out.join('\n')}\n\nIssuing this takes material those Final BOQs are counting on; their store check will show it as short again.` : null;
 }
 
 // Free (unreserved) stock of an item.
@@ -309,7 +392,7 @@ export function stockCheck(bomId) {
       item_id: r.item_id, item_label: r.item_id_label, in_store: r.in_store ?? null, free_stock: freeNow, dispatched: r.dispatched || 0,
       still_needed: still, reserved, shortage, on_order: onOrder, to_requisition: toReq, lead_days: r.item_id ? days : null, order_by: orderBy,
       late: !!(orderBy && toReq > 0 && orderBy < t),
-      in_house: inHouse,
+      in_house: inHouse, po_open: r3(Math.max(0, (r.on_po || 0) - (r.received || 0))),
       state: still <= 0 ? 'Sent' : shortage <= 0 ? (active ? 'Reserved' : 'In stock') : inHouse ? 'Make in-house' : toReq <= 0 ? 'On order' : r.item_id ? 'Short' : 'Short (no store item)',
     };
   }).filter(r => (r.qty || 0) > 0);
@@ -323,10 +406,23 @@ export function stockCheck(bomId) {
 }
 
 // Draft requisition for everything still to requisition (store checks it and submits it to the Purchase Head).
-export function requisitionShortage(bomId, user, { auto = false } = {}) {
+// Automatic requisitions remember the shortage they were raised for (setting boq_auto_req: component id → qty), so a
+// shortage the store closed or rejected is not raised again every day — only when it changes.
+const autoSeen = () => { const v = db.prepare("SELECT value FROM settings WHERE key = 'boq_auto_req'").get()?.value; return parse(v, {}) || {}; };
+const saveSeen = s => db.prepare("INSERT INTO settings (key, value) VALUES ('boq_auto_req', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(s));
+
+export function requisitionShortage(bomId, user, { auto = false, why = 'final' } = {}) {
   const bom = getRow('boms', bomId);
   const check = stockCheck(bomId);
-  const need = check.rows.filter(r => r.to_requisition > 0);
+  let need = check.rows.filter(r => r.to_requisition > 0);
+  if (auto) {
+    const seen = autoSeen();
+    // Forget a component only when it is no longer short at all (not merely because its requisition is still open).
+    for (const r of check.rows) if (!(r.shortage > 0)) delete seen[r.id];
+    need = need.filter(r => Math.abs((seen[r.id] ?? -1) - r.to_requisition) > 1e-9);
+    for (const r of need) seen[r.id] = r.to_requisition;
+    saveSeen(seen);
+  }
   if (!need.length) return { requisition: null, check };
   const fmt = d => d ? d.split('-').reverse().join('-') : '';
   const lines = need.map(r => ({
@@ -337,8 +433,9 @@ export function requisitionShortage(bomId, user, { auto = false } = {}) {
   const req = insertRow('requisitions', {
     project_id: bom.project_id, bom_id: bom.id, required_by: bom.required_by || null, department: 'Store', status: 'Draft',
     requested_by: auto ? `Auto – ${bom.bom_no}` : user.name, lines,
-    remarks: auto ? `Raised automatically when ${bom.bom_no} was made Final: material not in free store stock and not already on a requisition / PO. Store: check the quantities and Submit.`
-      : `Shortage of ${bom.bom_no} after store check.`,
+    remarks: !auto ? `Shortage of ${bom.bom_no} after store check.`
+      : why === 'daily' ? `Raised automatically by the daily store check: ${bom.bom_no} is short again (stock used elsewhere, or a requisition / PO was cancelled). Store: check the quantities and Submit.`
+      : `Raised automatically when ${bom.bom_no} was made Final: material not in free store stock and not already on a requisition / PO. Store: check the quantities and Submit.`,
   }, user, { system: true });
   audit(user.name, 'boms', bom.id, 'requisition', `${req.req_no}: ${lines.length} material(s)${auto ? ' (auto)' : ''}`);
   return { requisition: req, check: stockCheck(bomId) };
@@ -353,6 +450,43 @@ export function storeOverview() {
     return { id: bom.id, bom_no: bom.bom_no, client: bom.client, project: bom.project_id_label, required_by: bom.required_by, status: bom.status, finalized_at: bom.finalized_at,
       ...c.summary, todo: c.rows.filter(r => r.to_requisition > 0 || r.late) };
   });
+}
+
+// ---------------------------------------------------------------- daily store check (runs once a day after 7 am)
+// For every Final BOQ: raise a Draft requisition for any NEW shortage, and remind the store about material that has to
+// be ordered within 3 days (or is late) and is not on a PO yet.
+const SYSTEM = { name: 'System (daily store check)', role: 'admin' };
+export function dailyCheck() {
+  const t = today();
+  const soon = (() => { const d = new Date(t + 'T00:00:00'); d.setDate(d.getDate() + 3); return d.toLocaleString('sv-SE').slice(0, 10); })();
+  const ids = db.prepare(`SELECT id FROM boms WHERE status IN (${ACTIVE.map(() => '?').join(',')}) AND finalized_at IS NOT NULL ORDER BY id`).all(...ACTIVE).map(b => b.id);
+  let reqs = 0, reminders = 0;
+  for (const id of ids) {
+    const bom = getRow('boms', id);
+    const r = tx(() => requisitionShortage(id, SYSTEM, { auto: true, why: 'daily' }));
+    if (r.requisition) {
+      reqs++;
+      notify({ fn: 'notify_store_check', kind: 'boms', title: `New shortage in ${bom.bom_no}: requisition ${r.requisition.req_no} (Draft)`,
+        body: `${bom.client || ''} · ${r.requisition.lines.length} material(s) · daily store check`, link: `#/view/requisitions/${r.requisition.id}` }, SYSTEM);
+    }
+    const due = r.check.rows.filter(x => x.shortage > 0 && !x.in_house && x.order_by && x.order_by <= soon && x.shortage - x.po_open > 1e-9);
+    if (due.length) {
+      reminders++;
+      const late = due.filter(x => x.order_by < t).length;
+      notify({ fn: 'notify_store_check', kind: 'boms', title: `${late ? '⚠ ' : ''}Order soon for ${bom.bom_no}: ${due.length} material(s) not on a PO`,
+        body: `${due.slice(0, 4).map(x => `${x.component} (by ${x.order_by.split('-').reverse().join('-')})`).join(', ')}${due.length > 4 ? ' …' : ''}${late ? ` · ${late} late` : ''}`, link: `#/bom/${id}` }, SYSTEM);
+    }
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('boq_daily_check', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(t));
+  if (ids.length) audit(SYSTEM.name, 'boms', null, 'daily check', `${ids.length} Final BOQ(s): ${reqs} new requisition(s), ${reminders} reminder(s)`);
+  return { boqs: ids.length, requisitions: reqs, reminders };
+}
+
+// Called every 30 minutes by the server: runs the daily check once per day, from 7 am.
+export function dailyTick() {
+  const last = parse(db.prepare("SELECT value FROM settings WHERE key = 'boq_daily_check'").get()?.value, null);
+  if (last === today() || new Date().getHours() < 7) return null;
+  try { return dailyCheck(); } catch (e) { console.error('daily store check failed:', e); return null; }
 }
 
 // ---------------------------------------------------------------- Standard Material Lists from an engineers' BOQ Excel

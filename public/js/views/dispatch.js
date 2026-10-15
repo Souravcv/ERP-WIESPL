@@ -1,6 +1,6 @@
 // Work order window: upload the client's work order, see each section's material, what is sent and what is pending,
 // and dispatch (the delivery challan is created automatically).
-import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache } from '../ui.js';
+import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, reservedRetry } from '../ui.js';
 import { canWrite } from '../schema.js';
 import { itemPicker, attachments } from './form.js';
 
@@ -60,11 +60,11 @@ async function generateBomDialog(boqId) {
     p.existing.length ? h('p', { style: { color: 'var(--warn)' } }, `This work order already has: ${p.existing.map(b => `${b.bom_no} (${b.status})`).join(', ')}. A new BOQ is created next to it.`) : null,
     p.lists.length ? null : h('p', { style: { color: 'var(--warn)' } }, 'There are no Standard Material Lists yet (Sales & Projects → 🧩 Standard Material Lists). Every line is copied for design to detail.'),
     h('div.form-grid', h('label', 'Client / site (BOQ title)', client), h('label', 'Material required by', reqBy)),
-    h('div', count, h('span.muted', ' · ✔ matched automatically by the list’s match words; change any line here (the choice is remembered on the work order).')),
+    h('div', count, h('span.muted', ' · ✔ product = the list linked to the quotation’s catalog product; ✔ words = found by the list’s match words. Change any line here (the choice is remembered on the work order).')),
     h('div.table-wrap', { style: { maxHeight: '50vh' } }, h('table.data', h('thead', h('tr', ['Section', 'Sr', 'Work-order line', 'Qty', 'Standard material list', ''].map(x => h('th', x)))),
       h('tbody', p.rows.map(r => h('tr', h('td.muted', r.section || ''), h('td', r.sr_no || ''), h('td', { style: { maxWidth: '360px' } }, r.description),
         h('td.num.nowrap', r.qty == null ? h('span.muted', 'TBD') : `${r.qty} ${r.uom || ''}`), h('td', listSel(r)),
-        h('td.muted', { title: r.how }, r.how === 'matched' ? '✔ auto' : r.how === 'chosen' ? 'saved' : ''))))))),
+        h('td.muted', { title: r.how }, r.how === 'product' ? '✔ product' : r.how === 'matched' ? '✔ words' : r.how === 'chosen' ? 'saved' : ''))))))),
   [{ label: 'Cancel', value: false }, { label: '⚙️ Generate BOQ', cls: 'primary', value: true }], { wide: true });
   if (!ok) return;
   const r = await api(`/boqs/${boqId}/generate-bom`, { method: 'POST', body: { client: client.value, required_by: reqBy.value || null, mapping: Object.fromEntries(choice) } });
@@ -191,12 +191,14 @@ export async function boqView(root, boqId) {
     if (!ok) return;
     const body = { picks: [...picks].map(([boq_item_id, p]) => ({ boq_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), vendor_id: vendorId };
     let r;
-    try { r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body }); }
-    catch (e) {
+    try {
+      r = await reservedRetry(extra => api(`/boqs/${boqId}/dispatch`, { method: 'POST', body: { ...body, ...extra } }));
+      if (r === null) return;
+    } catch (e) {
       if (!/Not enough stock|More than the work order/.test(e.message)) throw e;
       const again = await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]);
       if (!again) return;
-      r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true } });
+      r = await api(`/boqs/${boqId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true, allowReserved: true } });
     }
     await modal('Dispatched', h('p', `Challan ${r.challan.challan_no} created and marked Dispatched${r.stock_lines ? `; ${r.stock_lines} store item(s) issued from stock` : ''}. The BOQ now shows this material as sent.`),
       [{ label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return true; } }, { label: 'OK', cls: 'primary', value: true }]);

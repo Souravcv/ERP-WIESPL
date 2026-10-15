@@ -1,4 +1,4 @@
-import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
 import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
 import { linesTotals, inr, round2 } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
@@ -365,6 +365,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'sales_orders':
       if (row.quotation_id) A.push(h('a.btn', { href: `#/quotation/${row.quotation_id}` }, 'Quotation'));
       if (can('projects')) A.push(h('button.btn', { onclick: go(() => post(`/sales_orders/${id}/project`), p => (location.hash = `#/view/projects/${p.id}`)) }, '🏗️ Create Project'));
+      if (row.quotation_id && can('boqs')) A.push(h('button.btn', { title: 'Work order with every quotation line and quantity; then ⚙️ Generate BOQ', onclick: go(() => post(`/sales_orders/${id}/work-order`), r => { toast(`Work order ${r.boq.boq_no}: ${r.lines} line(s) from the quotation`); location.hash = `#/boq/${r.boq.id}`; }) }, '📂 Create Work Order'));
       if (can('invoices')) A.push(h('button.btn.primary', { onclick: go(async () => {
         const pct = h('input', { type: 'number', value: 50, min: 1, max: 100 });
         const type = h('select', h('option', 'Proforma Invoice'), h('option', 'Tax Invoice'));
@@ -391,11 +392,11 @@ function actionsFor(entity, row, reload, ctx = {}) {
         const stockLines = (row.lines || []).filter(l => l.item_id).length;
         if (!(await confirmBox(`Dispatch ${row.challan_no}? The material is marked as sent against the work order${stockLines ? ` and ${stockLines} store item(s) are issued from stock` : ''}. The challan cannot be edited afterwards.`, 'Dispatch'))) return;
         try {
-          await post(`/challans/${id}/dispatch`, {});
+          if ((await reservedRetry(b => post(`/challans/${id}/dispatch`, b))) === null) return;
         } catch (e) {
           if (!/Not enough stock|More than the work order/.test(e.message) || !hasFunction(state.user.role, 'allow_negative')) throw e;
           if (!(await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]))) return;
-          await post(`/challans/${id}/dispatch`, { allowNegative: true, force: true });
+          await post(`/challans/${id}/dispatch`, { allowNegative: true, force: true, allowReserved: true });
         }
         toast('Dispatched');
         reload();

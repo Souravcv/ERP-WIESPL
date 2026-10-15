@@ -1,0 +1,83 @@
+// "My tasks": everything waiting for this person, from their role's permissions — BOQ sections to review, BOQs to make
+// Final, changes asked of them, requisitions to check, approvals, material to order, follow-ups, work orders without a BOQ.
+import { db } from './db.js';
+import { canWrite, canView, hasFunction } from '../public/js/schema.js';
+import { canApprove } from './workflows.js';
+import { reviewsOf, storeOverview } from './boqflow.js';
+
+const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
+const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
+const fmt = d => (d ? d.split('-').reverse().join('-') : '');
+
+export function myTasks(user) {
+  const role = user.role, t = today(), soon = addDays(t, 7);
+  const groups = [];
+  const group = (key, icon, title, items) => { if (items.length) groups.push({ key, icon, title, items }); };
+
+  // BOQ design review / Final / changes asked
+  if (canView('boms', role)) {
+    const inReview = db.prepare("SELECT id, bom_no, client, reviews, prepared_by FROM boms WHERE status = 'Design Review' ORDER BY COALESCE(required_by, '9999'), id").all();
+    const review = [], final = [], changes = [];
+    for (const b of inReview) {
+      const rv = reviewsOf(b);
+      const open = Object.entries(rv).filter(([, r]) => r.status !== 'Reviewed');
+      if (hasFunction(role, 'boq_review')) for (const [d, r] of open) {
+        review.push({ title: `Review the ${d} section of ${b.bom_no}`, sub: [b.client, r.note, r.status === 'Changes needed' ? 'changes were asked: check again' : null].filter(Boolean).join(' · '), link: `#/bom/${b.id}` });
+      }
+      if (!open.length && hasFunction(role, 'boq_final')) final.push({ title: `Make ${b.bom_no} Final`, sub: `${b.client || ''} · every department has reviewed it`, link: `#/bom/${b.id}` });
+      if (b.prepared_by === user.name) for (const [d, r] of Object.entries(rv).filter(([, r]) => r.status === 'Changes needed')) {
+        changes.push({ title: `Change the ${d} section of ${b.bom_no}`, sub: `${r.by || ''}: ${r.comments || ''}`, link: `#/bom/${b.id}`, late: true });
+      }
+    }
+    group('changes', '✎', 'Changes asked of you', changes);
+    group('review', '🔍', 'BOQ sections to review', review);
+    group('final', '🔒', 'BOQs ready to make Final', final);
+  }
+
+  // Work orders that have no BOQ yet
+  if (canWrite('boms', role)) {
+    group('wo', '📂', 'Work orders without a BOQ', db.prepare(`SELECT w.id, w.boq_no, w.title, w.date FROM boqs w
+      WHERE w.status = 'Open' AND NOT EXISTS (SELECT 1 FROM boms b WHERE b.work_order_id = w.id)
+        AND EXISTS (SELECT 1 FROM boq_items i WHERE i.boq_id = w.id AND COALESCE(i.kind, 'Item') = 'Item') ORDER BY w.id DESC LIMIT 30`).all()
+      .map(w => ({ title: `Generate the BOQ for ${w.boq_no}`, sub: `${w.title} · since ${fmt(w.date)}`, link: `#/boq/${w.id}` })));
+  }
+
+  // Requisitions to check and submit (automatic ones for the store, and your own drafts)
+  if (canWrite('requisitions', role)) {
+    const store = hasFunction(role, 'notify_store_check');
+    group('req', '📝', 'Requisitions to check and submit', db.prepare(`SELECT id, req_no, project_name, requested_by, required_by, created_by, lines FROM requisitions
+      WHERE status = 'Draft' AND (created_by = ? OR (? AND requested_by LIKE 'Auto –%')) ORDER BY COALESCE(required_by, '9999'), id`).all(user.name, store ? 1 : 0)
+      .map(r => ({ title: `${r.req_no}${String(r.requested_by || '').startsWith('Auto') ? ' (automatic)' : ''}: check and Submit`,
+        sub: [r.project_name, `${JSON.parse(r.lines || '[]').length} material(s)`, r.required_by && `required by ${fmt(r.required_by)}`].filter(Boolean).join(' · '),
+        link: `#/view/requisitions/${r.id}`, due: r.required_by })));
+  }
+
+  // Approvals this person may give
+  const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id").all()
+    .filter(a => canApprove(a.doc_type, a.stage, user));
+  group('approve', '✅', 'Approvals waiting for you', aps.map(a => ({ title: `${a.doc_type} ${a.doc_ref || ''} – ${a.stage || 'approval'}`, sub: `${a.title || ''} · by ${a.requested_by} ${a.requested_at || ''}`, link: `#/view/approvals/${a.id}` })));
+
+  // Material to order (order-by date within a week or past) for Final BOQs
+  if (hasFunction(role, 'notify_store_check') || hasFunction(role, 'approve_requisition')) {
+    const due = [];
+    for (const b of storeOverview()) for (const r of b.todo) {
+      if (!(r.to_requisition > 0) && !r.late) continue;
+      if (r.order_by && r.order_by > soon && !r.late) continue;
+      due.push({ title: `Order ${r.to_requisition || r.shortage} ${r.uom || ''} ${r.component}${r.dimensions ? ' ' + r.dimensions : ''}`, sub: `${b.bom_no} ${b.client || ''}${r.order_by ? ` · order by ${fmt(r.order_by)}` : ''}`,
+        link: `#/bom/${b.id}`, due: r.order_by, late: r.late });
+    }
+    due.sort((a, b) => String(a.due || '9999').localeCompare(String(b.due || '9999')));
+    group('order', '📦', 'Material to order this week', due.slice(0, 50));
+  }
+
+  // Follow-ups due
+  if (canView('enquiries', role)) {
+    group('follow', '📞', 'Follow-ups due', db.prepare(`SELECT 'e' k, id, enquiry_no ref, COALESCE(hospital_name, doctor_name, place) who, next_followup due FROM enquiries
+        WHERE next_followup IS NOT NULL AND next_followup <= ? AND enquiry_by = ? AND status NOT IN ('Won', 'Lost', 'Regret', 'Closed')
+      UNION ALL SELECT 'f', f.id, e.enquiry_no, f.notes, f.next_date FROM followups f LEFT JOIN enquiries e ON e.id = f.enquiry_id
+        WHERE f.status = 'Open' AND f.next_date IS NOT NULL AND f.next_date <= ? AND f.assigned_to = ? ORDER BY due LIMIT 40`).all(t, user.name, t, user.name)
+      .map(r => ({ title: `Follow up ${r.ref || ''} ${String(r.who || '').slice(0, 60)}`, sub: `due ${fmt(r.due)}`, link: r.k === 'e' ? `#/view/enquiries/${r.id}` : `#/view/followups/${r.id}`, due: r.due, late: r.due < t })));
+  }
+
+  return { count: groups.reduce((s, g) => s + g.items.length, 0), groups };
+}

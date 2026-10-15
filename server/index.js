@@ -21,6 +21,7 @@ import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
 import * as flow from './boqflow.js';
+import { myTasks } from './tasks.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
 import * as roles from './roles.js';
@@ -233,7 +234,17 @@ api.post('/boqs/:id/import', need('boqs'), express.raw({ type: () => true, limit
   roles.saveAttachment('boqs', req.params.id, { filename: req.query.name || 'Work order.xlsx', mime: req.headers['x-file-type'], note: 'Work order (imported)' }, req.body, req.user);
   return r;
 }));
-api.post('/boqs/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBoq(req.params.id, req.body, req.user)));
+// Issuing stock reserved for another project's Final BOQ needs a confirmation (allowReserved).
+function reservedCheck(body, lines, ctx) {
+  if (body?.allowReserved) return;
+  const msg = flow.reservedConflicts(lines, ctx);
+  if (msg) throw Object.assign(new HttpError(409, msg), { code: 'RESERVED' });
+}
+const projectOf = (table, id) => (id ? db.prepare(`SELECT project_id FROM ${table} WHERE id = ?`).get(Number(id))?.project_id : null) || null;
+api.post('/boqs/:id/dispatch', need('challans'), wrap(req => {
+  reservedCheck(req.body, req.body?.picks, { projectId: projectOf('boqs', req.params.id) });
+  return dispatch.dispatchFromBoq(req.params.id, req.body, req.user);
+}));
 api.post('/boms/upload', need('boms'), express.raw({ type: () => true, limit: '60mb' }), wrap(async req => {
   const r = await dispatch.createBomFromFile({ client: req.query.client, project_id: req.query.project_id, work_order_id: req.query.work_order_id, filename: req.query.name, mime: req.headers['x-file-type'] }, req.body, req.user);
   notify.notifyNew('boms', r.bom, req.user);
@@ -246,8 +257,15 @@ api.post('/boms/:id/import', need('boms'), express.raw({ type: () => true, limit
   roles.saveAttachment('boms', req.params.id, { filename: req.query.name || 'Bill of material.xlsx', mime: req.headers['x-file-type'], note: 'Bill of material (imported)' }, req.body, req.user);
   return r;
 }));
-api.post('/boms/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchFromBom(req.params.id, req.body, req.user)));
-api.post('/challans/:id/dispatch', need('challans'), wrap(req => dispatch.dispatchChallan(req.params.id, req.body, req.user)));
+api.post('/boms/:id/dispatch', need('challans'), wrap(req => {
+  reservedCheck(req.body, req.body?.picks, { projectId: projectOf('boms', req.params.id), bomId: req.params.id });
+  return dispatch.dispatchFromBom(req.params.id, req.body, req.user);
+}));
+api.post('/challans/:id/dispatch', need('challans'), wrap(req => {
+  const c = db.prepare('SELECT project_id, bom_id, lines FROM challans WHERE id = ?').get(Number(req.params.id));
+  if (c) { let lines = []; try { lines = JSON.parse(c.lines || '[]'); } catch { /* none */ } reservedCheck(req.body, lines, { projectId: c.project_id, bomId: c.bom_id }); }
+  return dispatch.dispatchChallan(req.params.id, req.body, req.user);
+}));
 
 // ---------------------------------------------------------------- work order → BOQ → design review → Final → store check
 // Components of a Final BOQ are locked; during design review only reviewers may change them.
@@ -257,6 +275,8 @@ function bomEditable(bomId, user) {
   if (flow.isLocked(bom)) throw new HttpError(409, `${bom.bom_no} is Final and locked. Use “Reopen” (BOQ – make Final permission) to change it.`);
   if (bom.status === 'Design Review' && !hasFunction(user.role, 'boq_review')) throw new HttpError(403, `${bom.bom_no} is in design review; only reviewers can change its components`);
 }
+api.get('/my-tasks', wrap(req => myTasks(req.user)));
+api.post('/sales_orders/:id/work-order', need('boqs'), wrap(req => flow.workOrderFromSalesOrder(req.params.id, req.user)));
 api.get('/boqs/:id/bom-preview', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.matchPreview(req.params.id); }));
 api.post('/boqs/:id/generate-bom', need('boms'), wrap(req => flow.generateBom(req.params.id, req.body, req.user)));
 api.post('/boms/:id/copy-from', need('boms'), wrap(req => { bomEditable(req.params.id, req.user); return flow.copyFromBom(req.params.id, req.body, req.user); }));
@@ -281,6 +301,9 @@ api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliver
 // ---------------------------------------------------------------- store
 api.post('/stock/entry', need('stock_moves'), wrap(req => {
   const body = { ...req.body, allowWithoutPo: false, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
+  if (['OUTWARD', 'TRANSFER', 'SCRAP'].includes(body.type)) {
+    reservedCheck(body, body.lines, { projectId: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id), bomId: body.bom_id });
+  }
   // Outward against a BOQ: the delivery challan is created automatically with the issue.
   const challanOk = () => { if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans'); };
   if (body.type === 'OUTWARD' && (body.boq_id || body.bom_id)) {
@@ -515,6 +538,10 @@ app.use((err, req, res, next) => {
   if (status >= 500) console.error(err);
   res.status(status).json({ error: status >= 500 ? 'Server error: ' + err.message : err.message });
 });
+
+// Daily store check of Final BOQs (new shortages → Draft requisition, order-by reminders); checked every 30 minutes.
+setTimeout(() => flow.dailyTick(), 60 * 1000);
+setInterval(() => flow.dailyTick(), 30 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);

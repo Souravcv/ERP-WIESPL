@@ -84,6 +84,16 @@ export function modal(title, body, buttons = [], { wide = false } = {}) {
     back.querySelector('input, select, textarea')?.focus();
   });
 }
+// Run a stock issue / dispatch; if it would take stock reserved for another project's Final BOQ, show which and
+// let the user issue anyway (sent again with allowReserved). Returns null when cancelled.
+export async function reservedRetry(call, body = {}) {
+  try { return await call(body); } catch (e) {
+    if (!/^Reserved for other projects/.test(e.message) || body.allowReserved) throw e;
+    const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
+      [{ label: 'Cancel', value: false }, { label: 'Issue anyway', cls: 'danger solid', value: true }]);
+    return ok ? reservedRetry(call, { ...body, allowReserved: true }) : null;
+  }
+}
 export const confirmBox = (msg, label = 'Yes') =>
   modal('Please confirm', h('p', msg), [{ label: 'Cancel', value: false }, { label, cls: 'primary', value: true }]);
 

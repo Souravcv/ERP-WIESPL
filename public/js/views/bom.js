@@ -1,6 +1,6 @@
 // BOQ / Bill of Material window (WIESPL engineers' format): components by section, what is procured
 // (requisition → PO → GRN), what is sent to site and what is pending. Dispatch makes the challan automatically.
-import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy } from '../ui.js';
+import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy, reservedRetry } from '../ui.js';
 import { canWrite, hasFunction } from '../schema.js';
 import { itemPicker, attachments, bomRows, toProcure } from './form.js';
 
@@ -152,10 +152,13 @@ export async function bomView(root, bomId) {
     if (!ok) return;
     const body = { picks: [...picks].map(([bom_item_id, p]) => ({ bom_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), vendor_id: vendorId };
     let r;
-    try { r = await api(`/boms/${bomId}/dispatch`, { method: 'POST', body }); } catch (e) {
+    try {
+      r = await reservedRetry(extra => api(`/boms/${bomId}/dispatch`, { method: 'POST', body: { ...body, ...extra } }));
+      if (r === null) return;
+    } catch (e) {
       if (!/Not enough stock|More than the BOQ/.test(e.message)) throw e;
       if (!(await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]))) return;
-      r = await api(`/boms/${bomId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true } });
+      r = await api(`/boms/${bomId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true, allowReserved: true } });
     }
     await modal('Dispatched', h('p', `Challan ${r.challan.challan_no} created and marked Dispatched${r.stock_lines ? `; ${r.stock_lines} store item(s) issued from stock` : ''}. The BOQ now shows this material as sent.`),
       [{ label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return false; } },

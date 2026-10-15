@@ -10,6 +10,7 @@ import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.j
 import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
 import { storeCheckView } from './views/storecheck.js';
+import { tasksView, taskCount } from './views/tasks.js';
 
 const $ = id => document.getElementById(id);
 
@@ -28,10 +29,11 @@ const ADMIN_LINKS = [
   ['#/audit', '🕘', 'Activity Log', 'view_audit'],
 ];
 
+let tasksOpen = 0;
 function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null));
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
@@ -55,7 +57,8 @@ function highlightNav() {
 
 export async function refreshPending() {
   try {
-    const rows = await api('/approvals?status=Pending&limit=200');
+    const [rows, n] = await Promise.all([api('/approvals?status=Pending&limit=200'), taskCount()]);
+    tasksOpen = n;
     buildNav(rows.length);
   } catch { /* nav still usable */ }
 }
@@ -86,6 +89,7 @@ async function route() {
       case 'boq': await boqView(view, a); break;
       case 'bom': await bomView(view, a); break;
       case 'store-check': await storeCheckView(view); break;
+      case 'tasks': await tasksView(view); refreshPending(); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }
