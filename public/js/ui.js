@@ -73,7 +73,7 @@ export function modal(title, body, buttons = [], { wide = false } = {}) {
     const close = v => { back.remove(); resolve(v); };
     const back = h('div.modal-back', { onclick: e => e.target === back && close(null) },
       h('div.modal' + (wide ? '.wide' : ''), h('h2', title), body,
-        h('div.foot', buttons.map(b => h('button.btn' + (b.cls ? '.' + b.cls : ''), { type: 'button', onclick: async e => {
+        h('div.foot', buttons.map(b => h('button.btn' + (b.cls ? '.' + b.cls.trim().split(/\s+/).join('.') : ''), { type: 'button', onclick: async e => {
           if (!b.action) return close(b.value ?? null);
           const btn = e.currentTarget;
           if (btn.disabled) return;

@@ -38,7 +38,9 @@ function bestList(line, all) {
   return best;
 }
 
-const woItems = boqId => db.prepare("SELECT * FROM boq_items WHERE boq_id = ? AND COALESCE(kind, 'Item') = 'Item' ORDER BY COALESCE(sort, id), id").all(Number(boqId));
+// Material lines of a work order. A lettered line without a quantity ("A  Laminar Air Flow System …") is a heading, not material.
+const woItems = boqId => db.prepare("SELECT * FROM boq_items WHERE boq_id = ? AND COALESCE(kind, 'Item') = 'Item' ORDER BY COALESCE(sort, id), id").all(Number(boqId))
+  .filter(l => !(l.qty == null && /^[A-Z]{1,2}\.?$/i.test(String(l.sr_no || '').trim())));
 
 // Preview for the "Generate BOQ" window: every work-order line with its chosen or suggested list.
 export function matchPreview(boqId) {
