@@ -1,11 +1,13 @@
 // Excel import: templates, preview with duplicate/error detection, then commit.
 // Recognises the WIESPL Smart Store workbook, the vendor address list and the WIESPL PO format automatically.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import ExcelJS from 'exceljs';
-import { db, tx, bumpSeq, audit } from './db.js';
+import { db, tx, bumpSeq, audit, DATA_DIR } from './db.js';
 import { insertRow, updateRow, HttpError } from './crud.js';
 import { nextItemCode } from './hooks.js';
-import { GST_STATE_CODES, STATES, ITEM_CATEGORIES, UOMS, MOVE_TYPES } from '../public/js/schema.js';
+import { GST_STATE_CODES, STATES, ITEM_CATEGORIES, UOMS, MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
 import { fyOf, round2 } from '../public/js/calc.js';
 
 // ---------------------------------------------------------------- helpers
@@ -27,15 +29,24 @@ function cell(v) {
 }
 const str = v => { const c = cell(v); return c == null ? '' : c instanceof Date ? c.toISOString().slice(0, 10) : clean(c); };
 const num = v => { const c = cell(v); if (c == null || c === '') return null; const n = Number(String(c).replace(/,/g, '')); return Number.isFinite(n) ? n : null; };
+// Dates typed as text that do not exist (31-04-2026) become the last day of that month; counted for the preview.
+export const dateFixes = [];
+function realDate(y, m, d, raw) {
+  const Y = Number(y.length === 2 ? '20' + y : y), M = Number(m), D = Number(d);
+  if (!(M >= 1 && M <= 12 && D >= 1)) return null;
+  const last = new Date(Date.UTC(Y, M, 0)).getUTCDate();
+  if (D > last) { if (D <= 31) { dateFixes.push(raw); return `${Y}-${String(M).padStart(2, '0')}-${last}`; } return null; }
+  return `${Y}-${String(M).padStart(2, '0')}-${String(D).padStart(2, '0')}`;
+}
 function date(v) {
   const c = cell(v);
   if (c == null || c === '') return null;
   if (c instanceof Date) return new Date(c.getTime() + 12 * 3600e3).toISOString().slice(0, 10);
   if (typeof c === 'number' && c > 20000 && c < 80000) return new Date(Math.round((c - 25569) * 864e5)).toISOString().slice(0, 10);
   const m = String(c).trim().match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})$/);
-  if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+  if (m) return realDate(m[3], m[2], m[1], String(c).trim());
   const iso = String(c).match(/^(\d{4})-(\d{2})-(\d{2})/);
-  return iso ? iso[0] : null;
+  return iso ? realDate(iso[1], iso[2], iso[3], String(c).trim()) : null;
 }
 const gstPct = v => { const n = num(v); return n == null ? null : n > 0 && n < 1 ? round2(n * 100) : n; };
 const code = v => { const c = cell(v); if (c == null || c === '') return ''; return typeof c === 'number' ? String(Math.round(c)) : clean(c); };
@@ -215,6 +226,18 @@ function parseStoreWorkbook(wb, plan) {
     }
   }
 
+  // Item codes in this workbook, and its own closing stock (Stock Summary / FG Part Summary) to check the import against.
+  plan.sheetCodes = [...masterRef.keys()];
+  plan.closing = {};
+  for (const [sheet, codeCol] of [['Stock Summary', 'itemcode'], ['FG Part Summary', 'fgpartcode']]) {
+    const ws = wb.getWorksheet(sheet);
+    const h = ws && headerIndex(ws, [codeCol, 'closingstock']);
+    if (h) for (const [, row] of dataRows(ws, h.row + 1)) {
+      const c = code(pick(row, h.cols, codeCol)), q = num(pick(row, h.cols, 'closingstock'));
+      if (c && q != null && /^[\w-]+$/.test(c)) plan.closing[c] = q;
+    }
+  }
+
   const moveSheet = (name, must, build) => {
     const ws = wb.getWorksheet(name);
     if (!ws) return;
@@ -265,6 +288,62 @@ function parseStoreWorkbook(wb, plan) {
     return { type: 'INWARD', date: d, doc_no: str(g('mtnno')) ? `MTN ${str(g('mtnno'))}` : null, code: code(g('itemcode')), name: str(g('itemname')), category: 'Finished Goods',
       qty: num(g('qty')), uom: uom(g('uom')), rate: 0, supplier: 'Production (Finished Goods)', remarks: notes || null };
   });
+}
+
+// ---------------------------------------------------------------- Smart Store workbook = master of the store movements
+// Importing a newer copy REPLACES the movements of all earlier Smart Store imports (so a row corrected in Excel is
+// corrected in the CRM, a row deleted in Excel disappears), and items that are no longer in the workbook and not used
+// anywhere are removed. Entries made directly in the CRM (GRN against a PO, issues with challans …) are kept.
+const SMART = 'WIESPL Smart Store workbook';
+// Batch ids of earlier Smart Store imports (stored since this version; older ones derived from the import time).
+function smartBatches() {
+  const ids = new Set();
+  for (const b of db.prepare('SELECT at, batch FROM import_batches WHERE kind = ?').all(SMART)) {
+    if (b.batch) { ids.add(b.batch); continue; }
+    const t = new Date(String(b.at).replace(' ', 'T'));
+    for (const back of [0, 1, 2]) ids.add(`IMP-${new Date(t.getTime() - back * 60e3).toLocaleString('sv-SE').replace(/\D/g, '').slice(0, 12)}`);
+  }
+  return [...ids];
+}
+const inList = ids => ids.map(() => '?').join(',') || "''";
+// Is the item used outside the store movements being replaced?
+function itemUses(id, batches) {
+  const j = (table, extra = '') => db.prepare(`SELECT COUNT(*) n FROM ${table} p, json_each(p.lines) l WHERE CAST(json_extract(l.value, '$.item_id') AS INTEGER) = ? ${extra}`).get(id).n;
+  const uses = [];
+  const moves = db.prepare(`SELECT COUNT(*) n FROM stock_moves WHERE item_id = ? AND (import_batch IS NULL OR import_batch NOT IN (${inList(batches)}))`).get(id, ...batches).n;
+  if (moves) uses.push(`${moves} CRM stock entr${moves === 1 ? 'y' : 'ies'}`);
+  for (const [t, label] of [['purchase_orders', 'PO'], ['requisitions', 'requisition'], ['challans', 'challan'], ['material_lists', 'material list']]) if (j(t)) uses.push(label);
+  for (const [t, label] of [['bom_items', 'BOQ'], ['boq_items', 'work order']]) if (db.prepare(`SELECT 1 FROM ${t} WHERE item_id = ?`).get(id)) uses.push(label);
+  if (db.prepare('SELECT 1 FROM material_lists WHERE makes_item_id = ?').get(id)) uses.push('sub-assembly');
+  return uses;
+}
+function syncPreview(plan) {
+  const batches = smartBatches();
+  const replace = db.prepare(`SELECT COUNT(*) n FROM stock_moves WHERE import_batch IN (${inList(batches)})`).get(...batches).n;
+  const manual = db.prepare('SELECT COUNT(*) n FROM stock_moves WHERE import_batch IS NULL').get().n;
+  const other = db.prepare(`SELECT COUNT(*) n FROM stock_moves WHERE import_batch IS NOT NULL AND import_batch NOT IN (${inList(batches)})`).get(...batches).n;
+  const codes = new Set(plan.sheetCodes);
+  const gone = db.prepare('SELECT id, code, name FROM items').all().filter(i => !codes.has(String(i.code || '').trim()));
+  const removable = [], kept = [];
+  for (const i of gone) { const u = itemUses(i.id, batches); (u.length ? kept : removable).push({ id: i.id, label: `${i.code || ''} ${i.name}`.trim(), uses: u.join(', ') }); }
+  return { previous: batches.length > 0, replace, manual, other, removable, kept };
+}
+
+// After the import: CRM stock per item against the workbook's own closing stock (Stock Summary / FG Part Summary).
+function compareClosing(closing) {
+  const stockOf = db.prepare(`SELECT t.id, t.code, t.name, ${STOCK_SQL.replaceAll('{t}', 't')} AS stock FROM items t WHERE t.code = ?`);
+  let matched = 0;
+  const diffs = [];
+  for (const [c, sheet] of Object.entries(closing)) {
+    const it = stockOf.get(c);
+    if (!it) continue;
+    const crm = Math.round((it.stock || 0) * 1000) / 1000;
+    if (Math.abs(crm - sheet) < 0.001) matched++;
+    else diffs.push({ code: c, name: it.name, crm, sheet: Math.round(sheet * 1000) / 1000 });
+  }
+  diffs.sort((a, b) => Math.abs(b.crm - b.sheet) - Math.abs(a.crm - a.sheet));
+  const negative = db.prepare(`SELECT COUNT(*) n FROM (SELECT ${STOCK_SQL.replaceAll('{t}', 't')} s FROM items t) WHERE s < -0.0005`).get().n;
+  return { matched, different: diffs.length, list: diffs.slice(0, 40), negative };
 }
 
 // ---------------------------------------------------------------- format: vendor address list (Details / Details-1)
@@ -486,9 +565,12 @@ export async function preview(kind, buffer, user) {
   const names = wb.worksheets.map(w => w.name);
   let detected;
   const plan = newPlan(kind, hash);
+  dateFixes.length = 0;
   if (names.includes('Item Master') && (names.includes('Inward') || names.includes('Outward'))) {
     detected = 'WIESPL Smart Store workbook';
     parseStoreWorkbook(wb, plan);
+    plan.sync = syncPreview(plan);
+    plan.dateFixes = [...new Set(dateFixes)];
   } else if (wb.worksheets.some(ws => headerIndex(ws, ['companyaddress']) || headerIndex(ws, ['suppliername']))) {
     detected = 'Vendor address list';
     parseVendorWorkbook(wb, plan);
@@ -513,7 +595,8 @@ export async function preview(kind, buffer, user) {
   const view = op => ({ sheet: op.sheet, row: op.n, kind: op.kind, label: op.label, status: op.errors?.length ? 'error' : op.dupId ? 'duplicate' : 'new', errors: op.errors || [], auto: !!op.autoCreated });
   const errors = plan.ops.filter(o => o.errors?.length);
   return {
-    token, detected, warning: plan.warning || null, openingDate: plan.openingDate || null,
+    token, detected, warning: plan.warning || null, openingDate: plan.openingDate || null, dateFixes: plan.dateFixes || [],
+    sync: plan.sync ? { ...plan.sync, removable: plan.sync.removable.length, kept: plan.sync.kept.length, removableList: plan.sync.removable.slice(0, 60).map(r => r.label), keptList: plan.sync.kept.slice(0, 60).map(r => `${r.label} (${r.uses})`) } : null,
     sheets: Object.values(plan.sheets),
     counts: {
       total: plan.ops.length, new: plan.ops.filter(o => !o.errors?.length && !o.dupId).length, duplicate: plan.ops.filter(o => !o.errors?.length && o.dupId).length, error: errors.length,
@@ -525,15 +608,27 @@ export async function preview(kind, buffer, user) {
   };
 }
 
-export function commit(token, mode, user) {
+export function commit(token, mode, user, opts = {}) {
   const createMissing = false;
   const entry = plans.get(token);
   if (!entry) throw new HttpError(410, 'This preview has expired. Upload the file again.');
   if (!['skip', 'update', 'add'].includes(mode)) throw new HttpError(400, 'Choose skip, update or add for duplicates');
   const { plan } = entry;
+  // Smart Store workbook: replace earlier imports with this workbook (unless the user chose "only add new rows").
+  const sync = !!plan.sync && opts.sync !== false;
+  if (sync && opts.canSync === false) throw new HttpError(403, 'Replacing the store data from a workbook needs the "Import from Excel" permission');
+  if (sync) mode = 'update';
   const result = { created: 0, updated: 0, skipped: 0, errors: 0, moves: 0, noCode: 0 };
   const stamp = now();
-  const batch = `IMP-${stamp.replace(/\D/g, '').slice(0, 12)}`;
+  const batch = `IMP-${stamp.replace(/\D/g, '').slice(0, 12)}${sync ? '-S' : ''}`;
+  if (sync) {
+    // Safety copy of the whole database before anything is replaced.
+    const dir = path.join(DATA_DIR, 'backups', 'before-import');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `wiespl-${stamp.replace(/\D/g, '').slice(0, 14)}.db`);
+    db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`);
+    result.backup = file;
+  }
   const insMove = db.prepare(`INSERT INTO stock_moves (type, date, doc_no, item_id, qty, uom, rate, vendor_id, supplier, invoice_no, invoice_date, po_id, po_no, hsn, gst_rate,
     project_id, issued_to, from_location, to_location, against_issue_no, reason, purpose, remarks, import_batch, created_by, created_at)
     VALUES (@type, @date, @doc_no, @item_id, @qty, @uom, @rate, @vendor_id, @supplier, @invoice_no, @invoice_date, @po_id, @po_no, @hsn, @gst_rate,
@@ -552,6 +647,11 @@ export function commit(token, mode, user) {
   }
 
   tx(() => {
+    if (sync) {
+      const batches = smartBatches();
+      result.replaced = db.prepare(`DELETE FROM stock_moves WHERE import_batch IN (${inList(batches)})`).run(...batches).changes;
+      existing.clear(); // the workbook is loaded whole; CRM entries are not matched against it
+    }
     let nextCode = Number(nextItemCode());
     const takeCode = () => { while (db.prepare('SELECT 1 FROM items WHERE code = ?').get(String(nextCode))) nextCode++; return String(nextCode++); };
     const failed = [];
@@ -601,7 +701,7 @@ export function commit(token, mode, user) {
         const d = { ...op.data, item_id: itemId };
         // Row-level duplicate check, so a newer copy of the same workbook only adds the new rows.
         const key = moveKey(d);
-        if (mode !== 'add' && (existing.get(key) || 0) > 0) { existing.set(key, existing.get(key) - 1); result.skipped++; return; }
+        if (!sync && mode !== 'add' && (existing.get(key) || 0) > 0) { existing.set(key, existing.get(key) - 1); result.skipped++; return; }
         if (!d.uom) d.uom = itemUom.get(itemId)?.uom || null;
         const row = Object.fromEntries(MOVE_COLS.map(k => [k, d[k] ?? null]));
         insMove.run({ ...row, batch, user: user.name, at: stamp });
@@ -615,11 +715,23 @@ export function commit(token, mode, user) {
       const m = String(op.data.po_no).match(/^(\d+)\s*\/\s*20(\d{2})-(\d{2})$/);
       if (m) bumpSeq('po', `${m[2]}-${m[3]}`, Number(m[1]));
     }
-    db.prepare('INSERT INTO import_batches (user, kind, file_hash, summary) VALUES (?, ?, ?, ?)').run(user.name, plan.detected, plan.hash, JSON.stringify(result));
+    // Items no longer in the workbook and not used anywhere in the CRM are removed.
+    if (sync && opts.removeItems !== false) {
+      const removed = [];
+      for (const it of plan.sync.removable) {
+        if (itemUses(it.id, []).length || db.prepare('SELECT 1 FROM stock_moves WHERE item_id = ?').get(it.id)) continue;
+        db.prepare('DELETE FROM items WHERE id = ?').run(it.id);
+        removed.push(it.label);
+      }
+      result.itemsRemoved = removed.length;
+      if (removed.length) audit(user.name, 'items', null, 'delete (not in Smart Store workbook)', removed.join(', '));
+    }
+    db.prepare('INSERT INTO import_batches (user, kind, file_hash, summary, batch) VALUES (?, ?, ?, ?, ?)').run(user.name, plan.detected, plan.hash, JSON.stringify({ ...result, sync }), batch);
   });
   plans.delete(token);
-  audit(user.name, 'import', null, plan.detected, JSON.stringify(result));
-  return { ...result, batch };
+  if (plan.closing) result.check = compareClosing(plan.closing);
+  audit(user.name, 'import', null, plan.detected, JSON.stringify({ ...result, check: result.check && { matched: result.check.matched, different: result.check.different } }));
+  return { ...result, sync, batch };
 }
 
 // ---------------------------------------------------------------- quotation estimate → product catalog ("standard BOQ")

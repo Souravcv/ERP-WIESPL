@@ -87,6 +87,8 @@ export function migrate() {
       id INTEGER PRIMARY KEY, token TEXT UNIQUE NOT NULL, enquiry_id INTEGER NOT NULL, data TEXT, created_at TEXT DEFAULT (datetime('now','localtime')),
       updated_at TEXT, submitted_at TEXT, submitted_by TEXT);
   `);
+  // Import batches remember their batch id (to replace an earlier Smart Store import with a newer workbook).
+  if (!columnsOf('import_batches').has('batch')) db.exec('ALTER TABLE import_batches ADD COLUMN batch TEXT');
   // Client work orders were called "BOQ" before the BOQ / bill of material module existed: BOQ-001/2026-27 → WO-001/2026-27.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'migrated_wo_numbers'").get()) {
     db.exec(`UPDATE boqs SET boq_no = 'WO-' || substr(boq_no, 5) WHERE boq_no LIKE 'BOQ-%';

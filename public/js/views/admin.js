@@ -238,26 +238,59 @@ export async function importView(root) {
     filter.onchange = drawRows;
     if (!c.error) filter.value = '';
     drawRows();
+    // Smart Store workbook: replace the earlier imports with this workbook (default), or only add new rows.
+    const s = p.sync;
+    const syncSel = s ? h('select', { style: { width: 'auto' } },
+      h('option', { value: 'replace' }, 'Replace: make the CRM store data match this workbook (recommended)'),
+      h('option', { value: 'add' }, 'Only add rows that are new (old way; corrected rows are added again)')) : null;
+    const removeChk = s?.removable ? h('input', { type: 'checkbox', checked: true, style: { width: 'auto' } }) : null;
+    const syncBox = s ? h('div.card', { style: { background: 'var(--surface-2)', margin: '10px 0' } },
+      h('h3', { style: { marginTop: 0 } }, '🔄 Smart Store workbook'),
+      h('label', 'How should this workbook be loaded?', syncSel),
+      h('ul', { style: { margin: '8px 0' } },
+        s.previous ? h('li', `The ${s.replace} stock movements from earlier Smart Store imports are removed and every row of this workbook is loaded again, so rows you corrected or deleted in Excel are corrected or deleted in the CRM.`)
+          : h('li', 'First Smart Store import: every row of the workbook is loaded.'),
+        h('li', `${s.manual} stock entr${s.manual === 1 ? 'y' : 'ies'} made directly in the CRM (GRN against a PO, issues with challans …) ${s.manual === 1 ? 'is' : 'are'} kept. Do not type those into the Excel as well, or they count twice.`),
+        h('li', 'Items are updated from the Item Master (name, price, UOM, GST).'),
+        s.removable ? h('li', h('label', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, removeChk, `Remove ${s.removable} item(s) that are not in this workbook and not used anywhere in the CRM`),
+          h('details', h('summary.muted', 'which ones'), h('div.muted', { style: { fontSize: '12px' } }, s.removableList.join(' · ')))) : null,
+        s.kept ? h('li', `${s.kept} item(s) not in this workbook are kept because the CRM uses them`, h('details', h('summary.muted', 'which ones'), h('div.muted', { style: { fontSize: '12px' } }, s.keptList.join(' · ')))) : null,
+        h('li', 'A full backup of the database is taken first (data\\backups\\before-import).')),
+      p.dateFixes?.length ? h('p', { style: { color: 'var(--warn)' } }, `⚠ ${p.dateFixes.length} date(s) that do not exist were moved to the last day of that month: ${p.dateFixes.join(', ')}. Correct them in the Excel.`) : null) : null;
+    const modeLabel = c.duplicate ? h('label', { style: { margin: '8px 0' } }, `${c.duplicate} records already exist in the CRM (matched by item code, GSTIN, PO no …). What should happen to them?`, mode) : null;
+    const dupNote = h('p.muted', 'Stock movement rows already in the CRM (same type, date, document no, item, quantity and party) are skipped automatically, so you can import a newer copy of the same workbook later and only the new rows are added.');
+    if (syncSel) { const show = () => { const rep = syncSel.value === 'replace'; if (modeLabel) modeLabel.style.display = rep ? 'none' : ''; dupNote.style.display = rep ? 'none' : ''; }; syncSel.onchange = show; show(); }
     out.replaceChildren(h('div.card',
       h('h2', `Preview: ${p.detected}`),
-      p.warning ? h('p', { style: { color: 'var(--warn)' } }, '⚠ ', p.warning) : null,
+      s ? null : p.warning ? h('p', { style: { color: 'var(--warn)' } }, '⚠ ', p.warning) : null,
+      syncBox,
       p.openingDate ? h('p.muted', `Opening stock from the Item Master is entered as on ${fmtDate(p.openingDate)}.`) : null,
       h('table.data', { style: { maxWidth: '760px', marginBottom: '12px' } },
         h('thead', h('tr', h('th', 'Sheet'), h('th.num', 'Rows'), h('th.num', 'New'), h('th.num', 'Already in CRM'), h('th.num', 'Errors'))),
         h('tbody', p.sheets.map(s => h('tr', h('td', s.sheet), h('td.num', s.total), h('td.num', s.new), h('td.num', s.duplicate), h('td.num', { style: { color: s.error ? 'var(--bad)' : '' } }, s.error))))),
       c.noCodeItems ? h('p', { style: { color: 'var(--warn)' } }, `⚠ ${c.noCodeRows} movement rows refer to ${c.noCodeItems} items that are not in the Item Master (no item code, or a code with a blank row in the master). Your Excel stock summary ignores these rows, so they are not imported. To bring them in, add the item to the Item Master sheet first (code + name), then import again.`) : null,
-      c.duplicate ? h('label', { style: { margin: '8px 0' } }, `${c.duplicate} records already exist in the CRM (matched by item code, GSTIN, PO no …). What should happen to them?`, mode) : null,
-      h('p.muted', 'Stock movement rows already in the CRM (same type, date, document no, item, quantity and party) are skipped automatically, so you can import a newer copy of the same workbook later and only the new rows are added.'),
+      modeLabel,
+      dupNote,
       h('div.toolbar', h('b', 'Rows:'), filter),
       rowsBox,
       h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
         h('button.btn.primary', { onclick: async e => {
           e.target.disabled = true;
           try {
-            const r = await api('/import/commit', { method: 'POST', body: { token: p.token, mode: mode.value } });
+            const replace = syncSel ? syncSel.value === 'replace' : false;
+            if (replace && s.previous && !(await confirmBox(`Replace the ${s.replace} stock movements of earlier Smart Store imports with this workbook${removeChk?.checked ? ` and remove ${s.removable} unused item(s)` : ''}? A backup is taken first.`, 'Replace'))) { e.target.disabled = false; return; }
+            const r = await api('/import/commit', { method: 'POST', body: { token: p.token, mode: mode.value, ...(syncSel ? { sync: replace, removeItems: !!removeChk?.checked } : {}) } });
             clearRefCache();
+            const ck = r.check;
             out.replaceChildren(h('div.card', h('h2', '✅ Import finished'),
-              h('p', `${r.created} records created · ${r.updated} updated · ${r.moves} stock movements added · ${r.skipped} skipped as duplicates${r.noCode ? ` · ${r.noCode} rows without item code skipped` : ''} · ${r.errors} rows with errors not imported`),
+              h('p', r.sync ? `Store data replaced: ${r.replaced || 0} earlier movements removed, ${r.moves} loaded from this workbook · ${r.updated} items updated · ${r.created} created${r.itemsRemoved ? ` · ${r.itemsRemoved} unused items removed` : ''}${r.noCode ? ` · ${r.noCode} rows without item code skipped` : ''} · ${r.errors} rows with errors not imported`
+                : `${r.created} records created · ${r.updated} updated · ${r.moves} stock movements added · ${r.skipped} skipped as duplicates${r.noCode ? ` · ${r.noCode} rows without item code skipped` : ''} · ${r.errors} rows with errors not imported`),
+              r.backup ? h('p.muted', `Backup taken first: ${r.backup}`) : null,
+              ck ? h('div', h('h3', 'Check against the workbook’s Stock Summary'),
+                h('p', `${ck.matched} item(s) have the same closing stock as the workbook${ck.different ? `; ${ck.different} differ (below)` : ' ✓'}. ${ck.negative} item(s) are negative${ck.negative ? ' (in the workbook too, e.g. FG parts issued without an FG Inward entry)' : ''}.`),
+                ck.different ? h('p.muted', 'The CRM adds up the rows of Inward, Outward, Transfer, Return, Scrap and FG Inward. Where the workbook’s Stock Summary shows something else, it is usually not recalculated (open the Excel, press F9 / Ctrl+Alt+F9, save) or a row has a typing error.') : null,
+                ck.list.length ? h('table.data', { style: { maxWidth: '760px' } }, h('thead', h('tr', h('th', 'Code'), h('th', 'Item'), h('th.num', 'CRM'), h('th.num', 'Workbook'))),
+                  h('tbody', ck.list.map(d => h('tr', h('td', d.code), h('td', d.name), h('td.num', d.crm), h('td.num', d.sheet))))) : null) : null,
               r.failed?.length ? h('ul', r.failed.map(x => h('li', x))) : null,
               h('div.toolbar', h('a.btn', { href: '#/stock-summary' }, 'Stock Summary'), h('a.btn', { href: '#/list/items' }, 'Items'), h('a.btn', { href: '#/list/vendors' }, 'Vendors'), h('a.btn', { href: '#/list/purchase_orders' }, 'Purchase Orders'))));
           } catch (err) { e.target.disabled = false; fail(err); }

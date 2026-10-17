@@ -367,7 +367,9 @@ api.post('/import/preview/:kind', express.raw({ type: () => true, limit: '60mb' 
   if (!req.body?.length) throw new HttpError(400, 'Upload an .xlsx file');
   return importer.preview(req.params.kind, req.body, req.user);
 }));
-api.post('/import/commit', wrap(req => importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, { createMissing: !!req.body?.createMissing })));
+api.post('/import/commit', wrap(req => importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, {
+  createMissing: !!req.body?.createMissing, sync: req.body?.sync, removeItems: req.body?.removeItems, canSync: hasFunction(req.user.role, 'import'),
+})));
 
 api.get('/admin/backup', requireRole(), wrap(async (req, res) => {
   const file = path.join(os.tmpdir(), `wiespl-backup-${Date.now()}.db`);
