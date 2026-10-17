@@ -139,6 +139,31 @@ api.get('/part-photos', requireRole(), wrap(() => listPhotos()));
 api.post('/part-photos', requireRole(), express.raw({ type: () => true, limit: '9mb' }), wrap(req => addPhoto(String(req.query.part || ''), String(req.query.name || ''), String(req.query.caption || ''), req.body, req.user)));
 api.delete('/part-photos/:id', requireRole(), wrap(req => removePhoto(req.params.id)));
 api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
+// Document numbering: continue a series from your own book number (e.g. challans already at 1250 on paper).
+const DOC_SERIES = [
+  { key: 'challan', label: 'Delivery Challan', prefix: 'DC', table: 'challans', col: 'challan_no' },
+  { key: 'challan_ret', label: 'Returnable Challan', prefix: 'RE', table: 'challans', col: 'challan_no' },
+];
+function docSeries(fy) {
+  return DOC_SERIES.map(s => {
+    const last = db.prepare('SELECT seq FROM counters WHERE name = ? AND fy = ?').get(s.key, fy)?.seq || 0;
+    const used = db.prepare(`SELECT ${s.col} n FROM ${s.table} WHERE ${s.col} LIKE ?`).all(`${s.prefix}-%/20${fy}`)
+      .reduce((m, r) => Math.max(m, Number(String(r.n).match(new RegExp(`^${s.prefix}-(\\d+)/`))?.[1]) || 0), 0);
+    return { key: s.key, label: s.label, prefix: s.prefix, fy, last, used, next: Math.max(last, used) + 1, example: `${s.prefix}-${String(Math.max(last, used) + 1).padStart(3, '0')}/20${fy}` };
+  });
+}
+api.get('/admin/doc-numbers', requireRole(), wrap(req => docSeries(req.query.fy || fyOf())));
+api.put('/admin/doc-numbers', requireRole(), wrap(req => {
+  const fy = req.body?.fy || fyOf();
+  const s = docSeries(fy).find(x => x.key === req.body?.key);
+  if (!s) throw new HttpError(400, 'Unknown document series');
+  const next = Number(req.body?.next);
+  if (!Number.isInteger(next) || next < 1 || next > 999999) throw new HttpError(400, 'Enter a whole number, e.g. 1251');
+  if (next <= s.used) throw new HttpError(400, `${s.prefix}-${String(s.used).padStart(3, '0')}/20${fy} is already used in the CRM, so the next number must be ${s.used + 1} or higher`);
+  db.prepare('INSERT INTO counters (name, fy, seq) VALUES (?, ?, ?) ON CONFLICT(name, fy) DO UPDATE SET seq = excluded.seq').run(s.key, fy, next - 1);
+  audit(req.user.name, 'settings', null, 'document number', `${s.label}: next ${s.prefix}-${next}/20${fy} (was ${s.next})`);
+  return docSeries(fy).find(x => x.key === s.key);
+}));
 api.get('/audit', wrap(req => {
   if (!hasFunction(req.user.role, 'view_audit')) throw new HttpError(403, 'You do not have permission to see the activity log');
   const { entity, record_id } = req.query;

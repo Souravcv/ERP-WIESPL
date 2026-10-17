@@ -557,7 +557,7 @@ export const ENTITIES = {
     list: ['challan_no', 'date', 'bom_id', 'boq_id', 'project_id', 'vendor_id', 'vehicle_no', 'transporter', 'status', 'delivered_date', 'received_by'],
     statusField: 'status', print: 'challan',
     fields: [
-      { key: 'challan_no', label: 'Challan No', type: 'text', readonly: true, hint: 'Auto: DC-001/2026-27' },
+      { key: 'challan_no', label: 'Challan No', type: 'text', readonly: true, hint: 'Auto: DC-001/2026-27, returnable RE-001/2026-27' },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
       { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms' },
       { key: 'boq_id', label: 'Work Order', type: 'ref', ref: 'boqs' },

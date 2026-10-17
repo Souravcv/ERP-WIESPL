@@ -143,7 +143,25 @@ export async function settingsView(root) {
   };
   root.replaceChildren(h('div.page-head', h('h1', '⚙️ Company & Quotation Settings'), h('div.actions', h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save settings'))),
     h('p.muted', 'The scope sheet matrix and per-quotation text can be edited inside each quotation (Letter, Terms & Scope tab). Changes here apply to new quotations.'),
-    sections, photosCard());
+    sections, await docNumbersCard(), photosCard());
+}
+
+// Continue a document series from your own book number (this financial year).
+async function docNumbersCard() {
+  const series = await api('/admin/doc-numbers');
+  return h('div.card', h('h2', '🔢 Document numbers (this financial year)'),
+    h('p.muted', 'Continue numbering from your own challan book: enter the number the NEXT challan should get. It cannot be a number already used in the CRM. Numbers start again at 001 every 1 April.'),
+    h('table.data', { style: { maxWidth: '760px' } }, h('thead', h('tr', ['Series', 'Last used in the CRM', 'Next number', ''].map(x => h('th', x)))),
+      h('tbody', series.map(s => {
+        const next = h('input', { type: 'number', min: s.used + 1, value: s.next, style: { width: '120px' } });
+        const example = h('span.muted', ` → ${s.example}`);
+        next.oninput = () => { example.textContent = ` → ${s.prefix}-${String(next.value || '').padStart(3, '0')}/20${s.fy}`; };
+        return h('tr', h('td', `${s.label} (${s.prefix}-)`), h('td', s.used ? `${s.prefix}-${String(s.used).padStart(3, '0')}/20${s.fy}` : h('span.muted', 'none yet')),
+          h('td', next, example), h('td', h('button.btn.small.primary', { onclick: async () => {
+            try { const r = await api('/admin/doc-numbers', { method: 'PUT', body: { key: s.key, next: Number(next.value) } }); toast(`Next ${s.label}: ${r.example}`); }
+            catch (e) { fail(e); }
+          } }, 'Save')));
+      }))));
 }
 
 // Real photos of each part (pass box, door, pendants …): shown to clients when they tap that part in the 3D view.

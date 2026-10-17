@@ -125,7 +125,12 @@ export function beforeSave(name, row, existing, user) {
       if ('qty_text' in row && row.qty == null && (existing?.qty == null || 'qty' in row)) row.qty = qtyFromText(row.qty_text);
       break;
     case 'challans': {
-      if (!existing && !row.challan_no) row.challan_no = docNo('challan', date, (n, fy) => `DC-${n}/20${fy}`);
+      // Delivery challans DC-001/2026-27 …, returnable challans their own series RE-001/2026-27 …
+      const returnable = (row.challan_type ?? existing?.challan_type) === 'Returnable';
+      const challanNo = () => docNo(returnable ? 'challan_ret' : 'challan', date, (n, fy) => `${returnable ? 'RE' : 'DC'}-${n}/20${fy}`);
+      if (!existing && !row.challan_no) row.challan_no = challanNo();
+      // A draft switched between returnable and non-returnable gets a number of the right series.
+      else if (existing?.status === 'Draft' && 'challan_type' in row && row.challan_type !== existing.challan_type && /^(DC|RE)-/.test(existing.challan_no || '')) row.challan_no = challanNo();
       const vid = row.vendor_id ?? existing?.vendor_id;
       if (vid && !(row.ship_to ?? existing?.ship_to)) {
         const v = db.prepare('SELECT name, address, city, state, pincode, phone FROM vendors WHERE id = ?').get(vid);
