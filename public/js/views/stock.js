@@ -274,9 +274,13 @@ export async function stockSummaryView(root) {
     from: h('input', { type: 'date', value: p.from || `20${fy.slice(0, 2)}-04-01` }), to: h('input', { type: 'date', value: p.to || today() }),
     category: h('select', h('option', { value: '' }, 'All categories'), ITEM_CATEGORIES.map(c => h('option', c))),
     only: h('select', h('option', { value: '' }, 'All items'), h('option', { value: 'instock' }, 'In stock'), h('option', { value: 'low' }, 'Below minimum'), h('option', { value: 'negative' }, 'Negative stock')),
-    q: h('input.grow', { type: 'search', placeholder: 'Search code or name…', value: p.q || '' }),
+    fsn: h('select', h('option', { value: '' }, 'Fast / slow / non-moving'), h('option', { value: 'FAST' }, 'Fast moving'), h('option', { value: 'SLOW' }, 'Slow moving'), h('option', { value: 'NON-M' }, 'Non-moving')),
+    abc: h('select', h('option', { value: '' }, 'ABC: all'), ['A', 'B', 'C'].map(c => h('option', { value: c }, `ABC: ${c}`))),
+    q: h('input.grow', { type: 'search', placeholder: 'Search code or name… (or type “slow moving”, “fast”, “non moving”)', value: p.q || '' }),
   };
   if (p.only) f.only.value = p.only;
+  if (p.fsn) f.fsn.value = p.fsn;
+  if (p.abc) f.abc.value = p.abc;
   const out = h('div');
   const query = () => new URLSearchParams(Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]).filter(([, v]) => v))).toString();
   let page = 0, data = null, sort = null;
@@ -321,7 +325,7 @@ export async function stockSummaryView(root) {
       h('a.btn', { href: '#/stock-entry' }, '🔁 Stock Entry'),
       h('button.btn', { onclick: () => download(`/api/export/stock-summary?${query()}`) }, '⬇ Export Excel'),
       canCarry ? h('button.btn', { onclick: () => carryForward().catch(fail) }, '🏁 1 April Opening Stock') : null)),
-    h('div.toolbar', f.q, f.category, f.only, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to),
+    h('div.toolbar', f.q, f.category, f.fsn, f.abc, f.only, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to),
     h('p.muted', 'ABC: items making up 70% of consumption value are A, the next 20% B, the rest C. FSN: issued in 4+ months = FAST, 1–3 = SLOW, none = NON-M (non-moving).'),
     out);
   await load();

@@ -1,6 +1,6 @@
 // Per-module business rules applied on every save: document numbering, totals, derived fields.
 import { db, nextSeq, getSettings } from './db.js';
-import { quoteTotals, linesTotals, gstTotals } from '../public/js/calc.js';
+import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES } from '../public/js/schema.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
@@ -95,11 +95,38 @@ export function beforeSave(name, row, existing, user) {
         const p = db.prepare('SELECT project_no, code, name FROM projects WHERE id = ?').get(projectId);
         if (p) row.project_note = [p.project_no || p.code, p.name].filter(Boolean).join(' - ');
       }
-      if ('lines' in row || 'vendor_id' in row) {
-        const lines = parse(row.lines ?? existing?.lines, []);
-        const vendorState = vendorId && db.prepare('SELECT state FROM vendors WHERE id = ?').get(vendorId)?.state;
-        const t = gstTotals(lines, !vendorState || vendorState === (getSettings().state || 'Maharashtra'));
-        Object.assign(row, { subtotal: t.subtotal, tax: t.tax, round_off: t.round_off, total: t.total });
+      // Totals: items + freight / packing / installation / transport / other charges (taxable), GST by rate.
+      const po = { ...(existing || {}), ...row, lines: parse(row.lines ?? existing?.lines, []) };
+      const vendor = vendorId && db.prepare('SELECT state, contact_person, phone FROM vendors WHERE id = ?').get(vendorId);
+      const t = poTotals(po, !vendor?.state || vendor.state === (getSettings().state || 'Maharashtra'));
+      Object.assign(row, { subtotal: t.subtotal, tax: t.tax, round_off: t.round_off, total: t.total, gst_label: t.gst_label || null });
+      if (vendor && !(row.vendor_contact ?? existing?.vendor_contact) && vendor.contact_person) row.vendor_contact = vendor.contact_person;
+      if (vendor && !(row.vendor_phone ?? existing?.vendor_phone) && vendor.phone) row.vendor_phone = vendor.phone;
+      // Payment schedule: amount from the % of the PO total; "With PO" is due on the PO date.
+      if ('payment_schedule' in row || 'lines' in row || 'date' in row) {
+        const sched = parse(row.payment_schedule ?? existing?.payment_schedule, []);
+        let changed = false;
+        for (const p of sched) {
+          if ((p.amount == null || p.amount === '') && Number(p.percent) > 0) { p.amount = Math.round(t.total * Number(p.percent) / 100 * 100) / 100; changed = true; }
+          if (p.trigger === 'With PO' && !p.due_date) { p.due_date = row.date || existing?.date || today(); changed = true; }
+        }
+        if (changed) row.payment_schedule = JSON.stringify(sched);
+      }
+      break;
+    }
+    case 'vendor_bills':
+    case 'vendor_payments': {
+      const poId = row.po_id ?? existing?.po_id;
+      const po = poId && db.prepare('SELECT vendor_id, payment_schedule FROM purchase_orders WHERE id = ?').get(poId);
+      if (po && !(row.vendor_id ?? existing?.vendor_id)) row.vendor_id = po.vendor_id;
+      const billId = row.bill_id ?? existing?.bill_id;
+      if (name === 'vendor_payments' && billId) {
+        const b = db.prepare('SELECT po_id FROM vendor_bills WHERE id = ?').get(billId);
+        if (b && poId && b.po_id !== Number(poId)) throw Object.assign(new Error('That vendor bill belongs to another PO'), { status: 400 });
+      }
+      // Bill due date: the PO's next payment still due.
+      if (name === 'vendor_bills' && po && !(row.due_date ?? existing?.due_date)) {
+        row.due_date = parse(po.payment_schedule, []).filter(p => p.status !== 'Paid' && p.due_date).map(p => p.due_date).sort()[0] || null;
       }
       break;
     }
@@ -235,8 +262,60 @@ export function refreshInvoiceStatus(invoiceId) {
   if (status !== inv.status) db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, invoiceId);
 }
 
+// Payments made against a PO mark its payment schedule lines Paid, in order, as far as the money goes.
+export function refreshPoPayments(poId) {
+  const po = db.prepare('SELECT id, total, payment_schedule FROM purchase_orders WHERE id = ?').get(poId);
+  if (!po) return;
+  const sched = parse(po.payment_schedule, []);
+  if (!sched.length) return;
+  const pays = db.prepare('SELECT date, amount FROM vendor_payments WHERE po_id = ? ORDER BY date, id').all(po.id);
+  let left = pays.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+  const last = pays.length ? pays[pays.length - 1].date : null;
+  for (const p of sched) {
+    if (p.status === 'On hold') continue;
+    const amt = Number(p.amount) || (Number(p.percent) > 0 ? Math.round((po.total || 0) * Number(p.percent)) / 100 : 0);
+    if (amt > 0 && left + 0.5 >= amt) { left -= amt; if (p.status !== 'Paid') { p.status = 'Paid'; p.paid_on = p.paid_on || last; p.auto_paid = true; } }
+    // Only lines this marked Paid go back to Due (a line accounts marked Paid by hand stays Paid).
+    else if (p.status === 'Paid' && p.auto_paid) { p.status = 'Due'; p.paid_on = null; delete p.auto_paid; left = 0; }
+    else if (amt > 0) left = 0;
+  }
+  db.prepare('UPDATE purchase_orders SET payment_schedule = ? WHERE id = ?').run(JSON.stringify(sched), po.id);
+}
+
+// Material received on a PO (GRN): payments "N days after inward" become due on GRN date + N days.
+export function poInwardDues(poId, grnDate) {
+  const po = db.prepare('SELECT payment_schedule FROM purchase_orders WHERE id = ?').get(poId);
+  const sched = parse(po?.payment_schedule, []);
+  let changed = false;
+  for (const p of sched) {
+    if (p.trigger === 'After inward (GRN)' && !p.due_date) {
+      const d = new Date(grnDate + 'T00:00:00'); d.setDate(d.getDate() + (Number(p.days) || 0));
+      p.due_date = d.toLocaleString('sv-SE').slice(0, 10);
+      p.grn_date = grnDate;
+      changed = true;
+    }
+  }
+  if (changed) db.prepare('UPDATE purchase_orders SET payment_schedule = ? WHERE id = ?').run(JSON.stringify(sched), poId);
+  return changed;
+}
+
 // `deleted` is passed when a row was removed (id is null then).
 export function afterSave(name, id, user, deleted) {
+  if (name === 'vendor_payments') {
+    const poId = deleted ? deleted.po_id : db.prepare('SELECT po_id FROM vendor_payments WHERE id = ?').get(id)?.po_id;
+    if (poId) refreshPoPayments(poId);
+  }
+  // A project with a work-order number picks up the POs whose note names that work order ("WIESPL / 1015 / 01 …").
+  if (name === 'projects' && id) {
+    const p = db.prepare('SELECT project_no FROM projects WHERE id = ?').get(id);
+    const m = String(p?.project_no || '').match(/(\d{3,5})\s*\/\s*(\d{1,2})\b/);
+    if (m) {
+      const re = new RegExp(`\\b${m[1]}\\s*\\/\\s*0?${Number(m[2])}\\b`);
+      for (const po of db.prepare("SELECT id, project_note FROM purchase_orders WHERE project_id IS NULL AND project_note LIKE ?").all(`%${m[1]}%`)) {
+        if (re.test(po.project_note || '')) db.prepare('UPDATE purchase_orders SET project_id = ? WHERE id = ?').run(id, po.id);
+      }
+    }
+  }
   if (name === 'payments') {
     const invId = deleted ? deleted.invoice_id : db.prepare('SELECT invoice_id FROM payments WHERE id = ?').get(id)?.invoice_id;
     if (invId) refreshInvoiceStatus(invId);

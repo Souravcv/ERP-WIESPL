@@ -69,6 +69,20 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_store_crm_v1', '\"1\"')").run();
   }
+  // PO approval became Purchase → Technical → Commercial → GM: the Technical Manager (and GM) approve the technical step.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_po_flow_v3'").get()) {
+    for (const name of ['technical', 'manager']) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (!r) continue;
+      const p = parse(r.perms);
+      p.functions = [...new Set([...(p.functions || []), 'po_technical'])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name);
+    }
+    // Requests waiting at the old first step keep waiting at the same (renamed) step.
+    db.prepare("UPDATE approvals SET stage = 'Purchase Approval' WHERE doc_type = 'Purchase Order' AND stage = 'Purchase Head Check'").run();
+    db.prepare("UPDATE purchase_orders SET approval_stage = 'Purchase Approval' WHERE approval_stage = 'Purchase Head Check'").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_po_flow_v3', '\"1\"')").run();
+  }
   // Work order → BOQ → design review → Final → store check: give the built-in roles the new functions once.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_boq_flow_v1'").get()) {
     const NEW = ['boq_review', 'boq_final', 'notify_store_check', 'notify_boq'];

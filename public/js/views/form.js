@@ -1,6 +1,6 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
 import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
-import { linesTotals, inr, round2 } from '../calc.js';
+import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
 import { newBomDialog } from './bom.js';
@@ -52,7 +52,7 @@ export function itemPicker(items, value, { readonly, onPick } = {}) {
 }
 
 // ---------------------------------------------------------------- line items (PO / invoice / requisition)
-function linesEditor(f, value, { readonly, onTotals }) {
+function linesEditor(f, value, { readonly, onTotals, extras }) {
   let lines = Array.isArray(value) ? value.map(l => ({ ...l })) : [];
   const amounts = f.amounts !== false;
   const wrap = h('div');
@@ -61,6 +61,19 @@ function linesEditor(f, value, { readonly, onTotals }) {
 
   function totals() {
     if (!amounts) return;
+    // PO: items + charges (freight, packing …) → taxable value, GST with its %, round off, grand total in ₹.
+    if (f.poTotals && extras) {
+      const t = poTotals({ ...extras(), lines });
+      totalsBox.replaceChildren(
+        h('span', 'Items'), h('span.right', '₹ ' + inr(t.items)),
+        ...t.charges.flatMap(c => [h('span', c.label), h('span.right', '₹ ' + inr(c.amount))]),
+        h('span', 'Taxable value'), h('span.right', '₹ ' + inr(t.subtotal)),
+        ...(t.rates.length ? t.rates.map(r => [h('span', `GST @ ${r}%`), h('span.right', '₹ ' + inr(t.byRate[r].tax))]).flat() : [h('span', 'GST'), h('span.right', '₹ 0.00')]),
+        t.round_off ? [h('span', 'Round off'), h('span.right', '₹ ' + inr(t.round_off))] : null,
+        h('span.grand', 'Grand Total'), h('span.right.grand', '₹ ' + inr(t.total)));
+      onTotals?.(t);
+      return;
+    }
     const t = linesTotals(lines);
     totalsBox.replaceChildren(h('span', 'Taxable value'), h('span.right', inr(t.subtotal)), h('span', 'GST'), h('span.right', inr(t.tax)),
       h('span.grand', 'Total'), h('span.right.grand', inr(t.total)));
@@ -119,7 +132,7 @@ function linesEditor(f, value, { readonly, onTotals }) {
     totals();
   }
   if (f.itemRef) refOptions('items').then(o => { items = o; render(); }).catch(fail); else render();
-  return { el: wrap, get: () => lines, set: next => { lines = next.map(l => ({ ...l })); render(); } };
+  return { el: wrap, get: () => lines, set: next => { lines = next.map(l => ({ ...l })); render(); }, refresh: totals };
 }
 
 // PO: choosing a requisition copies its materials into the PO (prices, HSN and GST from the item master).
@@ -207,12 +220,22 @@ function commercialPanel(po, reload) {
   const sched = linesEditor(schedField, po.payment_schedule || [], { readonly: false });
   const lines = (po.lines || []).map(l => ({ ...l }));
   const totalsBox = h('div.totals');
+  // Charges (freight, packing, installation, transport, other) can be set or corrected at this step.
+  const charges = {};
+  const charge = (k, label, attrs = { type: 'number', step: 'any' }) => { charges[k] = h('input', { ...attrs, value: po[k] ?? '' }); charges[k].oninput = () => showTotals(); return h('label', label, charges[k]); };
+  const chargeVals = () => Object.fromEntries(Object.entries(charges).map(([k, el]) => [k, el.type === 'number' ? (el.value === '' ? null : Number(el.value)) : el.value]));
   const showTotals = () => {
-    const t = linesTotals(lines);
-    totalsBox.replaceChildren(h('span', 'Taxable value'), h('span.right', inr(t.subtotal)), h('span', 'GST'), h('span.right', inr(t.tax)), h('span.grand', 'Total'), h('span.right.grand', inr(Math.round(t.total))));
+    const t = poTotals({ ...po, ...chargeVals(), lines });
+    totalsBox.replaceChildren(h('span', 'Items'), h('span.right', '₹ ' + inr(t.items)),
+      ...t.charges.flatMap(c => [h('span', c.label), h('span.right', '₹ ' + inr(c.amount))]),
+      h('span', 'Taxable value'), h('span.right', '₹ ' + inr(t.subtotal)),
+      ...t.rates.flatMap(r => [h('span', `GST @ ${r}%`), h('span.right', '₹ ' + inr(t.byRate[r].tax))]),
+      h('span.grand', 'Grand Total'), h('span.right.grand', '₹ ' + inr(t.total)));
   };
   const terms = {};
   const term = (k, label) => { terms[k] = h('input', { value: po[k] || '' }); return h('label', label, terms[k]); };
+  const chargeGrid = atStep ? h('div.form-grid', { style: { marginTop: '10px' } }, ...PO_CHARGES.map(([k, l]) => charge(k, `${l} (₹)`)),
+    charge('other_charges_label', 'Other charges – name', { type: 'text' }), charge('charges_gst', 'GST % on charges')) : null;
   let heading = '';
   const priceTable = atStep ? h('div.table-wrap', h('table.data.lines', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', 'Rate (₹) *', 'GST %', 'Amount'].map(x => h('th', x)))),
     h('tbody', lines.map((l, i) => {
@@ -223,11 +246,11 @@ function commercialPanel(po, reload) {
       return h('tr', h('td', i + 1), h('td', [l.description || heading, !l.description && l.spec ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – ')), h('td.num', l.qty), h('td', l.uom || ''), inp('rate', '110px'), inp('gst', '70px'), amt);
     })))) : null;
   showTotals();
-  const body = () => ({ lines: lines.map(l => ({ rate: l.rate, gst: l.gst })), payment_schedule: sched.get(), ...Object.fromEntries(Object.entries(terms).map(([k, el]) => [k, el.value])) });
+  const body = () => ({ lines: lines.map(l => ({ rate: l.rate, gst: l.gst })), payment_schedule: sched.get(), ...chargeVals(), ...Object.fromEntries(Object.entries(terms).map(([k, el]) => [k, el.value])) });
   const saveCommercial = busy(async () => { await api(`/purchase_orders/${po.id}/commercial`, { method: 'POST', body: body() }); toast('Prices and payment terms saved'); reload(); });
   const approve = busy(async () => {
     if (lines.some(l => Number(l.qty) > 0 && !(Number(l.rate) > 0))) throw new Error('Enter the rate on every line before approving');
-    if (!sched.get().some(p => p.due_date)) throw new Error('Add at least one payment with its due date (Payment schedule), so payments can be planned');
+    if (!sched.get().some(p => p.due_date || p.trigger === 'After inward (GRN)')) throw new Error('Add at least one payment with its due date, or “After inward (GRN)” with the days (Payment schedule), so payments can be planned');
     await api(`/purchase_orders/${po.id}/commercial`, { method: 'POST', body: body() });
     const ap = (await api(`/approvals?doc_type=${encodeURIComponent('Purchase Order')}&doc_id=${po.id}&status=Pending`))[0];
     if (!ap) throw new Error('The approval request for this step was not found');
@@ -236,9 +259,10 @@ function commercialPanel(po, reload) {
   });
   const saveSchedule = busy(async () => { await api(`/purchase_orders/${po.id}/payments`, { method: 'POST', body: { payment_schedule: sched.get().filter(p => p.due_date || p.amount || p.percent || p.description) } }); toast('Payment schedule saved'); reload(); });
   return h('div.card', { style: { borderLeft: '4px solid #1f4e9a' } },
-    h('h2', atStep ? '💰 Commercial step: enter prices, payment terms and due dates' : '💰 Payment schedule'),
-    atStep ? h('p.muted', 'The material and quantities were checked by the Purchase Head and approved by the GM. Enter the vendor rates and GST, the payment terms, and when each payment is due, then approve.') : h('p.muted', 'Mark payments as Paid (with the date) so the accounts dashboard shows what is still due.'),
-    priceTable, atStep ? totalsBox : null,
+    h('h2', atStep ? '💰 Commercial approval: prices, charges, payment terms and due dates' : '💰 Payment schedule'),
+    atStep ? h('p.muted', 'Purchase and Technical have approved the vendor, material and specifications. Enter the vendor rates and GST, any freight / packing / installation / transport charges, the payment terms and when each payment is due (a date, or N days after the material is received), then approve. The GM gives the final approval after this.')
+      : h('p.muted', 'Payments recorded under 💸 Vendor Payments mark these lines Paid automatically; “After inward” lines get their due date when the material is received (GRN).'),
+    priceTable, chargeGrid, atStep ? totalsBox : null,
     atStep ? h('div.form-grid', { style: { marginTop: '10px' } }, term('term_advance', 'Payment – Advance'), term('term_balance', 'Payment – Balance'), term('term_delivery', 'Delivery'), term('term_freight', 'Freight')) : null,
     h('div', { style: { marginTop: '10px' } }, h('b', 'Payment schedule (due dates)'), sched.el),
     h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
@@ -415,6 +439,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       break;
     }
     case 'projects':
+      A.push(h('a.btn', { href: `#/project-analysis/${id}` }, '📈 Purchase analysis'));
       if (can('boqs')) A.push(h('button.btn.primary', { onclick: go(() => newBoqDialog({ project_id: id })) }, '📂 New Work Order (upload)'));
       if (can('boms')) A.push(h('button.btn', { onclick: go(() => newBomDialog({ project_id: id })) }, '📑 New BOQ (bill of material)'));
       if (can('requisitions')) A.push(h('button.btn', { onclick: () => newRecord('requisitions', { project_id: id }) }, '📝 Requisition'));
@@ -515,8 +540,9 @@ export async function recordView(root, entity, id) {
     if (f.type === 'lines') {
       const ed = linesEditor(f, row[f.key], {
         readonly: !writable,
-        // POs round the grand total on the server (round-off line), so only the pre-tax figures update live there.
-        onTotals: t => { for (const k of inputs.round_off ? ['subtotal', 'tax'] : ['subtotal', 'tax', 'total']) if (inputs[k]) inputs[k].el.value = t[k]; },
+        onTotals: t => { for (const k of ['subtotal', 'tax', 'round_off', 'total', 'gst_label']) if (inputs[k] && t[k] !== undefined) inputs[k].el.value = t[k]; },
+        // PO charges and their GST %, read live from the form.
+        extras: f.poTotals ? () => Object.fromEntries([...PO_CHARGES.map(([k]) => k), 'other_charges_label', 'charges_gst'].map(k => [k, inputs[k]?.get?.() ?? row[k]])) : null,
       });
       inputs[f.key] = ed;
       grid.append(h('div.span-all', h('label', f.label), ed.el));
@@ -545,6 +571,26 @@ export async function recordView(root, entity, id) {
     const showNext = () => api(`/items/next-code?category=${encodeURIComponent(inputs.category.get() || '')}`).then(r => { inputs.code.el.placeholder = `${r.code} (given automatically)`; }).catch(() => {});
     inputs.category.el.addEventListener('change', showNext);
     showNext();
+  }
+  if (entity === 'purchase_orders' && inputs.lines?.refresh) {
+    // Charges change the totals at once.
+    for (const k of [...PO_CHARGES.map(([k]) => k), 'other_charges_label', 'charges_gst']) inputs[k]?.el.addEventListener('input', () => inputs.lines.refresh());
+    inputs.lines.refresh();
+  }
+  if (entity === 'purchase_orders' && writable && isNew && inputs.vendor_id) {
+    // New PO: choosing the vendor brings the terms of its last PO (payment, delivery, warranty …) and its contact person.
+    inputs.vendor_id.el.addEventListener('change', async () => {
+      const vid = inputs.vendor_id.get();
+      if (!vid) return;
+      const t = await api(`/purchase_orders/last-terms?vendor_id=${vid}`).catch(() => null);
+      if (!t) return;
+      for (const k of ['vendor_contact', 'vendor_phone']) if (t[k] && inputs[k] && !inputs[k].get()) inputs[k].set(t[k]);
+      if (!t.from_po) return;
+      for (const k of ['term_advance', 'term_balance', 'term_delivery', 'term_warranty', 'term_freight', 'term_validity', 'term_invoice', 'term_jurisdiction', 'terms', 'charges_gst']) if (t[k] != null && t[k] !== '' && inputs[k]) inputs[k].set(t[k]);
+      if (t.payment_schedule?.length && inputs.payment_schedule && !(inputs.payment_schedule.get() || []).length) inputs.payment_schedule.set(t.payment_schedule);
+      inputs.lines?.refresh?.();
+      toast(`Terms copied from this vendor's last PO ${t.from_po}. Change them if this quotation says otherwise.`);
+    });
   }
   if (entity === 'purchase_orders' && writable && inputs.requisition_id) {
     inputs.requisition_id.el.addEventListener('change', () => fillFromRequisition(inputs.requisition_id.get(), inputs).catch(fail));

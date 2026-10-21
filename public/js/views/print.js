@@ -2,7 +2,7 @@ import { h, api, state, fmtDate } from '../ui.js';
 import { bomDoc } from './bom.js';
 import { bomRows } from './form.js';
 import { PROJECT, ROOM, SITE, roomCalc } from '../brief-fields.js';
-import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, gstTotals, round2 } from '../calc.js';
+import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, amountInWords, linesTotals, gstTotals, round2, poTotals } from '../calc.js';
 
 const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 const lines = s => String(s || '').split('\n');
@@ -167,9 +167,13 @@ function companyHead(s, title) {
 function poDoc(po, v, s) {
   const lines = po.lines || [];
   const intra = !v.state || v.state === (s.state || 'Maharashtra');
-  const t = gstTotals(lines, intra);
-  const rates = [...new Set(lines.filter(l => Number(l.qty) > 0).map(l => Number(l.gst) || 0))];
-  const pct = rates.length === 1 ? rates[0] : null;
+  const t = poTotals(po, intra);
+  const rs = x => `₹ ${inr(x)}`;
+  // Item code column: the vendor's item code (older POs kept the HSN there).
+  const hasVendorCode = lines.some(l => l.vendor_code);
+  const noBorder = { border: 'none' };
+  const sumRow = (label, val, strong) => h('tr', h('td', { style: strong ? { ...noBorder, borderTop: '1px solid #555' } : noBorder }, strong ? h('b', label) : label),
+    h('td.num', { style: strong ? { ...noBorder, borderTop: '1px solid #555' } : noBorder }, strong ? h('b', val) : val));
   let sr = 0;
   const td = (c, attrs) => h('td', attrs || {}, c);
   const terms = [
@@ -187,35 +191,46 @@ function poDoc(po, v, s) {
         v.gstin ? [h('br'), `GST No. : ${v.gstin}`] : null, v.emails ? [h('br'), `Email :- ${String(v.emails).split('\n').join(' ')}`] : null], { style: { width: '38%' } }),
       td([h('b', 'Delivery & Billing Address'), h('br'), ...multiline(po.delivery_address || s.po_delivery_address || '')], { style: { width: '32%' } }),
       td([h('b', 'Contact person :'), ' ', po.contact_person || '', h('br'), po.contact_phone || '', h('br'), ...String(po.contact_emails || '').split(/[,;]\s*/).filter(Boolean).flatMap(e => [`Email : ${e}`, h('br')])])),
-      h('tr', td(`Contact Person : ${v.contact_person || ''}${v.phone ? '  ·  Contact No : ' + v.phone : ''}`), td(`Contact Person : ${po.contact_person || ''}  ·  Contact No : ${po.contact_phone || ''}`, { colspan: 2 })))),
-    h('p', { style: { margin: '6px 0' } }, `Ref.:- ${po.quotation_ref ? 'Your quotation ' + po.quotation_ref : 'Your quotation'}`),
-    h('p', { style: { margin: '6px 0' } }, ...multiline(s.po_greeting || '')),
-    h('table',
-      h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (INR)', 'GST', 'Amount (INR)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
+      // Contact person, and the contact number on the row below, for the vendor and for us.
+      h('tr', td(`Contact Person : ${po.vendor_contact || v.contact_person || ''}`), td(`Contact Person : ${po.contact_person || ''}`, { colspan: 2 })),
+      h('tr', td(`Contact No : ${po.vendor_phone || v.phone || ''}`), td(`Contact No : ${po.contact_phone || ''}`, { colspan: 2 })))),
+    // Reference and greetings in their own box.
+    h('table', { style: { marginTop: '-1px' } }, h('tbody',
+      h('tr', td([h('b', 'Ref.:- '), po.quotation_ref ? `Your quotation / P.I. No. ${po.quotation_ref}${po.quotation_date ? ' dated ' + fmtDate(po.quotation_date).replaceAll('/', '.') : ''}` : 'Your quotation / P.I. No. & date'])),
+      h('tr', td(multiline(s.po_greeting || ''))))),
+    h('table', { style: { marginTop: '-1px' } },
+      h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
       h('tbody', lines.map(l => h('tr',
-        td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(l.hsn || ''), td(h('div.spec', l.spec || '')),
+        td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
+        td([h('div.spec', l.spec || ''), hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
         td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
         td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
-      h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', inr(t.subtotal)), { class: 'num' })))),
+      h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
     h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
       td([h('b', 'Terms & conditions :'), h('table', { style: { border: 'none', marginTop: '4px' } }, h('tbody', terms.filter(([, val], i) => i === 0 || val).map(([k, val]) =>
         h('tr', h('td', { style: { border: 'none', width: '22px', verticalAlign: 'top' } }, ['Advance', 'Balance'].includes(k) ? '' : ++n),
           h('td', { style: { border: 'none', width: '110px', verticalAlign: 'top' } }, k === 'Payment Terms' ? h('b', k) : `${k}  -`),
           h('td', { style: { border: 'none', whiteSpace: 'pre-wrap' } }, val || '')))))], { style: { width: '62%' } }),
-      td(h('table', { style: { border: 'none' } }, h('tbody',
-        h('tr', h('td', { style: { border: 'none' } }, 'Sub Total For GST'), h('td.num', { style: { border: 'none' } }, inr(t.subtotal))),
-        intra ? [h('tr', h('td', { style: { border: 'none' } }, `CGST${pct != null ? ` @${pct / 2}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.cgst))),
-          h('tr', h('td', { style: { border: 'none' } }, `SGST${pct != null ? ` @${pct / 2}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.sgst)))]
-          : h('tr', h('td', { style: { border: 'none' } }, `IGST${pct != null ? ` @${pct}%` : ''}`), h('td.num', { style: { border: 'none' } }, inr(t.igst))),
-        h('tr', h('td', { style: { border: 'none' } }, 'Round off'), h('td.num', { style: { border: 'none' } }, inr(t.round_off))),
-        h('tr', h('td', { style: { border: 'none', borderTop: '1px solid #555' } }, h('b', 'Grand Total')), h('td.num', { style: { border: 'none', borderTop: '1px solid #555' } }, h('b', inr(t.total)))))))))),
+      // Sub total, each charge, the taxable value, GST per rate with its %, round off, grand total — all in ₹.
+      td(h('table', { style: noBorder }, h('tbody',
+        sumRow('Sub Total', rs(t.items)),
+        t.charges.map(c => sumRow(c.label, rs(c.amount))),
+        sumRow('Sub Total For GST', rs(t.subtotal)),
+        t.rates.map(r => intra
+          ? [sumRow(`CGST @ ${r / 2}%`, rs(t.byRate[r].tax / 2)), sumRow(`SGST @ ${r / 2}%`, rs(t.byRate[r].tax / 2))]
+          : sumRow(`IGST @ ${r}%`, rs(t.byRate[r].tax))),
+        t.rates.length > 1 ? sumRow(`Total GST (${t.gst_label})`, rs(t.tax)) : null,
+        sumRow('Round off', rs(t.round_off)),
+        sumRow('Grand Total', rs(t.total), true))))))),
     h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
       td([h('b', 'Note: '), po.project_note || ''], { style: { width: '50%' } }),
       td([h('b', 'Rupees in words: '), amountInWords(t.total).replace(/^Rupees /, '')])))),
+    // Sign-offs in the approval order: Purchase → Technical → Commercial → GM.
     h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
-      h('tr', ['Prepared By', 'Checked By', 'Approved By', 'Commercial'].map(x => h('th', { style: { width: '25%' } }, x))),
-      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.tech_approved_by), plainName(po.approved_by), plainName(po.comm_approved_by)].map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
-      h('tr', ['Purchase Executive', 'Purchase Head', 'General Manager', 'Accounts'].map(x => h('td', x))))),
+      h('tr', ['Prepared By', 'Purchase Approval', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '20%' } }, x))),
+      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.purchase_approved_by), plainName(po.tech_approved_by), plainName(po.comm_approved_by), plainName(po.approved_by)]
+        .map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
+      h('tr', ['Purchase Executive', 'Purchase Head', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x))))),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
 }

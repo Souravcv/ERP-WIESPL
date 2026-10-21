@@ -200,7 +200,8 @@ export function poCommercial(id, body, user) {
     return { ...l, ...(c.rate !== undefined && c.rate !== '' ? { rate: Number(c.rate) } : {}), ...(c.gst !== undefined && c.gst !== '' ? { gst: Number(c.gst) } : {}) };
   });
   const patch = { lines };
-  for (const k of ['term_advance', 'term_balance', 'term_delivery', 'term_freight', 'term_validity', 'quotation_ref', 'remarks']) if (body?.[k] !== undefined) patch[k] = body[k];
-  if (Array.isArray(body?.payment_schedule)) patch.payment_schedule = body.payment_schedule.filter(p => p.due_date || p.amount || p.percent || p.description);
+  for (const k of ['term_advance', 'term_balance', 'term_delivery', 'term_freight', 'term_validity', 'quotation_ref', 'remarks',
+    'freight_charges', 'packing_charges', 'installation_charges', 'transport_charges', 'other_charges', 'other_charges_label', 'charges_gst']) if (body?.[k] !== undefined) patch[k] = body[k];
+  if (Array.isArray(body?.payment_schedule)) patch.payment_schedule = body.payment_schedule.filter(p => p.due_date || p.amount || p.percent || p.description || p.trigger === 'After inward (GRN)');
   return updateRow('purchase_orders', id, patch, user, { system: true });
 }

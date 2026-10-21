@@ -111,6 +111,23 @@ export function gstTotals(lines = [], intraState = true) {
   };
 }
 
+// PO charges: part of the taxable value (before GST) at the PO's "GST % on charges".
+export const PO_CHARGES = [['freight_charges', 'Freight Charges'], ['packing_charges', 'Packing Charges'], ['installation_charges', 'Installation Charges'],
+  ['transport_charges', 'Transportation Charges'], ['other_charges', 'Other Charges']];
+export function poTotals(po = {}, intraState = true) {
+  const lines = (po.lines || []).filter(l => num(l.qty) && (l.rate !== undefined && l.rate !== null && l.rate !== ''));
+  const chargeGst = po.charges_gst === undefined || po.charges_gst === null || po.charges_gst === '' ? 18 : num(po.charges_gst);
+  const charges = PO_CHARGES.map(([k, label]) => ({ key: k, label: k === 'other_charges' ? (po.other_charges_label || label) : label, amount: round2(po[k]) })).filter(c => c.amount);
+  const items = linesTotals(lines).subtotal;
+  const all = [...lines.map(l => ({ qty: l.qty, rate: l.rate, gst: l.gst ?? 18 })), ...charges.map(c => ({ qty: 1, rate: c.amount, gst: chargeGst }))];
+  const t = gstTotals(all, intraState);
+  const byRate = {};
+  for (const l of all) { const r = num(l.gst); const a = num(l.qty) * num(l.rate); byRate[r] = byRate[r] || { taxable: 0, tax: 0 }; byRate[r].taxable += a; byRate[r].tax += a * r / 100; }
+  for (const r in byRate) { byRate[r].taxable = round2(byRate[r].taxable); byRate[r].tax = round2(byRate[r].tax); }
+  const rates = Object.keys(byRate).map(Number).filter(r => byRate[r].taxable).sort((a, b) => a - b);
+  return { ...t, items, charges, byRate, rates, gst_label: rates.map(r => `${r}%`).join(' / ') };
+}
+
 export function inr(v, decimals = 2) {
   return num(v).toLocaleString('en-IN', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 }

@@ -34,6 +34,7 @@ migrate();
 seed();
 roles.seedRoles();
 dispatch.migrateProjectBoqs();
+importer.fixPoNumbers();
 purgeExpiredSessions();
 notify.purgeOld();
 
@@ -244,6 +245,22 @@ api.post('/purchase_orders/:id/payments', wrap(req => {
   if (!Array.isArray(req.body?.payment_schedule)) throw new HttpError(400, 'Send the payment schedule');
   return updateRow('purchase_orders', req.params.id, { payment_schedule: req.body.payment_schedule }, req.user, { system: true });
 }));
+// Terms of the vendor's last PO (and the vendor's contact), to start a new PO to the same vendor.
+api.get('/purchase_orders/last-terms', wrap(req => {
+  if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
+  const vid = Number(req.query.vendor_id);
+  const v = db.prepare('SELECT contact_person, phone FROM vendors WHERE id = ?').get(vid);
+  const po = db.prepare('SELECT * FROM purchase_orders WHERE vendor_id = ? AND id <> ? ORDER BY date DESC, id DESC LIMIT 1').get(vid, Number(req.query.exclude) || 0);
+  const out = { vendor_contact: v?.contact_person || null, vendor_phone: v?.phone || null, from_po: po?.po_no || null };
+  if (po) {
+    for (const k of ['term_advance', 'term_balance', 'term_delivery', 'term_warranty', 'term_freight', 'term_validity', 'term_invoice', 'term_jurisdiction', 'terms', 'charges_gst']) out[k] = po[k];
+    out.vendor_contact = po.vendor_contact || out.vendor_contact; out.vendor_phone = po.vendor_phone || out.vendor_phone;
+    // The pattern of the payment schedule (when / %), without this PO's dates and amounts.
+    let sched = []; try { sched = JSON.parse(po.payment_schedule || '[]'); } catch { /* none */ }
+    out.payment_schedule = sched.map(p => ({ trigger: p.trigger || 'Fixed date', days: p.days ?? null, description: p.description || '', percent: p.percent ?? null, amount: null, due_date: '', status: 'Due' }));
+  }
+  return out;
+}));
 api.post('/requisitions/:id/submit', need('requisitions'), wrap(req => wf.submitForApproval('Requisition', req.params.id, req.user)));
 api.post('/requisitions/:id/convert', need('purchase_orders'), wrap(req => wf.requisitionToPO(req.params.id, req.body, req.user)));
 
@@ -301,6 +318,40 @@ function bomEditable(bomId, user) {
   if (bom.status === 'Design Review' && !hasFunction(user.role, 'boq_review')) throw new HttpError(403, `${bom.bom_no} is in design review; only reviewers can change its components`);
 }
 api.get('/my-tasks', wrap(req => myTasks(req.user)));
+// Everything about one project's purchasing: POs (approval, received, billed, paid), vendors, requisitions, BOQs, store, sales.
+api.get('/projects/:id/analysis', wrap(req => {
+  if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
+  const project = getRow('projects', req.params.id);
+  const LIVE = ['Cancelled', 'Rejected'];
+  const pos = listRows('purchase_orders', { project_id: project.id, limit: 5000 }).map(p => {
+    const ordered = (p.lines || []).filter(l => Number(l.qty) > 0);
+    const qty = ordered.reduce((s, l) => s + Number(l.qty), 0), rec = ordered.reduce((s, l) => s + Math.min(Number(l.received) || 0, Number(l.qty)), 0);
+    const received_value = ordered.reduce((s, l) => s + Math.min(Number(l.received) || 0, Number(l.qty)) * (Number(l.rate) || 0), 0);
+    const next = (p.payment_schedule || []).filter(x => x.status !== 'Paid' && x.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
+    return { id: p.id, po_no: p.po_no, date: p.date, vendor: p.vendor_id_label, status: p.status, stage: p.approval_stage, total: p.total || 0,
+      received_pct: qty ? Math.round(rec / qty * 100) : 0, received_value: Math.round(received_value * 100) / 100, billed: p.billed || 0, paid: p.paid || 0,
+      balance: LIVE.includes(p.status) ? 0 : p.balance || 0, next_due: next ? { date: next.due_date, amount: next.amount, what: next.description } : null };
+  });
+  const live = pos.filter(p => !LIVE.includes(p.status));
+  const approved = live.filter(p => !['Draft', 'Pending Approval'].includes(p.status));
+  const sum = (rows, k) => Math.round(rows.reduce((s, r) => s + (Number(r[k]) || 0), 0) * 100) / 100;
+  const byVendor = {};
+  for (const p of live) { const v = byVendor[p.vendor] ||= { vendor: p.vendor, pos: 0, value: 0, paid: 0 }; v.pos++; v.value += p.total; v.paid += p.paid; }
+  const sales = db.prepare(`SELECT COALESCE(SUM(so.order_value), 0) v FROM sales_orders so WHERE so.id = ? AND so.status <> 'Cancelled'`).get(project.sales_order_id || 0).v;
+  const inv = db.prepare(`SELECT COALESCE(SUM(i.total), 0) t, COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.invoice_id = i.id)), 0) r
+    FROM invoices i WHERE i.project_id = ? AND i.status NOT IN ('Cancelled', 'Draft') AND i.type = 'Tax Invoice'`).get(project.id);
+  return {
+    project: { id: project.id, name: project.name, no: project.project_no || project.code, customer: project.customer_id_label, stage: project.stage, status: project.status, material_cost: project.material_cost || 0 },
+    totals: { pos: live.length, value: sum(live, 'total'), approved_value: sum(approved, 'total'), pending: live.filter(p => p.status === 'Pending Approval').length,
+      pending_value: sum(live.filter(p => p.status === 'Pending Approval'), 'total'), drafts: live.filter(p => p.status === 'Draft').length,
+      received_value: sum(live, 'received_value'), billed: sum(live, 'billed'), paid: sum(live, 'paid'), to_pay: sum(approved, 'balance'),
+      due_now: sum(live.filter(p => p.next_due && p.next_due.date <= new Date().toLocaleString('sv-SE').slice(0, 10)), 'balance') },
+    pos, vendors: Object.values(byVendor).sort((a, b) => b.value - a.value),
+    requisitions: db.prepare("SELECT id, req_no, date, status, required_by FROM requisitions WHERE project_id = ? AND status NOT IN ('Closed', 'Rejected') ORDER BY id DESC").all(project.id),
+    boms: listRows('boms', { project_id: project.id }).map(b => ({ id: b.id, bom_no: b.bom_no, client: b.client, status: b.status, lines: b.lines, procured: b.procured_lines, sent: b.sent_lines, progress: b.progress })),
+    sales: { order_value: sales, invoiced: inv.t, received: inv.r },
+  };
+}));
 api.post('/sales_orders/:id/work-order', need('boqs'), wrap(req => flow.workOrderFromSalesOrder(req.params.id, req.user)));
 api.get('/boqs/:id/bom-preview', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.matchPreview(req.params.id); }));
 api.post('/boqs/:id/generate-bom', need('boms'), wrap(req => flow.generateBom(req.params.id, req.body, req.user)));
@@ -391,6 +442,15 @@ api.post('/import/preview/:kind', express.raw({ type: () => true, limit: '60mb' 
   if (!canWrite(ent, req.user.role)) throw new HttpError(403, 'You do not have permission to import this');
   if (!req.body?.length) throw new HttpError(400, 'Upload an .xlsx file');
   return importer.preview(req.params.kind, req.body, req.user);
+}));
+// Old WIESPL PO Excel files, one per call (the import page sends a whole folder file by file).
+api.post('/import/po-file', express.raw({ type: () => true, limit: '30mb' }), wrap(async req => {
+  if (!canWrite('purchase_orders', req.user.role) || !hasFunction(req.user.role, 'import')) throw new HttpError(403, 'Importing POs needs write access to Purchase Orders and the "Import from Excel" permission');
+  if (!req.body?.length) throw new HttpError(400, 'Upload a PO .xlsx');
+  const name = String(req.query.name || 'PO.xlsx');
+  const r = await importer.importPoFile(req.body, name, req.user);
+  audit(req.user.name, 'import', null, 'PO file', `${name}: ${r.map(x => `${x.po_no || ''} ${x.action}`).join(', ')}`);
+  return r;
 }));
 api.post('/import/commit', wrap(req => importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, {
   createMissing: !!req.body?.createMissing, sync: req.body?.sync, removeItems: req.body?.removeItems, canSync: hasFunction(req.user.role, 'import'),

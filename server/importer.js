@@ -8,7 +8,7 @@ import { db, tx, bumpSeq, audit, DATA_DIR } from './db.js';
 import { insertRow, updateRow, HttpError } from './crud.js';
 import { nextItemCode } from './hooks.js';
 import { GST_STATE_CODES, STATES, ITEM_CATEGORIES, UOMS, MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
-import { fyOf, round2 } from '../public/js/calc.js';
+import { fyOf, round2, poTotals } from '../public/js/calc.js';
 
 // ---------------------------------------------------------------- helpers
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -382,58 +382,286 @@ function parseVendorWorkbook(wb, plan) {
 }
 
 // ---------------------------------------------------------------- format: one WIESPL purchase order sheet
-function parsePOSheet(ws, plan, L, resolveVendor) {
-  const at = (addr) => cell(ws.getCell(addr).value);
-  const noA = str(at('B3')), noB = str(at('C3'));
-  const fyText = noB.replace(/^(\d{4})\D(\d{2,4})$/, (m, a, b) => `${a}-${b.slice(-2)}`);
-  const poNo = noA ? `${noA.padStart(3, '0')}${fyText ? '/' + fyText : ''}` : null;
-  const poDate = date(at('B4'));
-  const vendorText = String(at('A7') || '');
-  const v = parseVendorBlock(vendorText);
-  let hdr = null;
-  for (let r = 10; r <= 30 && !hdr; r++) if (norm(str(ws.getCell(`B${r}`).value)) === 'itemname') hdr = r;
-  const lines = [];
-  const terms = {};
-  let note = null;
-  const names = {};
-  if (hdr) {
-    for (let r = hdr + 1; r <= ws.rowCount; r++) {
-      const e = str(ws.getCell(`E${r}`).value);
-      if (/^sub\s*total$/i.test(e)) break;
-      let desc = str(ws.getCell(`B${r}`).value);
-      const hsn = code(ws.getCell(`C${r}`).value), sr = num(ws.getCell(`A${r}`).value);
-      let spec = cell(ws.getCell(`D${r}`).value);
-      spec = spec ? String(spec).replace(/\r/g, '').trim() : '';
-      const qty = num(ws.getCell(`E${r}`).value);
-      if (!desc && !spec && qty == null) continue;
-      // A numbered line without an item name: its first specification line is the item name.
-      if (!desc && sr != null && spec) { const [first, ...rest] = spec.split('\n'); desc = first.trim(); spec = rest.join('\n').trim(); }
-      lines.push({ description: desc || '', hsn: hsn || '', spec, qty, uom: uom(ws.getCell(`F${r}`).value), rate: num(ws.getCell(`G${r}`).value), gst: gstPct(ws.getCell(`H${r}`).value) ?? 18 });
+// ---------------------------------------------------------------- format: WIESPL purchase order (one PO per sheet)
+// Everything is found by its label, so the layouts in use all work: ITEM NAME or ITEM CODE heading, extra columns
+// (Width / Height, Qty in Nos + Qty in Sq. Mtr, HSN/SAC), charges in the totals block, contacts on both sides.
+export function isPoSheet(ws) {
+  for (let r = 1; r <= 6; r++) if (norm(str(ws.getRow(r).getCell(1).value)) === 'pono') return true;
+  return false;
+}
+// "-2026/27", "2026-27", "2026/2027" → "2026-27"
+const poFy = s => { const m = String(s || '').match(/(20\d{2})\s*[-/]\s*(\d{2,4})/); return m ? `${m[1]}-${m[2].slice(-2)}` : null; };
+export function normPoNo(no) {
+  const m = String(no || '').match(/^\s*(\d{1,4})\s*[A-Z]?\s*\/?\s*-?\s*(20\d{2}\s*[-/]\s*\d{2,4})?/i);
+  if (!m) return String(no || '').trim() || null;
+  return `${m[1].padStart(3, '0')}${m[2] ? '/' + poFy(m[2]) : ''}`;
+}
+const CHARGE_RE = [[/freight/i, 'freight_charges'], [/pack(ing|aging)/i, 'packing_charges'], [/install/i, 'installation_charges'], [/transport|cartage/i, 'transport_charges']];
+
+export function readPoSheet(ws) {
+  if (!isPoSheet(ws)) return null;
+  const rowCells = r => { const row = ws.getRow(r); const out = []; row.eachCell({ includeEmpty: false }, (c, col) => { if (!(c.isMerged && c.master !== c)) out.push([col, cell(c.value)]); }); return out; };
+  const A = r => str(ws.getRow(r).getCell(1).value);
+  let poNum = null, fy = null, poDate = null, toRow = null, hdr = null;
+  let dateRaw = null;
+  for (let r = 1; r <= Math.min(40, ws.rowCount); r++) {
+    const a = norm(A(r));
+    if (a === 'pono' && !poNum) { const cs = rowCells(r).filter(([c]) => c > 1 && c < 6).map(([, v]) => str(v)); poNum = cs.find(v => /^\d{1,4}\b/.test(v)) || null; fy = cs.map(poFy).find(Boolean) || null; }
+    if (a === 'podate' && !poDate) { dateRaw = str(ws.getRow(r).getCell(2).value); poDate = date(ws.getRow(r).getCell(2).value); }
+    if (a === 'to' && !toRow) toRow = r;
+    if (a === 'srno' && !hdr) hdr = r;
+  }
+  // A year typed short ("19.06.206"): the year that fits the PO's financial year.
+  const dm = !(poDate && /^20\d\d-/.test(poDate)) && dateRaw && fy ? dateRaw.match(/^(\d{1,2})[./-](\d{1,2})[./-]\d{1,3}$/) : null;
+  if (dm) poDate = realDate(String(Number(dm[2]) >= 4 ? fy.slice(0, 4) : Number(fy.slice(0, 4)) + 1), dm[2], dm[1], dateRaw);
+  if (poDate && !/^20\d\d-\d\d-\d\d$/.test(poDate)) poDate = null;
+  if (!fy && poDate) fy = `20${fyOf(poDate)}`;
+  const poNo = poNum ? normPoNo(`${poNum}${fy ? '/' + fy : ''}`) : null;
+  // Vendor block (column A below "To") and our delivery address (next block to the right).
+  const v = toRow ? parseVendorBlock(String(cell(ws.getRow(toRow + 1).getCell(1).value) || '')) : null;
+  const ourCol = toRow ? rowCells(toRow).find(([c, val]) => c > 1 && /deliver|billing/i.test(String(val || '')))?.[0] : null;
+  const delivery = ourCol ? str(ws.getRow(toRow + 1).getCell(ourCol).value) : null;
+  const pick1 = (re, txt) => { const m = String(txt || '').match(re); return m ? m[1].trim() : null; };
+  let vendorContact = null, vendorPhone = null, ourContact = null, ourPhone = null, quotationRef = null;
+  for (let r = (toRow || 1); r < (hdr || 40); r++) {
+    for (const [c, val] of rowCells(r)) {
+      const t = str(val);
+      const cp = pick1(/contact\s*person\s*[:.\-–]*\s*(.+)$/i, t), cn = pick1(/contact\s*no\.?\s*[:.\-–]*\s*(.+)$/i, t);
+      if (c === 1) { if (cp) vendorContact = vendorContact || cp; if (cn) vendorPhone = vendorPhone || cn; }
+      else if (c === ourCol) { if (cp) ourContact = ourContact || cp; if (cn) ourPhone = ourPhone || cn; }
+    }
+    if (/^ref/i.test(A(r))) {
+      const t = A(r).replace(/^Ref\.?\s*[:.\-–]*\s*/i, '').replace(/^your\s+quotation\s*\/?\s*(P\.?I\.?\s*No\.?)?\s*(&|and)?\s*date\s*[:.\-–]*/i, '').trim();
+      if (t) quotationRef = t;
     }
   }
+  // Item table: columns by heading.
+  const lines = [];
+  const col = {};
+  const extra = {};
+  const charges = {};
+  let otherLabels = [];
+  let tableEnd = null;
+  if (hdr) {
+    const specCols = [], qtyCols = [];
+    // A heading merged over several columns (SPECIFICATIONS over Width + Height) covers all of them.
+    const hrow = ws.getRow(hdr);
+    hrow.eachCell({ includeEmpty: false }, (c, cc) => { if (c.isMerged && c.master !== c && /^specification/.test(norm(str(c.master.value)))) specCols.push(cc); });
+    for (const [c, val] of rowCells(hdr)) {
+      const n = norm(str(val));
+      if (!n) continue;
+      if (/^(itemname|itemcode|itemdescription|particulars|description|materialdescription)/.test(n) && !col.name) col.name = c;
+      else if (/^itemcode|^vendorcode|^partno/.test(n) && !col.code) col.code = c;
+      else if (/^hsn/.test(n) && !col.hsn) col.hsn = c;
+      else if (/^specification/.test(n)) specCols.push(c);
+      else if (/^qty/.test(n)) qtyCols.push(c);
+      else if (/^uom|^unit/.test(n) && !col.uom) col.uom = c;
+      else if (/^rate/.test(n) && !col.rate) col.rate = c;
+      else if (/price/.test(n) && !col.price) col.price = c;
+      else if (/^discount/.test(n) && !col.disc) col.disc = c;
+      else if (/^(i|c|s)?gst/.test(n) && !col.gst) col.gst = c;
+      else if (/^amount/.test(n) && !col.amount) col.amount = c;
+    }
+    // Merged headings ("ITEM CODE" over two columns) leave the 2nd column unnamed: a column between the name and
+    // the specifications holding other values is the item code.
+    if (!col.code && col.name && specCols.length && specCols[0] - col.name === 2 && !col.hsn) col.code = col.name + 1;
+    // Numbers count only in the top cell of a merged block (a merged quantity must not repeat on the next row).
+    const g = (row, c) => (c ? cell(row.getCell(c).value) : null);
+    const gn = (row, c) => { if (!c) return null; const x = row.getCell(c); return x.isMerged && x.master !== x ? null : cell(x.value); };
+    for (let r = hdr + 1; r <= ws.rowCount; r++) {
+      const row = ws.getRow(r);
+      const texts = rowCells(r).map(([, v]) => str(v));
+      if (texts.some(t => /^sub\s*total/i.test(t)) || /^terms/i.test(A(r))) { tableEnd = r; break; }
+      let name = str(g(row, col.name));
+      let vcode = col.code ? code(g(row, col.code)) : '';
+      if (vcode && vcode === name) vcode = '';
+      const specVals = [...new Set(specCols.sort((a, b) => a - b).map(c => str(g(row, c))).filter(Boolean))];
+      let spec = specVals.length > 1 && specVals.every(x => /^\d+(\.\d+)?$/.test(x)) ? specVals.join(' x ') : specVals.join('\n');
+      if (/^(sub\s*)?total$/i.test(name) || /^(sub\s*)?total$/i.test(spec)) continue; // a "Total" row inside the table
+      let rate = num(gn(row, col.rate)), amount = num(gn(row, col.amount));
+      let lineGst = gstPct(g(row, col.gst));
+      // "Per Item Price" is the rate only where the "Rate" column holds the GST (0.18); otherwise it is a price breakdown.
+      const price = col.price ? num(gn(row, col.price)) : null;
+      if (price != null && rate != null && rate > 0 && rate < 1) { if (lineGst == null) lineGst = gstPct(rate); rate = price; }
+      // A breakdown row under an item (component + its price, no number, no quantity): part of that item's specification.
+      const prev = lines[lines.length - 1];
+      if (!name && num(row.getCell(1).value) == null && qtyCols.every(c => num(gn(row, c)) == null) && rate == null && amount == null && prev && spec) {
+        prev.spec = [prev.spec, `${spec}${price != null ? ` – ₹${price}` : ''}`].filter(Boolean).join('\n');
+        continue;
+      }
+      const qtys = qtyCols.map(c => num(gn(row, c))).filter(q => q != null);
+      let qty = qtys.find(q => rate && amount && Math.abs(q * rate - amount) < Math.max(1, amount * 0.001)) ?? qtys[qtys.length > 1 && rate && amount ? qtys.length - 1 : 0] ?? null;
+      let uomVal = gn(row, col.uom);
+      // Headings one column off from the data ("Sqm" under Qty, the quantity under UOM).
+      if (qty == null && qtyCols.length && isUom(str(gn(row, qtyCols[0]))) && num(uomVal) != null) { uomVal = gn(row, qtyCols[0]); qty = num(gn(row, col.uom)); }
+      // A lump-sum line (amount only, e.g. "UGWT ₹10,000"): 1 × the amount; a quantity without a rate: amount ÷ qty.
+      if (qty == null && rate == null && amount > 0) { qty = 1; rate = amount; uomVal = uomVal || 'Lot'; }
+      else if (rate == null && amount > 0 && qty > 0) rate = round2(amount / qty);
+      // Discount %: the rate after discount (list price and discount kept in the specification).
+      let disc = col.disc ? num(gn(row, col.disc)) : null;
+      if (disc > 0 && disc < 1) disc = round2(disc * 100); // 0.5 = 50%
+      if (disc > 0 && disc < 100 && rate) { spec = [spec, `List rate ₹${rate} less ${disc}% discount`].filter(Boolean).join('\n'); rate = round2(rate * (1 - disc / 100)); }
+      const sr = num(row.getCell(1).value);
+      if (!name && !spec) continue; // an unlabelled sub-total ("166500" alone) is not a line
+      if (!name && sr != null && spec) { const [first, ...rest] = spec.split('\n'); name = first.trim(); spec = rest.join('\n').trim(); }
+      lines.push({ description: name || '', vendor_code: vcode || '', hsn: col.hsn ? code(g(row, col.hsn)) : '', spec, qty, uom: uom(uomVal), rate, gst: lineGst ?? 18 });
+    }
+    // Totals block: charges (any label with an amount between "Sub Total" and "Sub Total For GST", e.g. Freight,
+    // Packing, Loading, Admin) and the GST % the Excel totalled with.
+    const blockGst = [];
+    // The totals labels sit under the Qty / UOM / Rate columns; the terms (column B / C) are left of them.
+    const labelFrom = Math.min(...[qtyCols[0], col.uom, col.rate].filter(Boolean), col.amount - 1);
+    if (tableEnd && col.amount) for (let r = tableEnd; r <= Math.min(ws.rowCount, tableEnd + 25); r++) {
+      const cells = rowCells(r).filter(([c]) => c < col.amount && c >= labelFrom);
+      const label = cells.map(([, v]) => str(v)).find(t => t && !/^\d/.test(t) && !/^(-|nil|na)$/i.test(t) && !/terms|payment|advance|balance|delivery|warranty|freight\s*-|validity|invoice|jurisdiction|quality|rupees/i.test(t));
+      const val = num(ws.getRow(r).getCell(col.amount).value);
+      if (!label) continue;
+      if (/^(c|s|i)?\s*gst\b/i.test(label)) { const rt = cells.map(([, v]) => num(v)).find(x => x != null && x > 0 && x < 1); if (rt != null) blockGst.push([label.toLowerCase().replace(/\s+/g, '').slice(0, 4), rt]); continue; }
+      if (/^grand\s*total/i.test(label)) { if (val) extra.excel_total = val; break; }
+      if (/sub\s*total|round|total/i.test(label) || !val) continue;
+      const k = CHARGE_RE.find(([re]) => re.test(label))?.[1];
+      if (k) charges[k] = round2((charges[k] || 0) + val);
+      else { charges.other_charges = round2((charges.other_charges || 0) + val); otherLabels.push(label.replace(/\s*charges?\s*$/i, '').trim()); }
+    }
+    // The GST % of the totals block: CGST + SGST, IGST, or GST. When the item lines say something else
+    // (e.g. 28% on the line but the PO was totalled at 18%), the totals block is what the vendor got.
+    const igst = blockGst.find(([k]) => k === 'igst')?.[1], cg = blockGst.find(([k]) => k === 'cgst')?.[1], sg = blockGst.find(([k]) => k === 'sgst')?.[1], gs = blockGst.find(([k]) => k.startsWith('gst'))?.[1];
+    // Two equal half rates are CGST + SGST even when typed "GST" + "SGST" or "CGST" twice.
+    const halves = blockGst.map(([, r]) => r);
+    const blockRate = igst ?? (halves.length >= 2 && halves[0] === halves[1] && halves[0] <= 0.14 ? halves[0] * 2
+      : cg != null && sg != null ? cg + sg : cg != null || sg != null ? (cg || sg) * 2 : gs);
+    if (blockRate != null) {
+      const pct = round2(blockRate * 100);
+      const rates = [...new Set(lines.filter(l => Number(l.qty) > 0).map(l => Number(l.gst)))];
+      if (rates.length === 1 && rates[0] !== pct) for (const l of lines) l.gst = pct;
+    }
+  }
+  if (otherLabels.length) extra.other_charges_label = `${[...new Set(otherLabels)].join(' + ')} charges`;
+  const excelTotal = extra.excel_total ?? null;
+  delete extra.excel_total;
+  // Terms, note / work order, and the names under the sign-off boxes.
   const TERM_KEYS = { advance: 'term_advance', balance: 'term_balance', delivery: 'term_delivery', warranty: 'term_warranty', freight: 'term_freight', validity: 'term_validity', invoicecopies: 'term_invoice', jurisdiction: 'term_jurisdiction' };
+  const terms = {};
+  let note = null, woNo = null;
+  const names = {};
+  const SIGN = { preparedby: 'prepared_by', purchaseexecutive: 'prepared_by', purchaseapproval: 'purchase_approved_by', technicalapproval: 'tech_approved_by', checkedby: 'tech_approved_by', commercialapproval: 'comm_approved_by', approvedby: 'approved_by' };
+  let signDone = false;
   ws.eachRow((row, r) => {
     const b = norm(str(row.getCell(2).value));
-    for (const [k, f] of Object.entries(TERM_KEYS)) if (b.startsWith(k) && str(row.getCell(3).value)) terms[f] = str(row.getCell(3).value);
-    if (norm(str(row.getCell(1).value)) === 'note') note = str(row.getCell(2).value);
-    if (norm(str(row.getCell(1).value)) === 'preparedby') {
-      const nr = ws.getRow(r + 2);
-      names.prepared_by = str(nr.getCell(1).value) || null;
-      names.tech_approved_by = str(nr.getCell(4).value) || null;
-      names.comm_approved_by = str(nr.getCell(5).value) || null;
-      names.approved_by = str(nr.getCell(8).value) || null;
+    for (const [k, f] of Object.entries(TERM_KEYS)) if (b.startsWith(k) && str(row.getCell(3).value) && !terms[f]) terms[f] = str(row.getCell(3).value);
+    if (norm(A(r)) === 'note') note = str(row.getCell(2).value) || null;
+    const wo = rowCells(r).map(([, v]) => str(v)).map(t => pick1(/work\s*order\s*no\.?\s*[:.\-–]*\s*(.+)$/i, t)).find(Boolean);
+    if (wo && !woNo) woNo = wo;
+    // The sign-off headings row ("Prepared By" or "Purchase Executive" … "Technical Approval" … "Approved By").
+    const heads = rowCells(r).map(([, v]) => norm(str(v)));
+    if (!signDone && heads.some(x => x === 'technicalapproval' || x === 'commercialapproval') && heads.some(x => SIGN[x])) {
+      signDone = true;
+      for (const [c, val] of rowCells(r)) {
+        const f = SIGN[norm(str(val))];
+        if (!f || names[f]) continue;
+        const nm = str(ws.getRow(r + 2).getCell(c).value) || str(ws.getRow(r + 1).getCell(c).value);
+        if (nm && !SIGN[norm(nm)]) names[f] = nm;
+      }
     }
   });
   const errors = [];
-  if (!poNo) errors.push('PO number not found in B3/C3');
-  if (!poDate) errors.push('PO date not found in B4');
-  if (!lines.length) errors.push('No item lines found');
-  const vendor = v ? resolveVendor(v) : null;
-  if (!vendor) errors.push('Vendor not found in A7');
+  if (!poNo) errors.push('PO number not found (row "P.O. No.")');
+  // Item lines are enough (a line ordered "per kg" may have no quantity yet).
+  if (!lines.some(l => l.description && (Number(l.qty) > 0 || Number(l.rate) > 0))) errors.push('No item lines found');
+  if (!v?.name) errors.push('Vendor not found (block under "To")');
+  return {
+    sheet: ws.name, vendor: v, errors, wo_no: woNo, date_missing: !poDate, excel_total: excelTotal,
+    data: { po_no: poNo, date: poDate, lines, ...terms, ...charges, ...extra, charges_gst: 18,
+      project_note: [note, woNo && !/work\s*order/i.test(note || '') && `Work Order No : ${woNo}`].filter(Boolean).join(' · ') || null,
+      quotation_ref: quotationRef, delivery_address: delivery || null, vendor_contact: vendorContact, vendor_phone: vendorPhone,
+      contact_person: ourContact || null, contact_phone: ourPhone || null, prepared_by: '-', ...names },
+  };
+}
+
+// "WIESPL / 1015 / 01 /2024 - Dr. D. Y. Patil …" → the project whose number starts with WIESPL/1015/01.
+function projectForWo(wo) {
+  const m = String(wo || '').match(/(\d{3,5})\s*\/\s*(\d{1,2})\b/);
+  if (!m) return null;
+  const key = `${m[1]}/${m[2].padStart(2, '0')}`;
+  for (const p of db.prepare("SELECT id, project_no, code FROM projects WHERE COALESCE(project_no, '') <> ''").all()) {
+    const pm = String(p.project_no).match(/(\d{3,5})\s*\/\s*(\d{1,2})\b/);
+    if (pm && `${pm[1]}/${pm[2].padStart(2, '0')}` === key) return p.id;
+  }
+  return null;
+}
+
+function parsePOSheet(ws, plan, L, resolveVendor) {
+  const p = readPoSheet(ws);
+  if (!p) return;
+  const vendor = p.vendor?.name ? resolveVendor(p.vendor) : null;
+  const projectId = p.wo_no ? L.projectByNo.get(norm(p.wo_no)) || null : null;
   addOp(plan, {
-    sheet: ws.name, kind: 'po', label: `${poNo} · ${v?.name || ''} · ${lines.length} line(s)`, vendor, dupId: poNo ? L.poByNo.get(norm(poNo)) || null : null, errors,
-    data: { po_no: poNo, date: poDate, lines, ...terms, project_note: note, quotation_ref: str(at('A14')).replace(/^Ref\.?:-?\s*/i, '') || null, delivery_address: str(at('D7')) || null, status: 'Closed', ...names },
+    sheet: ws.name, kind: 'po', label: `${p.data.po_no} · ${p.vendor?.name || ''} · ${p.data.lines.length} line(s)`, vendor, dupId: p.data.po_no ? L.poByNo.get(norm(p.data.po_no)) || null : null, errors: p.errors,
+    data: { ...p.data, project_id: projectId, status: 'Approved', approval_stage: null },
   });
+}
+
+// ---------------------------------------------------------------- many PO files at once (e.g. a folder of 400+ old POs)
+// One file per call. A PO already in the CRM is replaced by the file (a revised "( R )" file replaces its original),
+// unless material was already received against it in the CRM. Imported POs are Approved, so GRNs can be made against them.
+export async function importPoFile(buffer, filename, user) {
+  const wb = new ExcelJS.Workbook();
+  try { await wb.xlsx.load(buffer); } catch { throw new HttpError(400, `${filename}: not a readable .xlsx file`); }
+  const sheets = wb.worksheets.map(readPoSheet).filter(Boolean);
+  if (!sheets.length) return [{ file: filename, action: 'error', message: 'No WIESPL purchase order found (row "P.O. No.")' }];
+  const L = lookups();
+  const out = [];
+  for (const p of sheets) {
+    if (p.errors.length) { out.push({ file: filename, po_no: p.data.po_no, action: 'error', message: p.errors.join('; ') }); continue; }
+    try {
+      out.push(tx(() => {
+        const v = p.vendor;
+        let vendorId = (v.gstin && L.vendorByGst.get(v.gstin)) || L.vendorByName.get(norm(v.name)) || null;
+        if (!vendorId) {
+          vendorId = insertRow('vendors', { ...v, contact_person: p.data.vendor_contact || null, phone: v.phone || p.data.vendor_phone || null, incomplete: v.gstin && v.emails ? 'No' : 'Yes' }, user, { system: true }).id;
+          L.vendorByName.set(norm(v.name), vendorId); if (v.gstin) L.vendorByGst.set(v.gstin, vendorId);
+        }
+        const projectId = p.wo_no ? L.projectByNo.get(norm(p.wo_no)) || projectForWo(p.wo_no) : null;
+        const data = { ...p.data, vendor_id: vendorId, project_id: projectId, status: 'Approved', approval_stage: null };
+        // No date in the file: the date of the PO numbered just before it.
+        let note = '';
+        if (!data.date) {
+          const n = Number(String(data.po_no).match(/^(\d+)/)?.[1]);
+          const prev = db.prepare("SELECT date, po_no FROM purchase_orders WHERE CAST(substr(po_no, 1, instr(po_no || '/', '/') - 1) AS INTEGER) < ? AND substr(po_no, -7) = substr(?, -7) ORDER BY CAST(substr(po_no, 1, instr(po_no || '/', '/') - 1) AS INTEGER) DESC LIMIT 1").get(n, data.po_no);
+          data.date = prev?.date || new Date().toLocaleString('sv-SE').slice(0, 10);
+          note = ` · P.O. Date was blank in the file: took ${prev ? `the date of PO ${prev.po_no}` : 'today'}, check it`;
+        }
+        // Compare with the Grand Total written in the Excel; a difference is noted on the PO for someone to check.
+        const crmTotal = poTotals(data, true).total;
+        if (p.excel_total != null && Math.abs(crmTotal - p.excel_total) > 5) {
+          note += ` · CHECK: the Excel grand total is ₹${Math.round(p.excel_total).toLocaleString('en-IN')}, the CRM got ₹${Math.round(crmTotal).toLocaleString('en-IN')} (unusual layout in the file)`;
+          data.remarks = `Imported from ${filename}: the Excel grand total is ₹${Math.round(p.excel_total)}, the CRM calculated ₹${Math.round(crmTotal)}. Check the lines, rates and charges.`;
+        }
+        const existing = db.prepare('SELECT id, status FROM purchase_orders WHERE po_no = ?').get(data.po_no);
+        if (existing) {
+          const received = db.prepare('SELECT COUNT(*) n FROM stock_moves WHERE po_id = ?').get(existing.id).n;
+          if (received) return { file: filename, po_no: data.po_no, action: 'skipped', message: 'already in the CRM with material received against it, kept as it is' };
+          if (!data.project_id) delete data.project_id;
+          updateRow('purchase_orders', existing.id, data, user, { system: true });
+          return { file: filename, po_no: data.po_no, id: existing.id, action: 'replaced', message: (/\(\s*r\s*\)/i.test(filename) ? 'revised PO replaced the earlier one' : 'updated from the file') + note };
+        }
+        const po = insertRow('purchase_orders', data, user, { system: true });
+        L.poByNo.set(norm(po.po_no), po.id);
+        const m = String(po.po_no).match(/^(\d+)\/20(\d{2})-(\d{2})$/);
+        if (m) bumpSeq('po', `${m[2]}-${m[3]}`, Number(m[1]));
+        return { file: filename, po_no: po.po_no, id: po.id, action: 'created', vendor: v.name, total: po.total, message: note.replace(/^ · /, '') || undefined };
+      }));
+    } catch (e) { out.push({ file: filename, po_no: p.data.po_no, action: 'error', message: e.message }); }
+  }
+  return out;
+}
+
+// Older imports stored numbers like "401/-2026/27": make them 401/2026-27.
+export function fixPoNumbers() {
+  for (const p of db.prepare("SELECT id, po_no FROM purchase_orders WHERE po_no LIKE '%/-%' OR po_no LIKE '%/20__/__'").all()) {
+    const n = normPoNo(p.po_no);
+    if (n && n !== p.po_no && !db.prepare('SELECT 1 FROM purchase_orders WHERE po_no = ? AND id <> ?').get(n, p.id)) db.prepare('UPDATE purchase_orders SET po_no = ? WHERE id = ?').run(n, p.id);
+  }
 }
 
 // ---------------------------------------------------------------- simple templates
@@ -574,12 +802,12 @@ export async function preview(kind, buffer, user) {
   } else if (wb.worksheets.some(ws => headerIndex(ws, ['companyaddress']) || headerIndex(ws, ['suppliername']))) {
     detected = 'Vendor address list';
     parseVendorWorkbook(wb, plan);
-  } else if (wb.worksheets.some(ws => norm(str(ws.getCell('A3').value)) === 'pono' && norm(str(ws.getCell('D3').value)) === 'purchaseorder')) {
+  } else if (wb.worksheets.some(isPoSheet)) {
     detected = 'WIESPL purchase order';
     const L = lookups();
     const seen = new Map();
     const resolveVendor = v => (v.gstin && L.vendorByGst.get(v.gstin)) ? { id: L.vendorByGst.get(v.gstin) } : L.vendorByName.get(norm(v.name)) ? { id: L.vendorByName.get(norm(v.name)) } : { ref: vendorOp(plan, L, v, 'Vendors (new)', seen) };
-    for (const ws of wb.worksheets) if (norm(str(ws.getCell('A3').value)) === 'pono') parsePOSheet(ws, plan, L, resolveVendor);
+    for (const ws of wb.worksheets) if (isPoSheet(ws)) parsePOSheet(ws, plan, L, resolveVendor);
   } else if (TEMPLATES[kind]) {
     detected = `${TEMPLATES[kind].title} template`;
     parseTemplate(kind, wb.worksheets[0], plan);

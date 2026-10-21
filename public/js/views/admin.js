@@ -1,7 +1,8 @@
 import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRefCache, fmtDate } from '../ui.js';
-import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions } from '../schema.js';
+import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions, canWrite } from '../schema.js';
 import { table } from './list.js';
 import { PART_UI, PHOTO_SLOTS } from '../parts.js';
+import { inr } from '../calc.js';
 
 // ---------------------------------------------------------------- users (each user gets one role)
 export async function usersView(root) {
@@ -316,6 +317,38 @@ export async function importView(root) {
         h('button.btn', { onclick: () => out.replaceChildren() }, 'Cancel'))));
   }
 
+  // A folder of old WIESPL PO Excel files: each file is read and imported in turn; a revised "( R )" file replaces its original.
+  const poFiles = h('input', { type: 'file', accept: '.xlsx', multiple: true });
+  const poOut = h('div');
+  const poCard = h('div.card', h('h2', '🛒 Old purchase orders (many PO files at once)'),
+    h('p.muted', 'Select all the PO Excel files (WIESPL purchase order format) — e.g. open the folder, press Ctrl+A. Each PO is created as Approved with its vendor, items (name, vendor item code, specification), charges, terms, contacts and approvers; vendors not in the CRM are added. A PO already in the CRM is replaced by its file (a “( R )” revised file replaces the earlier one), unless material was already received against it.'),
+    h('div.toolbar', poFiles, h('button.btn.primary', { onclick: async e => {
+      const files = [...poFiles.files].sort((a, b) => (/\(\s*r\s*\)/i.test(a.name) - /\(\s*r\s*\)/i.test(b.name)) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+      if (!files.length) return fail(new Error('Choose the PO files'));
+      e.target.disabled = true;
+      const res = [];
+      const bar = h('div', { style: { height: '8px', background: 'var(--neutral-bg)', borderRadius: '4px', overflow: 'hidden', margin: '8px 0' } }, h('div', { style: { width: '0%', height: '100%', background: 'var(--good)' } }));
+      const msg = h('div.muted');
+      poOut.replaceChildren(bar, msg);
+      for (const [i, f] of files.entries()) {
+        msg.textContent = `${i + 1} of ${files.length}: ${f.name}`;
+        try { res.push(...await api(`/import/po-file?name=${encodeURIComponent(f.name)}`, { method: 'POST', raw: await f.arrayBuffer() })); }
+        catch (err) { res.push({ file: f.name, action: 'error', message: err.message }); }
+        bar.firstChild.style.width = `${Math.round((i + 1) / files.length * 100)}%`;
+      }
+      e.target.disabled = false;
+      clearRefCache();
+      const n = a => res.filter(r => r.action === a).length;
+      // Not imported, kept, or imported with something to check (total differs from the Excel, date was blank).
+      const problems = res.filter(r => (r.action !== 'created' && r.action !== 'replaced') || /CHECK|blank/.test(r.message || ''));
+      const checks = res.filter(r => /CHECK/.test(r.message || '')).length;
+      poOut.replaceChildren(h('p', h('b', `${files.length} file(s): ${n('created')} PO(s) created · ${n('replaced')} replaced (revisions / updates) · ${n('skipped')} kept · ${n('error')} not imported`),
+        checks ? h('div', { style: { color: 'var(--warn)' } }, `${checks} PO(s) have a total different from the Grand Total in their Excel (unusual layout) — listed below and noted on the PO; please check them.`) : null),
+        problems.length ? h('div.table-wrap', { style: { maxHeight: '320px', overflow: 'auto' } }, h('table.data', h('thead', h('tr', ['File', 'PO', 'Result', 'Why'].map(x => h('th', x)))),
+          h('tbody', problems.map(r => h('tr', h('td', r.file), h('td', r.po_no || ''), h('td', badge(r.action === 'error' ? 'Rejected' : 'Pending'), ' ', r.action), h('td', { style: { color: r.action === 'error' ? 'var(--bad)' : '' } }, r.message || '')))))) : null,
+        h('a.btn', { href: '#/list/purchase_orders' }, 'Open Purchase Orders'));
+    } }, '📥 Import selected PO files')), poOut);
+
   const backup = isAdmin ? h('div.card', h('h2', '💾 Backup & Restore'),
     h('p', 'Download a complete copy of the CRM database (all modules). Keep it on another drive or cloud folder; take one every day or before big imports.'),
     h('div.toolbar', h('button.btn.primary', { onclick: () => download('/api/admin/backup') }, '⬇ Download full backup'),
@@ -334,14 +367,25 @@ export async function importView(root) {
   root.replaceChildren(h('div.page-head', h('h1', '📥 Import from Excel')),
     h('div.card', h('div.toolbar', h('b', 'What are you importing?'), kindSel, tplBtn), help,
       h('div.toolbar', file, h('button.btn.primary', { onclick: () => previewFile().catch(e => { out.replaceChildren(); fail(e); }) }, kindSel.value === 'enquiries' ? 'Import' : 'Preview'))),
-    out, backup);
+    out, canWrite('purchase_orders', state.user.role) ? poCard : null, backup);
 }
 
 export async function searchView(root, q) {
   const targets = ['enquiries', 'customers', 'contacts', 'quotations', 'sales_orders', 'projects', 'invoices', 'purchase_orders', 'vendors', 'items', 'service_tickets'];
   root.replaceChildren(h('div.page-head', h('h1', `🔎 Results for “${q}”`)));
+  // "slow moving", "fast moving", "non moving": stock by movement class (Stock Summary, this financial year).
+  const fsn = /non[\s-]*mov|non[\s-]*m\b/i.test(q) ? 'NON-M' : /\bslow/i.test(q) ? 'SLOW' : /\bfast/i.test(q) ? 'FAST' : null;
+  if (fsn) {
+    const r = await api(`/stock/summary?q=${encodeURIComponent(q)}`).catch(() => null);
+    if (r) root.append(h('div.card', h('h2', `📊 ${{ FAST: 'Fast', SLOW: 'Slow', 'NON-M': 'Non' }[fsn]}-moving stock (${r.rows.length} items, ${inr(r.rows.reduce((s, x) => s + x.closing_value, 0))} in stock)`),
+      h('p.muted', 'Issued in 4+ months this year = fast, 1–3 months = slow, never = non-moving.'),
+      h('table.data', h('thead', h('tr', ['Code', 'Item', 'Category', 'In stock', 'Value', 'Last issued'].map(x => h('th', x)))),
+        h('tbody', r.rows.slice(0, 50).map(x => h('tr.clickable', { onclick: () => (location.hash = `#/view/items/${x.id}`) },
+          h('td', x.code), h('td', x.name), h('td', x.category || ''), h('td.num', `${x.closing} ${x.uom || ''}`), h('td.num', inr(x.closing_value)), h('td', x.last_out ? fmtDate(x.last_out) : 'never'))))),
+      h('a.btn', { href: `#/stock-summary?fsn=${encodeURIComponent(fsn)}` }, `Open all in Stock Summary ›`)));
+  }
   const results = await Promise.all(targets.map(t => api(`/${t}?q=${encodeURIComponent(q)}&limit=50`).then(rows => [t, rows]).catch(() => [t, []])));
   const found = results.filter(([, rows]) => rows.length);
-  if (!found.length) root.append(h('div.empty', 'Nothing found'));
+  if (!found.length && !fsn) root.append(h('div.empty', 'Nothing found'));
   for (const [t, rows] of found) root.append(h('div.card', h('h2', `${ENTITIES[t].icon} ${ENTITIES[t].label} (${rows.length})`), table(t, rows, { pageSize: 10, totals: false })));
 }

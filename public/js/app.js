@@ -11,13 +11,14 @@ import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
 import { storeCheckView } from './views/storecheck.js';
 import { tasksView, taskCount } from './views/tasks.js';
+import { projectAnalysisView } from './views/projectanalysis.js';
 
 const $ = id => document.getElementById(id);
 
 // Screens that are not a single module list, shown at the top of their menu group.
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
-  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders']],
+  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/project-analysis', '📈', 'Project Analysis', 'purchase_orders']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms']],
 };
 // [href, icon, label, who: 'admin' or a function key]
@@ -90,6 +91,7 @@ async function route() {
       case 'bom': await bomView(view, a); break;
       case 'store-check': await storeCheckView(view); break;
       case 'tasks': await tasksView(view); refreshPending(); break;
+      case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }

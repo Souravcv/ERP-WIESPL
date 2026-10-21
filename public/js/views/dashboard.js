@@ -46,7 +46,8 @@ function webLeadsCard() {
 export async function dashboardView(root) {
   const role = state.user.role;
   const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store'],
-    (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts']].filter(Boolean);
+    (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts'],
+    canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects']].filter(Boolean);
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
   let tab = sessionStorage.getItem('dash-tab');
   if (!views.some(v => v[0] === tab)) {
@@ -54,6 +55,14 @@ export async function dashboardView(root) {
     tab = views.some(v => v[0] === pref) ? pref : views[0][0];
   }
   if (tab === 'crm') return crmDashboard(root, views);
+  if (tab === 'projects') {
+    // Pick a project: its POs, approvals, received, bills, payments, requisitions, BOQs, store issues and sales.
+    const pbox = h('div');
+    root.replaceChildren(tabsOf(views, 'projects', root), pbox);
+    const { projectAnalysisView } = await import('./projectanalysis.js');
+    await projectAnalysisView(pbox, sessionStorage.getItem('dash-project') || null);
+    return;
+  }
   if (tab === 'accounts') {
     const abox = h('div', h('div.muted', 'Loading…'));
     root.replaceChildren(h('div.page-head', h('h1', '💼 Accounts Dashboard'), h('div.actions', h('a.btn', { href: '#/list/purchase_orders' }, '🛒 Purchase Orders'), h('a.btn', { href: '#/list/invoices' }, '💳 Invoices'))),

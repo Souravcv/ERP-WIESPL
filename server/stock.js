@@ -1,6 +1,7 @@
 // Store module: multi-line stock entries, stock summary (Smart Store formulas), PO tracking, opening stock.
 import { db, tx, nextSeq, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
+import { poInwardDues } from './hooks.js';
 import { MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
 import { round2, fyOf } from '../public/js/calc.js';
 
@@ -82,6 +83,7 @@ export function stockEntry(body, user) {
       const ordered = po.lines.filter(x => Number(x.qty) > 0);
       const all = ordered.every(x => (Number(x.received) || 0) >= Number(x.qty));
       updateRow('purchase_orders', po.id, { lines: po.lines, status: all ? 'Closed' : 'Partially Received' }, user, { system: true });
+      poInwardDues(po.id, date); // "N days after inward" payments become due
     }
     audit(user.name, 'stock_moves', null, `${type} ${docNo}`, `${lines.length} line(s)`);
     return { doc_no: docNo, type, count: created.length, ids: created };
@@ -144,7 +146,14 @@ export function stockSummary(q = {}) {
   let out = rows;
   if (q.item_id) out = out.filter(r => r.id === Number(q.item_id));
   if (q.category) out = out.filter(r => r.category === q.category);
-  if (q.q) { const s = String(q.q).toLowerCase(); out = out.filter(r => `${r.code} ${r.name} ${r.location || ''}`.toLowerCase().includes(s)); }
+  // "slow moving", "fast", "non moving" in the search text filter by FSN class; the rest searches code / name.
+  let text = String(q.q || '').toLowerCase();
+  let fsn = q.fsn || null;
+  const said = [[/\bnon[\s-]*(moving|m)\b|\bnon[\s-]*mov\w*/, 'NON-M'], [/\bslow(\s*moving)?\b/, 'SLOW'], [/\bfast(\s*moving)?\b/, 'FAST']].find(([re]) => re.test(text));
+  if (said) { fsn = fsn || said[1]; text = text.replace(said[0], ' ').replace(/\bmoving\b|\bitems?\b|\bstocks?\b/g, ' ').trim(); }
+  if (fsn) out = out.filter(r => r.fsn === fsn);
+  if (q.abc) out = out.filter(r => r.abc === q.abc);
+  if (text) out = out.filter(r => `${r.code} ${r.name} ${r.location || ''}`.toLowerCase().includes(text));
   if (q.only === 'low') out = out.filter(r => r.low);
   if (q.only === 'instock') out = out.filter(r => r.closing > 0);
   if (q.only === 'negative') out = out.filter(r => r.closing < 0);
