@@ -30,7 +30,8 @@ export function notifyNew(entity, row, actor) {
   return notify({ fn, kind: entity, title: `New ${ent.singular}: ${ref}`, body: [...about.filter(Boolean), `by ${actor?.name || 'system'}`].join(' · '), link: docLink(entity, row.id) }, actor);
 }
 
-const APPROVAL_LINK = { Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}` };
+const APPROVAL_LINK = { Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}`,
+  Payment: id => `#/view/vendor_payments/${id}`, Expense: id => `#/view/expenses/${id}` };
 
 // An approval step is waiting: tell everyone allowed to approve it.
 export function notifyApprovalRequest(ap, actor) {

@@ -10,7 +10,16 @@ const DOCS = {
   Quotation: { entity: 'quotations', ref: 'quote_no', amount: 'grand_total', title: r => `${r.subject || 'Quotation'} — ${r.customer_id_label || ''}`, settingKey: 'require_quote_approval' },
   'Purchase Order': { entity: 'purchase_orders', ref: 'po_no', amount: 'total', title: r => `PO to ${r.vendor_id_label || ''}`, settingKey: 'require_po_approval' },
   Requisition: { entity: 'requisitions', ref: 'req_no', amount: null, title: r => `Requisition – ${r.project_name || r.project_id_label || ''} (${(r.lines || []).length} items)` },
+  Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
+    title: r => `Pay ${r.vendor_id_label || ''} – PO ${r.po_id_label || ''}${r.off_terms === 'Yes' ? ' – OUTSIDE PO TERMS' : ''}` },
+  Expense: { entity: 'expenses', ref: 'voucher_no', amount: 'amount', noLines: true, title: r => `${r.category}: ${r.payee} – ${String(r.description || '').slice(0, 60)}` },
 };
+// Payments / expenses: the GM step only above the approval limit or outside the PO terms.
+const gmNeeded = (docType, row) => {
+  const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
+  return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
+};
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses'];
 
 export function canApprove(docType, stage, user) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
@@ -32,7 +41,7 @@ export function submitForApproval(docType, id, user) {
   const d = DOCS[docType];
   const row = getRow(d.entity, id);
   if (!['Draft', 'Rejected'].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
-  if (docType !== 'Quotation' && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
+  if (docType !== 'Quotation' && !d.noLines && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
   const flow = APPROVAL_FLOWS[docType];
   if (d.settingKey && getSettings()[d.settingKey] === 'No') {
     const patch = { status: 'Approved', approved_by: `${user.name} (auto)` };
@@ -44,7 +53,8 @@ export function submitForApproval(docType, id, user) {
     db.prepare("UPDATE approvals SET status = 'Rejected', comments = COALESCE(comments, 'Superseded by resubmission') WHERE doc_type = ? AND doc_id = ? AND status = 'Pending'").run(docType, Number(id));
     const step = openStep(docType, id, row, 0, user);
     const patch = { status: docType === 'Requisition' ? 'Submitted' : 'Pending Approval' };
-    if (d.entity === 'purchase_orders') Object.assign(patch, { approval_stage: step.stage, tech_approved_by: null, comm_approved_by: null, approved_by: null });
+    if (d.entity === 'purchase_orders') Object.assign(patch, { approval_stage: step.stage, purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null, approved_by: null });
+    if (d.noLines) Object.assign(patch, { approval_stage: step.stage, approved_by: null });
     return updateRow(d.entity, id, patch, user, { system: true });
   });
 }
@@ -58,6 +68,8 @@ export function decide(approvalId, decision, comments, user) {
     throw new HttpError(403, `Your role is not allowed to give “${ap.stage || 'this'}” approval (${FUNCTIONS[step?.fn] || 'approval'}). An admin can allow it under Roles & Permissions.`);
   }
   const d = DOCS[ap.doc_type];
+  // Maker-checker: a payment or expense is approved by someone other than the person who prepared it.
+  if (d?.noLines && ap.requested_by === user.name && user.role !== 'admin') throw new HttpError(403, `You prepared this ${ap.doc_type.toLowerCase()}; someone else has to approve it`);
   if (ap.doc_type === 'Purchase Order' && ap.stage === 'Commercial' && decision === 'Approved') {
     const po = getRow('purchase_orders', ap.doc_id);
     if ((po.lines || []).some(l => Number(l.qty) > 0 && !(Number(l.rate) > 0))) throw new HttpError(400, `Open PO ${po.po_no} and enter the prices in its Commercial step before approving`);
@@ -69,25 +81,27 @@ export function decide(approvalId, decision, comments, user) {
     const idx = Math.max(0, flow.findIndex(s => s.stage === ap.stage));
     const step = flow[idx];
     if (decision === 'Rejected') {
-      updateRow(d.entity, ap.doc_id, { status: 'Rejected', ...(d.entity === 'purchase_orders' ? { approval_stage: null } : {}) }, user, { system: true });
+      updateRow(d.entity, ap.doc_id, { status: 'Rejected', ...(STAGED.includes(d.entity) ? { approval_stage: null } : {}) }, user, { system: true });
       notifyDecision({ ...ap, comments }, decision, true, user);
       return getRow('approvals', approvalId);
     }
     const patch = {};
     if (d.entity === 'purchase_orders') patch[step.field] = `${user.name} (${stamp()})`;
-    if (idx + 1 < flow.length) {
+    if (d.noLines) patch.approved_by = [getRow(d.entity, ap.doc_id).approved_by, `${user.name} (${ap.stage}, ${stamp()})`].filter(Boolean).join(' · ');
+    const moreSteps = idx + 1 < flow.length && (!d.noLines || gmNeeded(ap.doc_type, getRow(d.entity, ap.doc_id)));
+    if (moreSteps) {
       const row = getRow(d.entity, ap.doc_id);
       // The next step is still the original requester's request, so the final decision reaches them.
       const next = openStep(ap.doc_type, ap.doc_id, row, idx + 1, user, ap.requested_by || user.name);
       patch.approval_stage = next.stage;
     } else {
       patch.status = 'Approved';
-      if (d.entity === 'purchase_orders') patch.approval_stage = null;
-      if (d.entity !== 'purchase_orders') patch.approved_by = user.name;
+      if (STAGED.includes(d.entity)) patch.approval_stage = null;
+      if (d.entity !== 'purchase_orders' && !d.noLines) patch.approved_by = user.name;
       if (d.entity === 'quotations' || d.entity === 'requisitions') patch.approved_at = stamp();
     }
     updateRow(d.entity, ap.doc_id, patch, user, { system: true });
-    notifyDecision({ ...ap, comments }, decision, idx + 1 >= flow.length, user);
+    notifyDecision({ ...ap, comments }, decision, !moreSteps, user);
     return getRow('approvals', approvalId);
   });
 }

@@ -90,6 +90,9 @@ export const FUNCTIONS = {
   notify_boq: 'Pop-up: new BOQ (bill of material)',
   notify_work_order: 'Pop-up: new work order',
   notify_enquiry: 'Pop-up: new enquiry from the client website form',
+  pay_approve: 'Payments & expenses – approve (Accounts), up to the approval limit',
+  pay_final: 'Payments & expenses – GM approval (above the limit, outside the PO terms), 3-way overrides and reversals',
+  pay_record: 'Payments & expenses – mark as paid with UTR / cheque no',
   boq_review: 'BOQ – review / edit department sections (design review)',
   boq_final: 'BOQ – make Final (freeze, reserve stock, auto requisition) and reopen',
   notify_store_check: 'Pop-up: BOQ final – store stock check & auto requisition',
@@ -102,7 +105,7 @@ export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
   purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical'],
-  accounts: ['po_commercial', 'import', 'notify_po'],
+  accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
   store: ['stock_opening', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
@@ -121,7 +124,23 @@ export const APPROVAL_FLOWS = {
     { stage: 'Commercial', fn: 'po_commercial', field: 'comm_approved_by' },
     { stage: 'Approved By (GM)', fn: 'po_final', field: 'approved_by' },
   ],
+  // Accounts approves; the GM step is added only above the approval limit or outside the PO terms.
+  Payment: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
+  Expense: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
 };
+const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
+const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
+const BILL_OWN = `(COALESCE({t}.amount,0) - ${BILL_DN} - ${BILL_DIRECT})`;
+// Advances (paid, no bill) on the PO, less what earlier bills of the PO already took.
+const BILL_ADJ = `MAX(0, MIN(${BILL_OWN}, (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.po_id = {t}.po_id AND p.bill_id IS NULL AND p.status = 'Paid')
+  - (SELECT COALESCE(SUM(b2.amount - (SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = b2.id) - (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = b2.id AND p.status = 'Paid')), 0)
+     FROM vendor_bills b2 WHERE b2.po_id = {t}.po_id AND (b2.bill_date < {t}.bill_date OR (b2.bill_date = {t}.bill_date AND b2.id < {t}.id)))))`;
+export const TDS_SECTIONS = { '': 0, '194C – Contractor / job work': 2, '194C – Contractor (individual / HUF)': 1, '194J – Professional / technical': 10, '194I – Rent': 10, '194H – Commission': 5, '194Q – Purchase of goods': 0.1 };
+export const EXPENSE_NO_PO = ['Salary / Wages', 'Rent', 'Electricity / Utilities', 'Statutory / Govt fees', 'Travel / Conveyance', 'Food / Lodging'];
+export const EXPENSE_CATEGORIES = [...EXPENSE_NO_PO, 'Site expenses (petty)', 'Courier / Postage', 'Repairs (small)', 'Other'];
+const RECEIVED_VALUE = "(SELECT COALESCE(SUM(m.qty * COALESCE(m.rate, 0)), 0) FROM stock_moves m WHERE m.type = 'INWARD' AND m.po_id = {t}.id)";
+const PAID = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.po_id = {t}.id AND p.status = 'Paid')";
+const DEBITED = "(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.po_id = {t}.id)";
 
 const LINE_COLS = [
   { key: 'description', label: 'Description', type: 'text', width: 320 },
@@ -299,7 +318,7 @@ export const ENTITIES = {
     list: ['requested_at', 'doc_type', 'doc_ref', 'stage', 'title', 'amount', 'requested_by', 'status', 'decided_by'],
     statusField: 'status',
     fields: [
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Purchase Order', 'Requisition', 'Discount', 'Expense', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Discount', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
       { key: 'doc_ref', label: 'Document Ref', type: 'text', readonly: true },
@@ -718,7 +737,7 @@ export const ENTITIES = {
     search: ['po_no', 'project_note', 'quotation_ref', 'remarks'],
     list: ['po_no', 'date', 'vendor_id', 'project_id', 'total', 'paid', 'balance', 'approval_stage', 'status'],
     statusField: 'status', print: 'po',
-    related: [['vendor_bills', 'po_id'], ['vendor_payments', 'po_id']],
+    related: [['vendor_bills', 'po_id'], ['vendor_payments', 'po_id'], ['debit_notes', 'po_id']],
     fields: [
       { key: 'po_no', label: 'PO No', type: 'text', readonly: true, hint: 'Auto: 008/2026-27, restarts every April' },
       { key: 'date', label: 'PO Date', type: 'date', default: 'today', required: true },
@@ -774,9 +793,14 @@ export const ENTITIES = {
       { key: 'purchase_approved_by', label: 'Purchase Approval', type: 'text', readonly: true },
       { key: 'tech_approved_by', label: 'Technical Approval', type: 'text', readonly: true },
       { key: 'comm_approved_by', label: 'Commercial Approval', type: 'text', readonly: true },
+      // Received value: material inward (GRN) on this PO × rate, before GST. Paid: only payments actually made.
+      { key: 'received_value', label: 'Received (₹, before GST)', type: 'money', computed: `ROUND(${RECEIVED_VALUE}, 2)` },
       { key: 'billed', label: 'Billed (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(b.amount),0) FROM vendor_bills b WHERE b.po_id = {t}.id)" },
-      { key: 'paid', label: 'Paid (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.po_id = {t}.id)" },
-      { key: 'balance', label: 'To Pay (₹)', type: 'money', computed: "ROUND(COALESCE({t}.total,0) - (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.po_id = {t}.id), 2)" },
+      { key: 'debited', label: 'Debit Notes (₹)', type: 'money', computed: DEBITED },
+      { key: 'paid', label: 'Paid (₹)', type: 'money', computed: PAID },
+      { key: 'balance', label: 'To Pay (₹)', type: 'money', computed: `ROUND(COALESCE({t}.total,0) - ${PAID} - ${DEBITED}, 2)` },
+      // Paid but not yet received (incl. GST share): money out for material not in yet.
+      { key: 'advance_at_risk', label: 'Advance at Risk (₹)', type: 'money', computed: `MAX(ROUND(${PAID} - ${RECEIVED_VALUE} * (CASE WHEN COALESCE({t}.subtotal,0) > 0 THEN {t}.total / {t}.subtotal ELSE 1 END), 2), 0)` },
       { key: 'payment_schedule', label: 'Payment Schedule (for planning)', type: 'lines', span: 2, amounts: false, schedule: true, hidden: true, hint: 'Filled by commercial / accounts. “After inward”: the due date is set when the material is received (GRN) + the days', columns: [
         { key: 'trigger', label: 'When', type: 'select', options: ['Fixed date', 'With PO', 'Before dispatch', 'After inward (GRN)'], width: 150 },
         { key: 'days', label: 'Days after', type: 'number', width: 70 },
@@ -792,42 +816,114 @@ export const ENTITIES = {
     ],
   },
 
-  // Vendor's tax invoice against a PO, and the payments made for it.
+  // ---------------------------------------------------------------- Payables: bills, debit notes, payments, expenses
+  // Vendor's tax invoice against a PO. Payment against it is blocked when the PO's bills exceed the value received
+  // (GRN) by more than the tolerance, unless the GM overrides with a reason (3-way match: PO – GRN – bill).
   vendor_bills: {
     label: 'Vendor Bills', singular: 'Vendor Bill', group: 'Purchase', icon: '🧾', write: ['admin', 'manager', 'accounts', 'purchase', 'purchase_head'],
     display: "{t}.bill_no",
-    search: ['bill_no', 'remarks'],
-    list: ['bill_date', 'bill_no', 'vendor_id', 'po_id', 'amount', 'paid', 'balance', 'due_date', 'status'],
+    search: ['bill_no', 'remarks', 'match_note'],
+    list: ['bill_date', 'bill_no', 'vendor_id', 'po_id', 'amount', 'debited', 'paid', 'balance', 'due_date', 'status', 'match_note'],
     statusField: 'status',
-    related: [['vendor_payments', 'bill_id']],
+    related: [['vendor_payments', 'bill_id'], ['debit_notes', 'bill_id']],
     fields: [
-      { key: 'bill_no', label: 'Vendor Invoice No', type: 'text', required: true },
+      { key: 'bill_no', label: 'Vendor Invoice No', type: 'text', required: true, hint: 'The same invoice number for the same vendor cannot be entered twice' },
       { key: 'bill_date', label: 'Invoice Date', type: 'date', required: true, default: 'today' },
       { key: 'po_id', label: 'Against PO', type: 'ref', ref: 'purchase_orders', required: true },
       { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', hint: 'Taken from the PO' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true },
       { key: 'amount', label: 'Invoice Amount incl. GST (₹)', type: 'money', required: true },
       { key: 'due_date', label: 'Payment Due', type: 'date', hint: 'From the PO payment terms if blank' },
-      { key: 'paid', label: 'Paid', type: 'money', computed: "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id)" },
-      { key: 'balance', label: 'Balance', type: 'money', computed: "ROUND(COALESCE({t}.amount,0) - (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id), 2)" },
-      { key: 'status', label: 'Status', type: 'select', options: ['', 'Unpaid', 'Partly Paid', 'Paid'], computed: `CASE WHEN (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id) >= COALESCE({t}.amount,0) - 0.5 THEN 'Paid'
-        WHEN (SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id) > 0 THEN 'Partly Paid' ELSE 'Unpaid' END` },
+      { key: 'match_note', label: '3-way check (PO – received – bill)', type: 'text', readonly: true, span: 2 },
+      { key: 'override_by', label: '3-way override by (GM)', type: 'text', readonly: true },
+      { key: 'override_reason', label: 'Override reason', type: 'text', readonly: true },
+      { key: 'debited', label: 'Debit Notes', type: 'money', computed: BILL_DN },
+      // Advances paid on the PO before the bill are adjusted against its bills, oldest bill first.
+      { key: 'advance_adjusted', label: 'Advance Adjusted', type: 'money', computed: BILL_ADJ },
+      { key: 'paid', label: 'Paid (incl. advance)', type: 'money', computed: `ROUND(${BILL_DIRECT} + ${BILL_ADJ}, 2)` },
+      { key: 'balance', label: 'Balance', type: 'money', computed: `ROUND(${BILL_OWN} - ${BILL_ADJ}, 2)` },
+      { key: 'status', label: 'Status', type: 'select', options: ['', 'Unpaid', 'Partly Paid', 'Paid'], computed: `CASE WHEN ${BILL_OWN} - ${BILL_ADJ} <= 0.5 THEN 'Paid' WHEN ${BILL_DIRECT} + ${BILL_ADJ} > 0 THEN 'Partly Paid' ELSE 'Unpaid' END` },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
-  vendor_payments: {
-    label: 'Vendor Payments', singular: 'Vendor Payment', group: 'Purchase', icon: '💸', write: ['admin', 'manager', 'accounts'],
-    display: "{t}.date || ' ₹' || {t}.amount",
-    search: ['reference', 'remarks', 'mode'],
-    list: ['date', 'vendor_id', 'po_id', 'bill_id', 'amount', 'mode', 'reference'],
+  // Return, short supply, rate difference: reduces what is payable on the bill / PO (the bill itself is never edited).
+  debit_notes: {
+    label: 'Debit Notes', singular: 'Debit Note', group: 'Purchase', icon: '↩️', write: ['admin', 'manager', 'accounts', 'purchase_head'],
+    display: "{t}.dn_no",
+    search: ['dn_no', 'reason', 'remarks'],
+    list: ['date', 'dn_no', 'vendor_id', 'po_id', 'bill_id', 'reason', 'amount'],
     fields: [
-      { key: 'date', label: 'Paid On', type: 'date', required: true, default: 'today' },
+      { key: 'dn_no', label: 'Debit Note No', type: 'text', readonly: true, hint: 'Auto: DN-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', required: true, default: 'today' },
       { key: 'po_id', label: 'Against PO', type: 'ref', ref: 'purchase_orders', required: true },
-      { key: 'bill_id', label: 'Against Vendor Bill', type: 'ref', ref: 'vendor_bills', hint: 'Blank for an advance before the bill' },
+      { key: 'bill_id', label: 'Against Vendor Bill', type: 'ref', ref: 'vendor_bills' },
       { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', hint: 'Taken from the PO' },
-      { key: 'amount', label: 'Amount (₹)', type: 'money', required: true },
+      { key: 'reason', label: 'Reason', type: 'select', options: ['Material returned', 'Short supply', 'Rate difference', 'Damaged / rejected', 'Late delivery penalty', 'Other'], default: 'Material returned' },
+      { key: 'amount', label: 'Amount incl. GST (₹)', type: 'money', required: true },
+      { key: 'remarks', label: 'Details', type: 'textarea', span: 2 },
+    ],
+  },
+  // A payment to a vendor: always against an approved PO, as an advance the PO terms allow or against a bill.
+  // Draft → Pending Approval (Accounts; GM above the limit or outside the terms) → Approved → Paid (UTR) — locked;
+  // only the GM can reverse it, with a reason.
+  vendor_payments: {
+    label: 'Vendor Payments', singular: 'Vendor Payment', group: 'Purchase', icon: '💸', write: ['admin', 'manager', 'accounts', 'purchase', 'purchase_head'],
+    display: "COALESCE({t}.payment_no, '') || ' ₹' || {t}.amount",
+    search: ['payment_no', 'reference', 'remarks', 'mode', 'reason'],
+    list: ['date', 'payment_no', 'vendor_id', 'po_id', 'project_id', 'kind', 'amount', 'tds_amount', 'net_amount', 'mode', 'reference', 'status', 'bank_date'],
+    statusField: 'status',
+    fields: [
+      { key: 'payment_no', label: 'Payment No', type: 'text', readonly: true, hint: 'Auto: PAY-001/2026-27' },
+      { key: 'date', label: 'Payment Date', type: 'date', required: true, default: 'today' },
+      { key: 'po_id', label: 'Against PO', type: 'ref', ref: 'purchase_orders', required: true, hint: 'Every vendor payment is against an approved PO' },
+      { key: 'kind', label: 'Payment For', type: 'select', options: ['Advance (as per PO terms)', 'Against bill'], default: 'Advance (as per PO terms)' },
+      { key: 'bill_id', label: 'Against Vendor Bill', type: 'ref', ref: 'vendor_bills' },
+      { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', hint: 'Taken from the PO' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true, hint: 'From the PO; blank = store / general' },
+      { key: 'amount', label: 'Amount (gross, ₹)', type: 'money', required: true },
+      { key: 'tds_section', label: 'TDS Section', type: 'select', options: Object.keys(TDS_SECTIONS) },
+      { key: 'tds_rate', label: 'TDS %', type: 'number', hint: 'Filled from the section; change if needed' },
+      { key: 'tds_amount', label: 'TDS (₹)', type: 'money', readonly: true },
+      { key: 'net_amount', label: 'Net Paid to Vendor (₹)', type: 'money', readonly: true },
       { key: 'mode', label: 'Mode', type: 'select', options: ['NEFT / RTGS', 'Cheque', 'UPI', 'Cash', 'DD', 'Other'], default: 'NEFT / RTGS' },
-      { key: 'reference', label: 'UTR / Cheque No', type: 'text' },
+      { key: 'reference', label: 'UTR / Cheque No', type: 'text', readonly: true, hint: 'Entered when it is paid' },
+      { key: 'reason', label: 'Why (if outside the PO terms)', type: 'textarea', span: 2, hint: 'Needed when the payment is more than the terms / bill allow; it then goes to the GM' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Paid', 'Rejected', 'Reversed'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'check_note', label: 'Check against the PO', type: 'textarea', span: 2, readonly: true },
+      { key: 'off_terms', label: 'Outside the PO terms', type: 'yn', readonly: true },
+      { key: 'requested_by', label: 'Prepared By', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+      { key: 'paid_by', label: 'Paid By', type: 'text', readonly: true },
+      { key: 'bank_date', label: 'Bank Reconciled On', type: 'date', readonly: true },
+      { key: 'reversed_reason', label: 'Reversal Reason', type: 'text', readonly: true },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Payments without a PO: salary, rent, utilities, fees (any amount) and small site expenses (up to the limit).
+  expenses: {
+    label: 'Expense Vouchers', singular: 'Expense Voucher', group: 'Purchase', icon: '🧾', write: ALL,
+    display: "{t}.voucher_no",
+    search: ['voucher_no', 'payee', 'description', 'reference'],
+    list: ['date', 'voucher_no', 'category', 'project_id', 'payee', 'amount', 'mode', 'reference', 'status', 'bank_date'],
+    statusField: 'status',
+    fields: [
+      { key: 'voucher_no', label: 'Voucher No', type: 'text', readonly: true, hint: 'Auto: EXP-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', required: true, default: 'today' },
+      { key: 'category', label: 'Category', type: 'select', options: EXPENSE_CATEGORIES, default: 'Site expenses (petty)' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', hint: 'Blank = office / general' },
+      { key: 'payee', label: 'Paid To', type: 'text', required: true },
+      { key: 'amount', label: 'Amount (₹)', type: 'money', required: true },
+      { key: 'description', label: 'What for', type: 'textarea', span: 2, required: true },
+      { key: 'mode', label: 'Mode', type: 'select', options: ['Cash', 'NEFT / RTGS', 'UPI', 'Cheque', 'Other'], default: 'Cash' },
+      { key: 'reference', label: 'UTR / Cheque No', type: 'text', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Paid', 'Rejected', 'Reversed'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'requested_by', label: 'Prepared By', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+      { key: 'paid_by', label: 'Paid By', type: 'text', readonly: true },
+      { key: 'bank_date', label: 'Bank Reconciled On', type: 'date', readonly: true },
+      { key: 'reversed_reason', label: 'Reversal Reason', type: 'text', readonly: true },
     ],
   },
 

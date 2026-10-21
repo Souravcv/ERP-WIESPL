@@ -52,6 +52,20 @@ export function myTasks(user) {
         link: `#/view/requisitions/${r.id}`, due: r.required_by })));
   }
 
+  // Approved payments / expense vouchers waiting to be paid (enter the UTR), and bills blocked by the 3-way check.
+  if (hasFunction(role, 'pay_record')) {
+    group('topay', '💸', 'Approved – pay and enter the UTR', [
+      ...db.prepare("SELECT x.id, x.payment_no no, x.amount, x.net_amount, v.name party FROM vendor_payments x LEFT JOIN vendors v ON v.id = x.vendor_id WHERE x.status = 'Approved' ORDER BY x.id").all()
+        .map(x => ({ title: `${x.no}: pay ₹${Math.round(x.net_amount ?? x.amount).toLocaleString('en-IN')} to ${x.party || ''}`, link: `#/view/vendor_payments/${x.id}` })),
+      ...db.prepare("SELECT id, voucher_no no, amount, payee FROM expenses WHERE status = 'Approved' ORDER BY id").all()
+        .map(x => ({ title: `${x.no}: pay ₹${Math.round(x.amount).toLocaleString('en-IN')} to ${x.payee}`, link: `#/view/expenses/${x.id}` })),
+    ]);
+  }
+  if (hasFunction(role, 'pay_final')) {
+    group('3way', '⚠', 'Bills more than the material received (3-way)', db.prepare("SELECT b.id, b.bill_no, b.match_note, v.name party FROM vendor_bills b LEFT JOIN vendors v ON v.id = b.vendor_id WHERE b.match_note LIKE 'Bills %' AND b.override_by IS NULL").all()
+      .map(b => ({ title: `${b.bill_no} ${b.party || ''}`, sub: b.match_note, link: `#/view/vendor_bills/${b.id}`, late: true })));
+  }
+
   // Approvals this person may give
   const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id").all()
     .filter(a => canApprove(a.doc_type, a.stage, user));

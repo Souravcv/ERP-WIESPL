@@ -115,6 +115,8 @@ const SETTINGS_FORM = [
   ['Company', [['company_name', 'Company name'], ['company_short', 'Short name'], ['tagline', 'Tagline'], ['reg_address', 'Registered address', 'ta'], ['works_address', 'Works address', 'ta'],
     ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['cin', 'CIN'], ['gstin', 'GSTIN'], ['state', 'State (for CGST/SGST vs IGST)'], ['bank_details', 'Bank details (printed on invoices)', 'ta']]],
   ['Numbering & approvals', [['quote_prefix', 'Document prefix (WIESPL/…)'], ['require_quote_approval', 'Quotations need manager approval', 'yn'], ['require_po_approval', 'Purchase orders need manager approval', 'yn']]],
+  ['Payments', [['payment_approval_limit', 'Accounts may approve payments up to (₹); above this the GM approves too'], ['expense_po_limit', 'Expense vouchers without a PO allowed up to (₹) (salary, rent, utilities, fees: any amount)'],
+    ['bill_tolerance_pct', 'Bills may exceed the value received by up to (%) before payment is blocked']]],
   ['Purchase order defaults (printed on every PO)', [['pan', 'Company PAN'], ['po_doc_no', 'Document No (footer)'], ['po_delivery_address', 'Delivery & billing address', 'ta'], ['po_contact_person', 'Our contact person'],
     ['po_contact_phone', 'Contact number'], ['po_contact_emails', 'Purchase email(s)'], ['po_greeting', 'Opening line', 'ta'], ['po_term_advance', 'Payment – Advance'], ['po_term_balance', 'Payment – Balance'],
     ['po_term_delivery', 'Delivery'], ['po_term_warranty', 'Warranty'], ['po_term_freight', 'Freight'], ['po_term_validity', 'Validity', 'ta'], ['po_term_invoice', 'Invoice copies'],

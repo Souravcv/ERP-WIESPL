@@ -392,6 +392,8 @@ export function isPoSheet(ws) {
 // "-2026/27", "2026-27", "2026/2027" → "2026-27"
 const poFy = s => { const m = String(s || '').match(/(20\d{2})\s*[-/]\s*(\d{2,4})/); return m ? `${m[1]}-${m[2].slice(-2)}` : null; };
 export function normPoNo(no) {
+  // "16/26-27" (short year) → 016/2026-27
+  no = String(no || '').replace(/\/\s*(\d{2})\s*-\s*(\d{2})\s*$/, (m, a, b) => `/20${a}-${b}`);
   const m = String(no || '').match(/^\s*(\d{1,4})\s*[A-Z]?\s*\/?\s*-?\s*(20\d{2}\s*[-/]\s*\d{2,4})?/i);
   if (!m) return String(no || '').trim() || null;
   return `${m[1].padStart(3, '0')}${m[2] ? '/' + poFy(m[2]) : ''}`;
@@ -654,6 +656,20 @@ export async function importPoFile(buffer, filename, user) {
     } catch (e) { out.push({ file: filename, po_no: p.data.po_no, action: 'error', message: e.message }); }
   }
   return out;
+}
+
+// Material received in the Smart Store workbook names its PO only as text ("453/2025-26"): link it to that PO, so
+// the PO, the project analysis and the 3-way check know what was received. Returns how many rows were linked.
+export function linkInwardPOs() {
+  const byNo = new Map(db.prepare('SELECT id, po_no FROM purchase_orders').all().map(p => [normPoNo(p.po_no), p.id]));
+  const upd = db.prepare('UPDATE stock_moves SET po_id = ? WHERE id = ?');
+  let n = 0;
+  for (const m of db.prepare("SELECT id, po_no FROM stock_moves WHERE type = 'INWARD' AND po_id IS NULL AND COALESCE(po_no, '') <> ''").all()) {
+    // A cell may name more than one PO ("453/2025-26, 454/2025-26"): the first that exists.
+    const id = String(m.po_no).split(/[,&;+]| and /i).map(s => byNo.get(normPoNo(s.trim()))).find(Boolean);
+    if (id) { upd.run(id, m.id); n++; }
+  }
+  return n;
 }
 
 // Older imports stored numbers like "401/-2026/27": make them 401/2026-27.
@@ -957,6 +973,7 @@ export function commit(token, mode, user, opts = {}) {
     db.prepare('INSERT INTO import_batches (user, kind, file_hash, summary, batch) VALUES (?, ?, ?, ?, ?)').run(user.name, plan.detected, plan.hash, JSON.stringify({ ...result, sync }), batch);
   });
   plans.delete(token);
+  if (plan.sync || plan.closing) result.poLinked = linkInwardPOs();
   if (plan.closing) result.check = compareClosing(plan.closing);
   audit(user.name, 'import', null, plan.detected, JSON.stringify({ ...result, check: result.check && { matched: result.check.matched, different: result.check.different } }));
   return { ...result, sync, batch };

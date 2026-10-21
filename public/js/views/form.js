@@ -476,6 +476,59 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can(entity) && st === 'Partially Received') A.push(h('button.btn', { onclick: status('Closed', 'Close this PO even though some quantity is still pending?') }, 'Short-close'));
       if (can(entity) && st === 'Rejected') A.push(h('button.btn', { onclick: status('Draft') }, 'Back to Draft'));
       if (can(entity) && ['Draft', 'Approved', 'Sent', 'Rejected'].includes(st)) A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this PO?') }, 'Cancel PO'));
+      // Money on this PO: vendor bill, payment request (advance per terms / against a bill), debit note.
+      if (['Approved', 'Sent', 'Partially Received', 'Received', 'Closed'].includes(st)) {
+        if (can('vendor_bills')) A.push(h('button.btn', { onclick: () => newRecord('vendor_bills', { po_id: id }) }, '🧾 Vendor bill'));
+        if (can('vendor_payments')) A.push(h('button.btn', { onclick: () => newRecord('vendor_payments', { po_id: id }) }, '💸 Payment request'));
+        if (can('debit_notes')) A.push(h('button.btn', { onclick: () => newRecord('debit_notes', { po_id: id }) }, '↩️ Debit note'));
+      }
+      break;
+    }
+    case 'vendor_bills':
+      if (row.po_id && can('vendor_payments') && row.status !== 'Paid') A.push(h('button.btn.primary', { onclick: () => newRecord('vendor_payments', { po_id: row.po_id, bill_id: id, kind: 'Against bill', amount: round2(row.balance) }) }, '💸 Pay this bill'));
+      if (row.po_id && can('debit_notes')) A.push(h('button.btn', { onclick: () => newRecord('debit_notes', { po_id: row.po_id, bill_id: id }) }, '↩️ Debit note'));
+      if (/^Bills /.test(row.match_note || '') && !row.override_by && hasFunction(state.user.role, 'pay_final')) A.push(h('button.btn', { onclick: go(async () => {
+        const why = h('textarea', { rows: 3, placeholder: 'Why may this be paid although less material was received? (e.g. installation service, material delivered direct to site)' });
+        if (!(await modal('Override the 3-way check (GM)', h('div.grid', h('p', row.match_note), h('label', 'Reason *', why)), [{ label: 'Cancel', value: false }, { label: 'Override', cls: 'danger solid', value: true }]))) return;
+        await post(`/vendor_bills/${id}/override`, { reason: why.value }); toast('Override recorded'); reload();
+      }) }, '✔ Override 3-way (GM)'));
+      break;
+    case 'vendor_payments':
+    case 'expenses': {
+      const st = row.status;
+      const role = state.user.role;
+      if (['Draft', 'Rejected'].includes(st) && can(entity)) A.push(h('button.btn.primary', { onclick: busy(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (entity === 'vendor_payments') {
+          // Show the check against the PO before sending it for approval.
+          const c = await api(`/vendor_payments/${id}/check`);
+          if (c.blockers.length) { await modal('This payment cannot be submitted', h('ul', c.blockers.map(b => h('li', { style: { whiteSpace: 'pre-wrap' } }, b))), [{ label: 'OK', value: true }]); return; }
+          const ok = await modal('Submit payment for approval', h('div.grid',
+            h('ul', c.notes.map(n => h('li', n))),
+            c.off_terms ? h('p', { style: { color: 'var(--bad)' } }, 'Outside the PO terms: the reason in “Why” is required, and the GM approves it too.') : null,
+            h('p.muted', `Approval: Accounts${c.gm ? ' → GM' : ''}. It is paid (with UTR) only after approval.`)),
+          [{ label: 'Cancel', value: false }, { label: '📤 Submit', cls: 'primary', value: true }]);
+          if (!ok) return;
+        }
+        await post(`/${entity}/${id}/submit`);
+        toast('Sent for approval'); window.dispatchEvent(new Event('approvals-changed')); reload();
+      }) }, '📤 Submit for approval'));
+      if (st === 'Approved' && hasFunction(role, 'pay_record')) A.push(h('button.btn.good', { onclick: go(async () => {
+        const date = h('input', { type: 'date', value: today() });
+        const mode = h('select', ['NEFT / RTGS', 'Cheque', 'UPI', 'Cash', 'DD', 'Other'].map(x => h('option', x))); mode.value = row.mode || 'NEFT / RTGS';
+        const ref = h('input', { placeholder: 'UTR / cheque no' });
+        const amt = row.net_amount ?? row.amount;
+        if (!(await modal(`Mark ${row.payment_no || row.voucher_no} as paid – ₹ ${inr(amt)}`, h('div.grid',
+          row.tds_amount ? h('p.muted', `Gross ₹ ${inr(row.amount)} − TDS ₹ ${inr(row.tds_amount)} = ₹ ${inr(amt)} to the ${entity === 'expenses' ? 'payee' : 'vendor'}`) : null,
+          h('div.form-grid', h('label', 'Paid on', date), h('label', 'Mode', mode), h('label', 'UTR / Cheque No', ref)),
+          h('p.muted', 'Attach the bank advice / payment screenshot below (📎) after saving.')), [{ label: 'Cancel', value: false }, { label: '💸 Paid', cls: 'good', value: true }]))) return;
+        await post(`/${entity}/${id}/paid`, { date: date.value, mode: mode.value, reference: ref.value }); toast('Recorded as paid'); reload();
+      }) }, '💸 Mark as paid'));
+      if (st === 'Paid' && hasFunction(role, 'pay_final')) A.push(h('button.btn.danger', { onclick: go(async () => {
+        const why = h('textarea', { rows: 3, placeholder: 'e.g. payment bounced / paid to wrong account / entered twice' });
+        if (!(await modal('Reverse this payment?', h('div.grid', h('p', 'It stays in the history as Reversed and no longer counts as paid.'), h('label', 'Reason *', why)), [{ label: 'Cancel', value: false }, { label: '↩ Reverse', cls: 'danger solid', value: true }]))) return;
+        await post(`/${entity}/${id}/reverse`, { reason: why.value }); toast('Reversed'); reload();
+      }) }, '↩ Reverse (GM)'));
       break;
     }
     case 'invoices':

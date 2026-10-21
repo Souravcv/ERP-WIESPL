@@ -22,6 +22,8 @@ import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
 import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
+import * as pay from './payments.js';
+import * as bankreco from './bankreco.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
 import * as roles from './roles.js';
@@ -35,6 +37,7 @@ seed();
 roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
+importer.linkInwardPOs();
 purgeExpiredSessions();
 notify.purgeOld();
 
@@ -318,19 +321,34 @@ function bomEditable(bomId, user) {
   if (bom.status === 'Design Review' && !hasFunction(user.role, 'boq_review')) throw new HttpError(403, `${bom.bom_no} is in design review; only reviewers can change its components`);
 }
 api.get('/my-tasks', wrap(req => myTasks(req.user)));
+// ---------------------------------------------------------------- payables: payments, expenses, bills, reports
+const PAY_DOC = { vendor_payments: 'Payment', expenses: 'Expense' };
+for (const entity of Object.keys(PAY_DOC)) {
+  api.post(`/${entity}/:id/submit`, need(entity), wrap(req => tx(() => { pay.prepareSubmit(entity, req.params.id, req.user); return wf.submitForApproval(PAY_DOC[entity], req.params.id, req.user); })));
+  api.post(`/${entity}/:id/paid`, wrap(req => pay.markPaid(entity, req.params.id, req.body, req.user)));
+  api.post(`/${entity}/:id/reverse`, wrap(req => pay.reverse(entity, req.params.id, req.body, req.user)));
+}
+api.get('/vendor_payments/:id/check', wrap(req => { const r = getRow('vendor_payments', req.params.id); const c = pay.checkPayment(r); return { blockers: c.blockers, notes: c.notes, off_terms: c.offTerms, gm: pay.needsGm({ ...r, off_terms: c.offTerms ? 'Yes' : 'No' }), money: c.m }; }));
+api.post('/vendor_bills/:id/override', wrap(req => pay.overrideBill(req.params.id, req.body, req.user)));
+const payView = req => { if (!canView('vendor_payments', req.user.role)) throw new HttpError(403, 'No access to payments'); };
+api.get('/payables', wrap(req => { payView(req); return pay.payables(req.query); }));
+api.get('/vendor-ledger/:id', wrap(req => { payView(req); return pay.vendorLedger(req.params.id); }));
+api.get('/payments-register', wrap(req => { payView(req); return pay.register(req.query); }));
+const recoRight = req => { if (!hasFunction(req.user.role, 'pay_record')) throw new HttpError(403, 'Bank reconciliation is done by accounts (“mark as paid” permission)'); };
+api.post('/bank-reco/preview', express.raw({ type: () => true, limit: '20mb' }), wrap(req => { recoRight(req); return bankreco.preview(req.body); }));
+api.post('/bank-reco/confirm', wrap(req => { recoRight(req); return bankreco.confirm(req.body, req.user); }));
 // Everything about one project's purchasing: POs (approval, received, billed, paid), vendors, requisitions, BOQs, store, sales.
 api.get('/projects/:id/analysis', wrap(req => {
   if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
   const project = getRow('projects', req.params.id);
   const LIVE = ['Cancelled', 'Rejected'];
   const pos = listRows('purchase_orders', { project_id: project.id, limit: 5000 }).map(p => {
-    const ordered = (p.lines || []).filter(l => Number(l.qty) > 0);
-    const qty = ordered.reduce((s, l) => s + Number(l.qty), 0), rec = ordered.reduce((s, l) => s + Math.min(Number(l.received) || 0, Number(l.qty)), 0);
-    const received_value = ordered.reduce((s, l) => s + Math.min(Number(l.received) || 0, Number(l.qty)) * (Number(l.rate) || 0), 0);
+    // Received = material in (GRN) at the PO rate incl. GST; advance at risk = paid beyond that.
+    const m = pay.poMoney(p.id);
     const next = (p.payment_schedule || []).filter(x => x.status !== 'Paid' && x.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
     return { id: p.id, po_no: p.po_no, date: p.date, vendor: p.vendor_id_label, status: p.status, stage: p.approval_stage, total: p.total || 0,
-      received_pct: qty ? Math.round(rec / qty * 100) : 0, received_value: Math.round(received_value * 100) / 100, billed: p.billed || 0, paid: p.paid || 0,
-      balance: LIVE.includes(p.status) ? 0 : p.balance || 0, next_due: next ? { date: next.due_date, amount: next.amount, what: next.description } : null };
+      received_pct: p.total ? Math.min(100, Math.round(m.received_incl / p.total * 100)) : 0, received_value: m.received_incl, billed: m.billed, paid: m.paid,
+      advance_at_risk: m.advance_at_risk, balance: LIVE.includes(p.status) ? 0 : p.balance || 0, next_due: next ? { date: next.due_date, amount: next.amount, what: next.description } : null };
   });
   const live = pos.filter(p => !LIVE.includes(p.status));
   const approved = live.filter(p => !['Draft', 'Pending Approval'].includes(p.status));
@@ -344,7 +362,8 @@ api.get('/projects/:id/analysis', wrap(req => {
     project: { id: project.id, name: project.name, no: project.project_no || project.code, customer: project.customer_id_label, stage: project.stage, status: project.status, material_cost: project.material_cost || 0 },
     totals: { pos: live.length, value: sum(live, 'total'), approved_value: sum(approved, 'total'), pending: live.filter(p => p.status === 'Pending Approval').length,
       pending_value: sum(live.filter(p => p.status === 'Pending Approval'), 'total'), drafts: live.filter(p => p.status === 'Draft').length,
-      received_value: sum(live, 'received_value'), billed: sum(live, 'billed'), paid: sum(live, 'paid'), to_pay: sum(approved, 'balance'),
+      received_value: sum(live, 'received_value'), billed: sum(live, 'billed'), paid: sum(live, 'paid'), to_pay: sum(approved, 'balance'), advance_at_risk: sum(live, 'advance_at_risk'),
+      expenses: db.prepare("SELECT COALESCE(SUM(amount), 0) v FROM expenses WHERE project_id = ? AND status = 'Paid'").get(project.id).v,
       due_now: sum(live.filter(p => p.next_due && p.next_due.date <= new Date().toLocaleString('sv-SE').slice(0, 10)), 'balance') },
     pos, vendors: Object.values(byVendor).sort((a, b) => b.value - a.value),
     requisitions: db.prepare("SELECT id, req_no, date, status, required_by FROM requisitions WHERE project_id = ? AND status NOT IN ('Closed', 'Rejected') ORDER BY id DESC").all(project.id),
@@ -549,6 +568,9 @@ const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
   challans: ['Dispatched', 'Delivered', 'Cancelled'],
+  // Once submitted, a payment / expense changes only through approve / reject / paid / reverse.
+  vendor_payments: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
+  expenses: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
@@ -607,6 +629,8 @@ api.delete('/:entity/:id', wrap(req => {
   const row = db.prepare(`SELECT * FROM ${entity} WHERE id = ?`).get(Number(id));
   if (!row) throw new HttpError(404, 'Record not found');
   if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
+  if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
+  if (entity === 'vendor_bills' && db.prepare("SELECT 1 FROM vendor_payments WHERE bill_id = ? AND status <> 'Draft'").get(row.id)) throw new HttpError(409, 'Payments are recorded against this bill; it cannot be deleted (record a debit note instead)');
   if (entity === 'boms' && flow.isLocked(row)) throw new HttpError(409, `${row.bom_no} is Final; Reopen it before deleting`);
   const full = canDelete(entity, req.user.role) || (['bom_items', 'boq_items'].includes(entity) && canWrite(entity, req.user.role));
   if (!canRemove(entity, row, req.user, full && canWrite(entity, req.user.role))) {

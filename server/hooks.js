@@ -1,7 +1,7 @@
 // Per-module business rules applied on every save: document numbering, totals, derived fields.
 import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
-import { GST_STATE_CODES, MOVE_TYPES } from '../public/js/schema.js';
+import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS } from '../public/js/schema.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -115,21 +115,40 @@ export function beforeSave(name, row, existing, user) {
       break;
     }
     case 'vendor_bills':
-    case 'vendor_payments': {
+    case 'vendor_payments':
+    case 'debit_notes': {
       const poId = row.po_id ?? existing?.po_id;
-      const po = poId && db.prepare('SELECT vendor_id, payment_schedule FROM purchase_orders WHERE id = ?').get(poId);
-      if (po && !(row.vendor_id ?? existing?.vendor_id)) row.vendor_id = po.vendor_id;
+      const po = poId && db.prepare('SELECT vendor_id, project_id, payment_schedule FROM purchase_orders WHERE id = ?').get(poId);
+      // Vendor and project always follow the PO.
+      if (po) { row.vendor_id = po.vendor_id; if (name !== 'debit_notes') row.project_id = po.project_id || null; }
       const billId = row.bill_id ?? existing?.bill_id;
-      if (name === 'vendor_payments' && billId) {
+      if (name !== 'vendor_bills' && billId) {
         const b = db.prepare('SELECT po_id FROM vendor_bills WHERE id = ?').get(billId);
         if (b && poId && b.po_id !== Number(poId)) throw Object.assign(new Error('That vendor bill belongs to another PO'), { status: 400 });
       }
-      // Bill due date: the PO's next payment still due.
-      if (name === 'vendor_bills' && po && !(row.due_date ?? existing?.due_date)) {
-        row.due_date = parse(po.payment_schedule, []).filter(p => p.status !== 'Paid' && p.due_date).map(p => p.due_date).sort()[0] || null;
+      if (name === 'vendor_bills') {
+        // The same vendor invoice number cannot be entered twice.
+        const no = String(row.bill_no ?? existing?.bill_no ?? '').trim();
+        const dup = no && db.prepare('SELECT b.id, p.po_no FROM vendor_bills b LEFT JOIN purchase_orders p ON p.id = b.po_id WHERE lower(trim(b.bill_no)) = lower(?) AND b.vendor_id = ? AND b.id <> ?').get(no, row.vendor_id ?? existing?.vendor_id, existing?.id ?? 0);
+        if (dup) throw Object.assign(new Error(`Invoice ${no} of this vendor is already entered (PO ${dup.po_no || ''})`), { status: 409 });
+        // Bill due date: the PO's next payment still due.
+        if (po && !(row.due_date ?? existing?.due_date)) row.due_date = parse(po.payment_schedule, []).filter(p => p.status !== 'Paid' && p.due_date).map(p => p.due_date).sort()[0] || null;
+      }
+      if (name === 'debit_notes' && !existing && !row.dn_no) row.dn_no = docNo('debit_note', date, (n, fy) => `DN-${n}/20${fy}`);
+      if (name === 'vendor_payments') {
+        if (!existing && !row.payment_no) row.payment_no = docNo('payment', date, (n, fy) => `PAY-${n}/20${fy}`);
+        // TDS: rate from the section unless typed; net = gross − TDS.
+        const section = row.tds_section ?? existing?.tds_section ?? '';
+        if ('tds_section' in row && (row.tds_rate == null || row.tds_rate === '') && TDS_SECTIONS[section] != null) row.tds_rate = TDS_SECTIONS[section] || null;
+        const amount = Number(row.amount ?? existing?.amount) || 0, rate = section ? Number(row.tds_rate ?? existing?.tds_rate) || 0 : 0;
+        row.tds_amount = Math.round(amount * rate) / 100;
+        row.net_amount = Math.round((amount - row.tds_amount) * 100) / 100;
       }
       break;
     }
+    case 'expenses':
+      if (!existing && !row.voucher_no) row.voucher_no = docNo('expense', date, (n, fy) => `EXP-${n}/20${fy}`);
+      break;
     case 'boqs':
       if (!existing && !row.boq_no) row.boq_no = docNo('boq', date, (n, fy) => `WO-${n}/20${fy}`);
       if ((row.project_id ?? existing?.project_id) && !(row.customer_id ?? existing?.customer_id)) {
@@ -268,7 +287,7 @@ export function refreshPoPayments(poId) {
   if (!po) return;
   const sched = parse(po.payment_schedule, []);
   if (!sched.length) return;
-  const pays = db.prepare('SELECT date, amount FROM vendor_payments WHERE po_id = ? ORDER BY date, id').all(po.id);
+  const pays = db.prepare("SELECT date, amount FROM vendor_payments WHERE po_id = ? AND status = 'Paid' ORDER BY date, id").all(po.id);
   let left = pays.reduce((s, p) => s + (Number(p.amount) || 0), 0);
   const last = pays.length ? pays[pays.length - 1].date : null;
   for (const p of sched) {
@@ -299,8 +318,27 @@ export function poInwardDues(poId, grnDate) {
   return changed;
 }
 
+// 3-way note on a PO's bills: bills (less debit notes) against the material received (GRN value incl. GST share).
+export function refreshBillNotes(poId) {
+  const po = db.prepare('SELECT id, total, subtotal FROM purchase_orders WHERE id = ?').get(Number(poId));
+  if (!po) return;
+  const one = sql => db.prepare(sql).get(po.id).v || 0;
+  const billed = one('SELECT COALESCE(SUM(amount),0) v FROM vendor_bills WHERE po_id = ?');
+  if (!billed) return;
+  const received = one("SELECT COALESCE(SUM(qty * COALESCE(rate,0)),0) v FROM stock_moves WHERE type = 'INWARD' AND po_id = ?") * (po.subtotal > 0 ? po.total / po.subtotal : 1);
+  const net = billed - one('SELECT COALESCE(SUM(amount),0) v FROM debit_notes WHERE po_id = ?');
+  const tol = Number(getSettings().bill_tolerance_pct ?? 2) || 0;
+  const rs = n => `₹${Math.round(n).toLocaleString('en-IN')}`;
+  const note = net <= received * (1 + tol / 100) + 1 ? `OK: bills ${rs(net)} ≤ received ${rs(received)} (incl. GST)` : `Bills ${rs(net)} are more than the material received ${rs(received)} (incl. GST, +${tol}% allowed)`;
+  db.prepare('UPDATE vendor_bills SET match_note = ? WHERE po_id = ?').run(note, po.id);
+}
+
 // `deleted` is passed when a row was removed (id is null then).
 export function afterSave(name, id, user, deleted) {
+  if (['vendor_bills', 'debit_notes', 'stock_moves'].includes(name)) {
+    const poId = deleted ? deleted.po_id : db.prepare(`SELECT po_id FROM ${name} WHERE id = ?`).get(id)?.po_id;
+    if (poId) refreshBillNotes(poId);
+  }
   if (name === 'vendor_payments') {
     const poId = deleted ? deleted.po_id : db.prepare('SELECT po_id FROM vendor_payments WHERE id = ?').get(id)?.po_id;
     if (poId) refreshPoPayments(poId);
