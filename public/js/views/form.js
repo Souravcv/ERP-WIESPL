@@ -1,5 +1,5 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
-import { ENTITIES, canWrite, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
@@ -9,10 +9,18 @@ const LOCKED = {
   purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
   challans: ['Dispatched', 'Delivered', 'Cancelled'],
+  vendor_payments: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
+  expenses: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
+  invoices: ['Issued', 'Partially Paid', 'Retention Held', 'Paid', 'Cancelled'],
+  payments: ['Received', 'Reversed'],
+  credit_notes: ['Pending Approval', 'Approved'],
 };
-// Full access may delete anything (also locked documents); anyone else only their own draft.
-export const mayDelete = (entity, row) => canDelete(entity, state.user.role)
-  || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status));
+// Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
+const KEEP = { payments: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
+  vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status) };
+// Full access may delete anything else (also locked documents); anyone else only their own draft.
+export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
+  || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
 
 // New material that is not in the item master yet: add it from the requisition / PO line.
 export async function quickItem(preset = {}) {
@@ -349,6 +357,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('enquiries')) A.push(h('button.btn', { onclick: () => newRecord('enquiries', { customer_id: id }) }, '+ New Enquiry'));
       if (can('contacts')) A.push(h('button.btn', { onclick: () => newRecord('contacts', { customer_id: id }) }, '+ Contact'));
       if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { customer_id: id }) }, '+ Service Ticket'));
+      if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
     case 'enquiries':
       if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
@@ -391,17 +400,31 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('projects')) A.push(h('button.btn', { onclick: go(() => post(`/sales_orders/${id}/project`), p => (location.hash = `#/view/projects/${p.id}`)) }, '🏗️ Create Project'));
       if (row.quotation_id && can('boqs')) A.push(h('button.btn', { title: 'Work order with every quotation line and quantity; then ⚙️ Generate BOQ', onclick: go(() => post(`/sales_orders/${id}/work-order`), r => { toast(`Work order ${r.boq.boq_no}: ${r.lines} line(s) from the quotation`); location.hash = `#/boq/${r.boq.id}`; }) }, '📂 Create Work Order'));
       if (can('invoices')) A.push(h('button.btn.primary', { onclick: go(async () => {
-        const pct = h('input', { type: 'number', value: 50, min: 1, max: 100 });
-        const type = h('select', h('option', 'Proforma Invoice'), h('option', 'Tax Invoice'));
-        const desc = h('input', { placeholder: 'e.g. 50% advance against PO' });
+        const b = await api(`/sales_orders/${id}/billing`);
+        const type = h('select', h('option', 'Tax Invoice'), h('option', 'Proforma Invoice'));
+        const pick = h('select', [...b.milestones.map(m => h('option', { value: m.no },
+          `${m.no}. ${m.description} – ${m.percent}% = ₹ ${inr(m.amount, 0)}${m.invoices.length ? '  ✓ ' + m.invoices.map(x => `${x.no}${x.type === 'Proforma Invoice' ? ' (PI)' : ''}`).join(', ') : ''}`)),
+          h('option', { value: 0 }, 'Running bill / other (enter % or amount)')]);
+        const first = b.milestones.find(m => !m.invoices.some(x => x.type === 'Tax Invoice'));
+        pick.value = first ? first.no : 0;
+        const pct = h('input', { type: 'number', min: 0, max: 100, placeholder: '%' });
+        const amt = h('input', { type: 'number', min: 0, placeholder: 'Basic amount ₹ (before GST)' });
+        const desc = h('input', { placeholder: 'e.g. RA bill 2 – work done up to 15 Oct' });
+        const other = h('div.form-grid', h('label', '% of order value', pct), h('label', 'or basic amount', amt));
+        const sync = () => { other.style.display = pick.value === '0' ? '' : 'none'; };
+        pick.onchange = sync; sync();
         const ok = await modal('Create invoice from Sales Order', h('div.grid',
-          h('p.muted', `Order value ${money(row.order_value)} + GST ${row.gst_rate}%. Payment terms: ${row.payment_terms || '-'}`),
-          h('label', 'Percent of order value', pct), h('label', 'Invoice type', type), h('label', 'Line description (optional)', desc)),
-          [{ label: 'Cancel', value: false }, { label: 'Create', cls: 'primary', value: true }]);
+          h('p.muted', `Order ₹ ${inr(b.so.order_value, 0)} + GST ${b.so.gst_rate}% = ₹ ${inr(b.so.total_value, 0)} · invoiced ₹ ${inr(b.so.invoiced, 0)} · still to invoice ₹ ${inr(b.so.to_invoice, 0)}${b.so.retention_pct ? ` · retention ${b.so.retention_pct}%` : ''}`),
+          b.pct_total !== 100 && b.milestones.length ? h('p', { style: { color: 'var(--warn)' } }, `The milestones add up to ${b.pct_total}%, not 100%. Check them on the sales order.`) : null,
+          h('label', 'Milestone', pick), other, h('label', 'Invoice type', type), h('label', 'Description (optional)', desc),
+          h('p.muted', 'A proforma asks for the advance; money received against it is an advance on the order and is adjusted against the tax invoices. A tax invoice gets its number when you Issue it.')),
+          [{ label: 'Cancel', value: false }, { label: 'Create draft', cls: 'primary', value: true }]);
         if (!ok) return;
-        const inv = await post(`/sales_orders/${id}/invoice`, { percent: Number(pct.value), type: type.value, description: desc.value || undefined });
+        const inv = await post(`/sales_orders/${id}/invoice`, { milestone_no: Number(pick.value) || undefined, percent: Number(pct.value) || undefined, amount: Number(amt.value) || undefined, type: type.value, description: desc.value || undefined });
         location.hash = `#/view/invoices/${inv.id}`;
       }) }, '💳 Create Invoice'));
+      if (can('payments')) A.push(h('button.btn', { onclick: () => newRecord('payments', { kind: 'Advance (against sales order)', sales_order_id: id, customer_id: row.customer_id }) }, '💰 Advance received'));
+      if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${row.customer_id}` }, '📒 Customer statement'));
       break;
     case 'boq_items':
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
@@ -531,9 +554,54 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }) }, '↩ Reverse (GM)'));
       break;
     }
-    case 'invoices':
-      A.push(h('a.btn', { href: `#/print/invoice/${id}`, target: '_blank' }, '🖨 Print Invoice'));
-      if (can('payments') && row.status !== 'Draft' && row.status !== 'Cancelled' && row.balance > 0) A.push(h('button.btn.primary', { onclick: () => newRecord('payments', { invoice_id: id, customer_id: row.customer_id, amount: round2(row.balance) }) }, '💰 Record Payment'));
+    case 'invoices': {
+      const st = row.status, tax = row.type === 'Tax Invoice', role = state.user.role;
+      A.push(h('a.btn', { href: `#/print/invoice/${id}`, target: '_blank' }, st === 'Draft' ? '🖨 Preview' : '🖨 Print Invoice'));
+      if (st === 'Draft' && can('invoices')) A.push(h('button.btn.primary', { onclick: busy(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        const r = await api(`/invoices/${id}`);
+        const ok = await modal(`Issue this ${tax ? 'tax invoice' : 'proforma'}?`, h('div.grid',
+          h('p', `₹ ${inr(r.total)} to ${r.customer_id_label || ''}, dated ${fmtDate(r.date)}.`),
+          tax ? h('p.muted', `It gets the next invoice number and is locked: after this it is corrected only by a credit note.${Number(r.retention_pct) > 0 ? ` Retention ${r.retention_pct}% (₹ ${inr(r.total * r.retention_pct / 100)}) is held until the retention date.` : ''}`) : h('p.muted', 'Money received against it is recorded as an advance on the sales order.')),
+          [{ label: 'Cancel', value: false }, { label: '✔ Issue', cls: 'primary', value: true }]);
+        if (!ok) return;
+        const out = await post(`/invoices/${id}/issue`); toast(`Issued ${out.invoice_no}`); reload();
+      }) }, '✔ Issue invoice'));
+      if (can('payments') && !['Draft', 'Cancelled', 'Paid'].includes(st) && row.balance > 0.5) {
+        A.push(h('button.btn.good', { onclick: () => newRecord('payments', tax ? { kind: 'Against invoice', invoice_id: id, customer_id: row.customer_id, amount: round2(row.due_now > 0.5 ? row.due_now : row.balance) }
+          : { kind: 'Advance (against sales order)', invoice_id: id, sales_order_id: row.sales_order_id, customer_id: row.customer_id, amount: round2(row.balance) }) }, tax ? '💰 Money received' : '💰 Advance received'));
+      }
+      if (tax && can('credit_notes') && !['Draft', 'Cancelled'].includes(st)) A.push(h('button.btn', { onclick: () => newRecord('credit_notes', { invoice_id: id }) }, '↩️ Credit note'));
+      if (!['Draft', 'Cancelled'].includes(st) && hasFunction(role, 'pay_final')) A.push(h('button.btn.danger', { onclick: go(async () => {
+        const why = h('textarea', { rows: 3, placeholder: 'e.g. raised on the wrong customer / duplicate' });
+        if (!(await modal('Cancel this invoice (GM)?', h('div.grid', h('p', 'Only while nothing is received or credited on it. It stays in the register as Cancelled; its number is not reused.'), h('label', 'Reason *', why)),
+          [{ label: 'Back', value: false }, { label: '✖ Cancel invoice', cls: 'danger solid', value: true }]))) return;
+        await post(`/invoices/${id}/cancel`, { reason: why.value }); toast('Invoice cancelled'); reload();
+      }) }, '✖ Cancel (GM)'));
+      if (row.customer_id) A.push(h('a.btn', { href: `#/receivables/statement/${row.customer_id}` }, '📒 Statement'));
+      break;
+    }
+    case 'payments': {
+      const role = state.user.role;
+      if (row.status === 'Received' && row.tds_amount > 0 && row.form16a !== 'Yes' && can('payments')) A.push(h('button.btn', { onclick: go(async () => {
+        await post(`/payments/${id}/form16a`); toast('Form 16A marked received'); reload();
+      }) }, '📄 Form 16A received'));
+      if (row.status === 'Received' && hasFunction(role, 'pay_final')) A.push(h('button.btn.danger', { onclick: go(async () => {
+        const why = h('textarea', { rows: 3, placeholder: 'e.g. cheque bounced / entered on the wrong invoice / entered twice' });
+        if (!(await modal('Reverse this receipt?', h('div.grid', h('p', 'It stays in the history as Reversed and no longer counts against the invoice.'), h('label', 'Reason *', why)),
+          [{ label: 'Back', value: false }, { label: '↩ Reverse', cls: 'danger solid', value: true }]))) return;
+        await post(`/payments/${id}/reverse`, { reason: why.value }); toast('Reversed'); reload();
+      }) }, '↩ Reverse (GM)'));
+      if (row.customer_id) A.push(h('a.btn', { href: `#/receivables/statement/${row.customer_id}` }, '📒 Statement'));
+      break;
+    }
+    case 'credit_notes':
+      if (['Draft', 'Rejected'].includes(row.status) && can('credit_notes')) A.push(h('button.btn.primary', { onclick: busy(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (!(await confirmBox(`Send credit note of ₹ ${inr(row.total)} on ${row.invoice_id_label || 'the invoice'} to the GM for approval?`))) return;
+        await post(`/credit_notes/${id}/submit`); toast('Sent to the GM'); window.dispatchEvent(new Event('approvals-changed')); reload();
+      }) }, '📤 Submit to GM'));
+      if (row.status === 'Approved') A.push(h('a.btn', { href: `#/print/creditnote/${id}`, target: '_blank' }, '🖨 Print Credit Note'));
       break;
     case 'items':
       if (can('stock_moves')) {
@@ -709,7 +777,7 @@ export async function recordView(root, entity, id) {
 
   const newFiles = pendingAttachments(entity);
   const r = row;
-  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
+  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
     h('div.page-head',

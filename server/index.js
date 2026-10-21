@@ -24,6 +24,7 @@ import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
 import * as pay from './payments.js';
 import * as bankreco from './bankreco.js';
+import * as recv from './receivables.js';
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
 import * as roles from './roles.js';
@@ -193,8 +194,8 @@ api.get('/dashboard', wrap(req => {
       enquiries: total, won, lost, conversion: won + lost ? Math.round((won / (won + lost)) * 100) : null,
       open_quote_value: one("SELECT COALESCE(SUM(grand_total),0) v FROM quotations WHERE status IN ('Approved','Sent','Pending Approval')").v,
       order_value: one("SELECT COALESCE(SUM(order_value),0) v FROM sales_orders WHERE status <> 'Cancelled' AND date BETWEEN ? AND ?", from, to).v,
-      receivable: one("SELECT COALESCE(SUM(i.total - (SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.invoice_id = i.id)),0) v FROM invoices i WHERE i.status IN ('Issued','Partially Paid') AND i.type = 'Tax Invoice'").v,
-      collected: one('SELECT COALESCE(SUM(amount),0) v FROM payments WHERE date BETWEEN ? AND ?', from, to).v,
+      receivable: recv.ageing().totals.total,
+      collected: one("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE status = 'Received' AND date BETWEEN ? AND ?", from, to).v,
       active_projects: one("SELECT COUNT(*) n FROM projects WHERE status = 'Active'").n,
       open_tickets: one("SELECT COUNT(*) n FROM service_tickets WHERE status NOT IN ('Resolved','Closed')").n,
       pending_approvals: one("SELECT COUNT(*) n FROM approvals WHERE status = 'Pending'").n,
@@ -337,6 +338,16 @@ api.get('/payments-register', wrap(req => { payView(req); return pay.register(re
 const recoRight = req => { if (!hasFunction(req.user.role, 'pay_record')) throw new HttpError(403, 'Bank reconciliation is done by accounts (“mark as paid” permission)'); };
 api.post('/bank-reco/preview', express.raw({ type: () => true, limit: '20mb' }), wrap(req => { recoRight(req); return bankreco.preview(req.body); }));
 api.post('/bank-reco/confirm', wrap(req => { recoRight(req); return bankreco.confirm(req.body, req.user); }));
+// ---------------------------------------------------------------- receivables: invoices, receipts, credit notes, reports
+api.post('/invoices/:id/issue', need('invoices'), wrap(req => recv.issueInvoice(req.params.id, req.user)));
+api.post('/invoices/:id/cancel', wrap(req => recv.cancelInvoice(req.params.id, req.body, req.user)));
+api.post('/payments/:id/reverse', wrap(req => recv.reverseReceipt(req.params.id, req.body, req.user)));
+api.post('/payments/:id/form16a', wrap(req => recv.form16aReceived(req.params.id, req.user)));
+api.post('/credit_notes/:id/submit', need('credit_notes'), wrap(req => tx(() => { recv.prepareCreditNote(req.params.id, req.user); return wf.submitForApproval('Credit Note', req.params.id, req.user); })));
+const arView = req => { if (!canView('invoices', req.user.role)) throw new HttpError(403, 'No access to invoices'); };
+api.get('/receivables/ageing', wrap(req => { arView(req); return recv.ageing(req.query); }));
+api.get('/customer-statement/:id', wrap(req => { arView(req); return recv.customerStatement(req.params.id, req.query); }));
+api.get('/receipts-register', wrap(req => { arView(req); return recv.receiptsRegister(req.query); }));
 // Everything about one project's purchasing: POs (approval, received, billed, paid), vendors, requisitions, BOQs, store, sales.
 api.get('/projects/:id/analysis', wrap(req => {
   if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
@@ -355,9 +366,7 @@ api.get('/projects/:id/analysis', wrap(req => {
   const sum = (rows, k) => Math.round(rows.reduce((s, r) => s + (Number(r[k]) || 0), 0) * 100) / 100;
   const byVendor = {};
   for (const p of live) { const v = byVendor[p.vendor] ||= { vendor: p.vendor, pos: 0, value: 0, paid: 0 }; v.pos++; v.value += p.total; v.paid += p.paid; }
-  const sales = db.prepare(`SELECT COALESCE(SUM(so.order_value), 0) v FROM sales_orders so WHERE so.id = ? AND so.status <> 'Cancelled'`).get(project.sales_order_id || 0).v;
-  const inv = db.prepare(`SELECT COALESCE(SUM(i.total), 0) t, COALESCE(SUM((SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.invoice_id = i.id)), 0) r
-    FROM invoices i WHERE i.project_id = ? AND i.status NOT IN ('Cancelled', 'Draft') AND i.type = 'Tax Invoice'`).get(project.id);
+  const sales = recv.projectSales(project);
   return {
     project: { id: project.id, name: project.name, no: project.project_no || project.code, customer: project.customer_id_label, stage: project.stage, status: project.status, material_cost: project.material_cost || 0 },
     totals: { pos: live.length, value: sum(live, 'total'), approved_value: sum(approved, 'total'), pending: live.filter(p => p.status === 'Pending Approval').length,
@@ -368,7 +377,7 @@ api.get('/projects/:id/analysis', wrap(req => {
     pos, vendors: Object.values(byVendor).sort((a, b) => b.value - a.value),
     requisitions: db.prepare("SELECT id, req_no, date, status, required_by FROM requisitions WHERE project_id = ? AND status NOT IN ('Closed', 'Rejected') ORDER BY id DESC").all(project.id),
     boms: listRows('boms', { project_id: project.id }).map(b => ({ id: b.id, bom_no: b.bom_no, client: b.client, status: b.status, lines: b.lines, procured: b.procured_lines, sent: b.sent_lines, progress: b.progress })),
-    sales: { order_value: sales, invoiced: inv.t, received: inv.r },
+    sales,
   };
 }));
 api.post('/sales_orders/:id/work-order', need('boqs'), wrap(req => flow.workOrderFromSalesOrder(req.params.id, req.user)));
@@ -500,7 +509,8 @@ api.post('/admin/restore', requireRole(), express.raw({ type: () => true, limit:
 }));
 api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user)));
 api.post('/sales_orders/:id/project', need('projects'), wrap(req => wf.projectFromSalesOrder(req.params.id, req.user)));
-api.post('/sales_orders/:id/invoice', need('invoices'), wrap(req => wf.invoiceFromSalesOrder(req.params.id, req.body, req.user)));
+api.post('/sales_orders/:id/invoice', need('invoices'), wrap(req => recv.invoiceFromSalesOrder(req.params.id, req.body, req.user)));
+api.get('/sales_orders/:id/billing', wrap(req => { if (!canView('invoices', req.user.role)) throw new HttpError(403, 'No access to invoices'); return recv.soBilling(req.params.id); }));
 
 // Status moves that are allowed outside the edit form, per document state.
 const TRANSITIONS = {
@@ -571,6 +581,10 @@ const LOCKED = {
   // Once submitted, a payment / expense changes only through approve / reject / paid / reverse.
   vendor_payments: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
   expenses: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
+  // An issued invoice is corrected only by a credit note; a receipt only by the GM's reversal.
+  invoices: ['Issued', 'Partially Paid', 'Retention Held', 'Paid', 'Cancelled'],
+  payments: ['Received', 'Reversed'],
+  credit_notes: ['Pending Approval', 'Approved'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
@@ -630,6 +644,9 @@ api.delete('/:entity/:id', wrap(req => {
   if (!row) throw new HttpError(404, 'Record not found');
   if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
+  if (entity === 'payments') throw new HttpError(409, 'A receipt cannot be deleted; the GM can reverse it with a reason (e.g. cheque bounced)');
+  if (entity === 'invoices' && row.status !== 'Draft') throw new HttpError(409, `An issued invoice cannot be deleted${hasFunction(req.user.role, 'pay_final') ? '; cancel it (with a reason) or make a credit note' : '; the GM can cancel it, or make a credit note'}`);
+  if (entity === 'credit_notes' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} credit note cannot be deleted`);
   if (entity === 'vendor_bills' && db.prepare("SELECT 1 FROM vendor_payments WHERE bill_id = ? AND status <> 'Draft'").get(row.id)) throw new HttpError(409, 'Payments are recorded against this bill; it cannot be deleted (record a debit note instead)');
   if (entity === 'boms' && flow.isLocked(row)) throw new HttpError(409, `${row.bom_no} is Final; Reopen it before deleting`);
   const full = canDelete(entity, req.user.role) || (['bom_items', 'boq_items'].includes(entity) && canWrite(entity, req.user.role));

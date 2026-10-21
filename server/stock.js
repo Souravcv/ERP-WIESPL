@@ -1,6 +1,6 @@
 // Store module: multi-line stock entries, stock summary (Smart Store formulas), PO tracking, opening stock.
 import { db, tx, nextSeq, audit } from './db.js';
-import { insertRow, updateRow, getRow, HttpError } from './crud.js';
+import { insertRow, updateRow, getRow, listRows, HttpError } from './crud.js';
 import { poInwardDues } from './hooks.js';
 import { MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
 import { round2, fyOf } from '../public/js/calc.js';
@@ -287,10 +287,10 @@ export function accountsDashboard() {
   for (let i = 0; i < 6; i++) { const x = new Date(d0.getFullYear(), d0.getMonth() + i, 1); months.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
   const pastMonths = [];
   for (let i = 5; i >= 0; i--) { const x = new Date(d0.getFullYear(), d0.getMonth() - i, 1); pastMonths.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
-  const coll = db.prepare("SELECT substr(date, 1, 7) mo, SUM(amount) v FROM payments WHERE date >= ? GROUP BY 1").all(pastMonths[0] + '-01');
-  const inv = db.prepare(`SELECT i.id, i.invoice_no, i.date, i.due_date, i.total, c.name customer,
-      i.total - (SELECT COALESCE(SUM(p.amount), 0) FROM payments p WHERE p.invoice_id = i.id) balance
-    FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id WHERE i.type = 'Tax Invoice' AND i.status IN ('Issued', 'Partially Paid')`).all();
+  const coll = db.prepare("SELECT substr(date, 1, 7) mo, SUM(amount) v FROM payments WHERE status = 'Received' AND date >= ? GROUP BY 1").all(pastMonths[0] + '-01');
+  // Issued tax invoices with money still to come (after receipts, TDS, credit notes, advances); retention not yet due is not overdue.
+  const inv = listRows('invoices', { type: 'Tax Invoice' }).filter(i => !['Draft', 'Cancelled', 'Paid'].includes(i.status) && i.balance > 0.5)
+    .map(i => ({ id: i.id, invoice_no: i.invoice_no, date: i.date, due_date: i.due_date, total: i.total, customer: i.customer_id_label, balance: i.balance, due_now: i.due_now }));
   const sum = (rows, k = 'amount') => round2(rows.reduce((s, r) => s + (Number(r[k]) || 0), 0));
   return {
     today: t, from,
@@ -308,9 +308,9 @@ export function accountsDashboard() {
       without_schedule: pos.filter(p => ['Approved', 'Sent', 'Partially Received'].includes(p.status) && (!p.payment_schedule || p.payment_schedule === '[]')).length,
     },
     receivables: {
-      outstanding: sum(inv, 'balance'), overdue: sum(inv.filter(i => i.due_date && i.due_date < t), 'balance'),
-      overdue_list: inv.filter(i => i.due_date && i.due_date < t && i.balance > 0.5).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 10),
-      collected_fy: round2(db.prepare('SELECT COALESCE(SUM(amount), 0) v FROM payments WHERE date >= ?').get(from).v),
+      outstanding: sum(inv, 'balance'), overdue: sum(inv.filter(i => i.due_date && i.due_date < t), 'due_now'),
+      overdue_list: inv.filter(i => i.due_date && i.due_date < t && i.due_now > 0.5).map(i => ({ ...i, balance: i.due_now })).sort((a, b) => a.due_date.localeCompare(b.due_date)).slice(0, 10),
+      collected_fy: round2(db.prepare("SELECT COALESCE(SUM(amount), 0) v FROM payments WHERE status = 'Received' AND date >= ?").get(from).v),
       collected_by_month: pastMonths.map(m => ({ month: m, value: round2(coll.find(c => c.mo === m)?.v || 0) })),
     },
   };

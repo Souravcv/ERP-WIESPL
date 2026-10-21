@@ -1,7 +1,7 @@
 // Per-module business rules applied on every save: document numbering, totals, derived fields.
 import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
-import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS } from '../public/js/schema.js';
+import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -227,12 +227,44 @@ export function beforeSave(name, row, existing, user) {
     }
     case 'invoices': {
       const type = row.type ?? existing?.type ?? 'Tax Invoice';
-      if (!existing && !row.invoice_no) {
-        row.invoice_no = type === 'Proforma Invoice'
-          ? docNo('proforma', date, (n, fy) => `PI/${fy}/${n}`)
-          : docNo('invoice', date, (n, fy) => `${prefix()}/${fy}/${n}`);
+      // A proforma is numbered when made; a tax invoice when it is issued (see receivables.issueInvoice), so drafts
+      // leave no gaps in the GST invoice series.
+      if (!existing && !row.invoice_no && type === 'Proforma Invoice') row.invoice_no = docNo('proforma', date, (n, fy) => `PI/${fy}/${n}`);
+      if (existing?.status === 'Draft' && row.status === 'Issued' && type === 'Tax Invoice' && !existing.invoice_no) row.invoice_no = docNo('invoice', date, (n, fy) => `${prefix()}/${fy}/${n}`);
+      const soId = row.sales_order_id ?? existing?.sales_order_id;
+      if (!existing && soId) {
+        const so = db.prepare('SELECT customer_id, retention_pct FROM sales_orders WHERE id = ?').get(Number(soId));
+        if (so) {
+          if (!row.customer_id) row.customer_id = so.customer_id;
+          if (!(Number(row.retention_pct) > 0) && so.retention_pct > 0) row.retention_pct = so.retention_pct;
+          if (!row.project_id) row.project_id = db.prepare('SELECT id FROM projects WHERE sales_order_id = ? ORDER BY id LIMIT 1').get(Number(soId))?.id || null;
+        }
       }
       if ('lines' in row) Object.assign(row, linesTotals(parse(row.lines, [])));
+      break;
+    }
+    case 'credit_notes': {
+      const err = (m, status = 400) => Object.assign(new Error(m), { status });
+      const invId = row.invoice_id ?? existing?.invoice_id;
+      const inv = invId && db.prepare('SELECT id, invoice_no, type, status, customer_id, place_of_supply, total, lines FROM invoices WHERE id = ?').get(Number(invId));
+      if (!inv) throw err('Choose the invoice the credit note is against');
+      if (inv.type !== 'Tax Invoice' || ['Draft', 'Cancelled'].includes(inv.status)) throw err('A credit note goes against an issued tax invoice');
+      row.customer_id = inv.customer_id;
+      row.place_of_supply = inv.place_of_supply;
+      const rate = row.gst_rate ?? existing?.gst_rate;
+      if (rate == null || rate === '') row.gst_rate = Number(parse(inv.lines, [])[0]?.gst ?? 18);
+      const taxable = Number(row.taxable ?? existing?.taxable) || 0;
+      if (!(taxable > 0)) throw err('Enter the taxable value');
+      const g = Number(row.gst_rate ?? existing?.gst_rate) || 0;
+      row.tax = Math.round(taxable * g) / 100;
+      row.total = Math.round((taxable + row.tax) * 100) / 100;
+      const other = db.prepare("SELECT COALESCE(SUM(total), 0) v FROM credit_notes WHERE invoice_id = ? AND status IN ('Pending Approval', 'Approved') AND id <> ?").get(inv.id, existing?.id ?? 0).v;
+      if (row.total > inv.total - other + 1) throw err(`Credit notes on ${inv.invoice_no} would be more than the invoice (₹${inv.total}; already credited ₹${other})`, 409);
+      // Numbered and dated when the GM approves it.
+      if ((row.status ?? existing?.status) === 'Approved' && !existing?.cn_no) {
+        row.date = today();
+        row.cn_no = docNo('credit_note', row.date, (n, fy) => `CN-${n}/20${fy}`);
+      }
       break;
     }
     case 'service_tickets':
@@ -243,10 +275,46 @@ export function beforeSave(name, row, existing, user) {
       if (!existing && !row.submittal_no) row.submittal_no = docNo('submittal', row.submitted_date || today(), (n, fy) => `MAS/${fy}/${n}`);
       break;
     case 'payments': {
-      const invId = row.invoice_id ?? existing?.invoice_id;
-      if (invId && !(row.customer_id ?? existing?.customer_id)) {
-        row.customer_id = db.prepare('SELECT customer_id FROM invoices WHERE id = ?').get(invId)?.customer_id;
+      // Customer receipt. Locked once saved: later changes are only the reversal, bank date and Form 16A flag.
+      if (existing) break;
+      const err = (m, status = 400) => Object.assign(new Error(m), { status });
+      const rs = n => `₹${Math.round(Number(n) || 0).toLocaleString('en-IN')}`;
+      const amount = Number(row.amount) || 0, tds = Number(row.tds_amount) || 0;
+      if (!(amount > 0)) throw err('Enter the amount received');
+      if (tds < 0) throw err('TDS cannot be negative');
+      row.tds_amount = tds || null;
+      const inv = row.invoice_id ? db.prepare('SELECT id, invoice_no, type, status, customer_id, sales_order_id, project_id FROM invoices WHERE id = ?').get(Number(row.invoice_id)) : null;
+      if (row.invoice_id && !inv) throw err('Invoice not found', 404);
+      // Money against a proforma is an advance on its sales order.
+      if (inv?.type === 'Proforma Invoice') {
+        if (inv.status === 'Cancelled') throw err(`Proforma ${inv.invoice_no} is cancelled`);
+        if (!inv.sales_order_id) throw err(`Proforma ${inv.invoice_no} is not on a sales order. Link it to the sales order first: money against a proforma is an advance on the order.`);
+        row.kind = 'Advance (against sales order)';
+        row.sales_order_id = inv.sales_order_id;
       }
+      row.kind ||= 'Against invoice';
+      if (row.kind === 'Against invoice') {
+        if (!inv) throw err('Choose the invoice this money is against (or “Advance” and the sales order)');
+        if (['Draft', 'Cancelled'].includes(inv.status)) throw err(`That invoice is ${inv.status}; money is received against issued invoices`);
+        const bal = invoiceMoney(inv.id).balance;
+        if (amount + tds > bal + 1) throw err(`${rs(amount + tds)} (amount + TDS) is more than the balance of ${inv.invoice_no}: ${rs(bal)}. Record the extra as an advance against the sales order.`, 409);
+        Object.assign(row, { sales_order_id: inv.sales_order_id || null, customer_id: inv.customer_id, project_id: inv.project_id || null });
+      } else {
+        const so = row.sales_order_id && db.prepare('SELECT id, customer_id, status FROM sales_orders WHERE id = ?').get(Number(row.sales_order_id));
+        if (!so) throw err('Choose the sales order the advance is for');
+        if (so.status === 'Cancelled') throw err('That sales order is cancelled');
+        row.customer_id = so.customer_id;
+        row.project_id = db.prepare('SELECT id FROM projects WHERE sales_order_id = ? ORDER BY id LIMIT 1').get(so.id)?.id || null;
+        if (!inv) row.invoice_id = null;
+      }
+      if (!row.customer_id) throw err('Choose the customer');
+      row.mode ||= 'NEFT / RTGS';
+      const ref = String(row.reference || '').trim();
+      row.reference = ref || null;
+      if (row.mode !== 'Cash' && !ref) throw err('Enter the UTR / cheque no');
+      if (ref && db.prepare("SELECT 1 FROM payments WHERE lower(trim(reference)) = lower(?) AND status = 'Received'").get(ref)) throw err(`UTR / cheque no ${ref} is already on another receipt`, 409);
+      if (!row.receipt_no) row.receipt_no = docNo('receipt', date, (n, fy) => `RCT-${n}/20${fy}`);
+      Object.assign(row, { status: 'Received', received_by: user?.name || null, bank_date: null, form16a: tds > 0 ? 'No' : null, reversed_reason: null });
       break;
     }
     case 'stock_moves': {
@@ -273,12 +341,28 @@ export function beforeSave(name, row, existing, user) {
   return row;
 }
 
+// One invoice's money, from the computed fields of the invoices module (receipts, credit notes, advances, retention).
+const INV_MONEY = ['received', 'tds', 'credited', 'advance_adjusted', 'balance', 'retention_held', 'due_now'];
+export function invoiceMoney(id) {
+  const cols = ENTITIES.invoices.fields.filter(f => INV_MONEY.includes(f.key)).map(f => `${f.computed.replaceAll('{t}', 't')} AS ${f.key}`);
+  return db.prepare(`SELECT t.id, t.invoice_no, t.type, t.status, t.total, t.sales_order_id, t.customer_id, ${cols.join(', ')} FROM invoices t WHERE t.id = ?`).get(Number(id));
+}
+
 export function refreshInvoiceStatus(invoiceId) {
-  const inv = db.prepare('SELECT id, total, status FROM invoices WHERE id = ?').get(invoiceId);
-  if (!inv || inv.status === 'Cancelled' || inv.status === 'Draft') return;
-  const paid = db.prepare('SELECT COALESCE(SUM(amount),0) s FROM payments WHERE invoice_id = ?').get(invoiceId).s;
-  const status = paid <= 0 ? 'Issued' : paid + 0.5 >= (inv.total || 0) ? 'Paid' : 'Partially Paid';
-  if (status !== inv.status) db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, invoiceId);
+  const m = invoiceMoney(invoiceId);
+  if (!m || m.status === 'Cancelled' || m.status === 'Draft') return;
+  const status = m.balance <= 0.5 ? 'Paid'
+    : m.type === 'Tax Invoice' && m.retention_held > 0.5 && m.balance - m.retention_held <= 0.5 ? 'Retention Held'
+      : m.received + m.credited + m.advance_adjusted > 0.5 ? 'Partially Paid' : 'Issued';
+  if (status !== m.status) db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(status, m.id);
+}
+
+// Advances on a sales order move between its invoices, so a change refreshes every invoice of the order.
+export function refreshReceivables({ invoiceId, soId } = {}) {
+  const so = soId || (invoiceId && db.prepare('SELECT sales_order_id FROM invoices WHERE id = ?').get(Number(invoiceId))?.sales_order_id);
+  const ids = so ? db.prepare('SELECT id FROM invoices WHERE sales_order_id = ?').all(Number(so)).map(r => r.id) : [];
+  if (invoiceId && !ids.includes(Number(invoiceId))) ids.push(Number(invoiceId));
+  for (const id of ids) refreshInvoiceStatus(id);
 }
 
 // Payments made against a PO mark its payment schedule lines Paid, in order, as far as the money goes.
@@ -355,10 +439,18 @@ export function afterSave(name, id, user, deleted) {
     }
   }
   if (name === 'payments') {
-    const invId = deleted ? deleted.invoice_id : db.prepare('SELECT invoice_id FROM payments WHERE id = ?').get(id)?.invoice_id;
-    if (invId) refreshInvoiceStatus(invId);
+    const r = deleted || db.prepare('SELECT invoice_id, sales_order_id FROM payments WHERE id = ?').get(id);
+    if (r) refreshReceivables({ invoiceId: r.invoice_id, soId: r.sales_order_id });
   }
-  if (name === 'invoices' && id) refreshInvoiceStatus(id);
+  if (name === 'invoices') {
+    const r = deleted || db.prepare('SELECT sales_order_id FROM invoices WHERE id = ?').get(id);
+    refreshReceivables({ invoiceId: deleted ? null : id, soId: r?.sales_order_id });
+  }
+  if (name === 'credit_notes') {
+    const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);
+    if (cn?.invoice_id) refreshReceivables({ invoiceId: cn.invoice_id });
+    if (!deleted && cn?.cn_no) db.prepare("UPDATE approvals SET doc_ref = ? WHERE doc_type = 'Credit Note' AND doc_id = ?").run(cn.cn_no, id);
+  }
   if (name === 'quotations' && id) {
     // Keep the enquiry register's status in step with its quotation.
     const q = db.prepare('SELECT enquiry_id, status FROM quotations WHERE id = ?').get(id);

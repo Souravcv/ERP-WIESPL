@@ -13,13 +13,14 @@ const DOCS = {
   Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
     title: r => `Pay ${r.vendor_id_label || ''} – PO ${r.po_id_label || ''}${r.off_terms === 'Yes' ? ' – OUTSIDE PO TERMS' : ''}` },
   Expense: { entity: 'expenses', ref: 'voucher_no', amount: 'amount', noLines: true, title: r => `${r.category}: ${r.payee} – ${String(r.description || '').slice(0, 60)}` },
+  'Credit Note': { entity: 'credit_notes', ref: 'cn_no', amount: 'total', noLines: true, title: r => `Credit note to ${r.customer_id_label || ''} on ${r.invoice_id_label || ''} – ${r.reason}` },
 };
 // Payments / expenses: the GM step only above the approval limit or outside the PO terms.
 const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses'];
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes'];
 
 export function canApprove(docType, stage, user) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
@@ -30,7 +31,7 @@ function openStep(docType, docId, row, stepIndex, user, requestedBy = user.name)
   const d = DOCS[docType];
   const step = APPROVAL_FLOWS[docType][stepIndex];
   const ap = insertRow('approvals', {
-    doc_type: docType, doc_id: Number(docId), doc_ref: row[d.ref], stage: step.stage, title: d.title(row),
+    doc_type: docType, doc_id: Number(docId), doc_ref: row[d.ref] || `draft #${docId}`, stage: step.stage, title: d.title(row),
     amount: d.amount ? row[d.amount] : null, requested_by: requestedBy, requested_at: stamp(), status: 'Pending',
   }, user, { system: true });
   notifyApprovalRequest(ap, user);
@@ -184,21 +185,6 @@ export function projectFromSalesOrder(soId, user) {
   return insertRow('projects', {
     name: `${cust.name}${cust.place ? ' - ' + cust.place : ''}`, customer_id: so.customer_id, sales_order_id: so.id,
     site_address: cust.address, start_date: new Date().toLocaleString('sv-SE').slice(0, 10), stage: 'Drawing Preparation', status: 'Active', progress: 0,
-  }, user, { system: true });
-}
-
-// Milestone billing, e.g. 50% advance / 45% before dispatch / 5% on installation.
-export function invoiceFromSalesOrder(soId, body, user) {
-  const so = getRow('sales_orders', soId);
-  const pct = Number(body?.percent) || 100;
-  if (pct <= 0 || pct > 100) throw new HttpError(400, 'Percent must be between 1 and 100');
-  const project = db.prepare('SELECT id FROM projects WHERE sales_order_id = ? ORDER BY id LIMIT 1').get(so.id);
-  const cust = getRow('customers', so.customer_id);
-  return insertRow('invoices', {
-    type: body?.type === 'Proforma Invoice' ? 'Proforma Invoice' : 'Tax Invoice',
-    customer_id: so.customer_id, sales_order_id: so.id, project_id: project?.id || null, status: 'Draft',
-    place_of_supply: cust.state || 'Maharashtra', notes: getSettings().invoice_terms || '',
-    lines: [{ description: body?.description || `${pct}% of order value against ${so.so_no}${so.client_po_no ? ' / PO ' + so.client_po_no : ''}`, hsn: '', qty: 1, uom: 'Lot', rate: round2((so.order_value || 0) * pct / 100), gst: so.gst_rate ?? 18 }],
   }, user, { system: true });
 }
 

@@ -91,7 +91,7 @@ export const FUNCTIONS = {
   notify_work_order: 'Pop-up: new work order',
   notify_enquiry: 'Pop-up: new enquiry from the client website form',
   pay_approve: 'Payments & expenses – approve (Accounts), up to the approval limit',
-  pay_final: 'Payments & expenses – GM approval (above the limit, outside the PO terms), 3-way overrides and reversals',
+  pay_final: 'GM – payments & expenses above the limit / outside the PO terms, 3-way overrides, reversals; credit notes, receipt reversals, invoice cancellation',
   pay_record: 'Payments & expenses – mark as paid with UTR / cheque no',
   boq_review: 'BOQ – review / edit department sections (design review)',
   boq_final: 'BOQ – make Final (freeze, reserve stock, auto requisition) and reopen',
@@ -127,6 +127,7 @@ export const APPROVAL_FLOWS = {
   // Accounts approves; the GM step is added only above the approval limit or outside the PO terms.
   Payment: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
   Expense: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
+  'Credit Note': [{ stage: 'GM', fn: 'pay_final' }],
 };
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
@@ -138,6 +139,29 @@ const BILL_ADJ = `MAX(0, MIN(${BILL_OWN}, (SELECT COALESCE(SUM(p.amount),0) FROM
 export const TDS_SECTIONS = { '': 0, '194C – Contractor / job work': 2, '194C – Contractor (individual / HUF)': 1, '194J – Professional / technical': 10, '194I – Rent': 10, '194H – Commission': 5, '194Q – Purchase of goods': 0.1 };
 export const EXPENSE_NO_PO = ['Salary / Wages', 'Rent', 'Electricity / Utilities', 'Statutory / Govt fees', 'Travel / Conveyance', 'Food / Lodging'];
 export const EXPENSE_CATEGORIES = [...EXPENSE_NO_PO, 'Site expenses (petty)', 'Courier / Postage', 'Repairs (small)', 'Other'];
+// TDS the customer deducts when paying us (we claim it against Form 26AS / the Form 16A they send).
+export const CUSTOMER_TDS = ['', '194C – Contract work', '194J – Professional / technical', '194Q – Purchase of goods', 'GST TDS (Govt, sec 51)', 'Other'];
+export const MILESTONE_TRIGGERS = ['With PO / advance', 'Before dispatch', 'On delivery', 'On installation', 'On commissioning / handover', 'Running bill', 'Other'];
+export const RECEIPT_KINDS = ['Against invoice', 'Advance (against sales order)'];
+// Receivables. A receipt settles amount received + TDS deducted by the customer. Advances received on a sales order
+// are adjusted against its tax invoices, oldest invoice first. Retention is the part of an invoice the customer holds
+// until the retention date.
+const INV_LIVE = "({t}.type = 'Tax Invoice' AND {t}.status NOT IN ('Draft', 'Cancelled'))";
+const INV_RCV = "(SELECT COALESCE(SUM(p.amount + COALESCE(p.tds_amount, 0)), 0) FROM payments p WHERE p.invoice_id = {t}.id AND p.status = 'Received')";
+const INV_TDS = "(SELECT COALESCE(SUM(p.tds_amount), 0) FROM payments p WHERE p.invoice_id = {t}.id AND p.status = 'Received')";
+const INV_CN = "(SELECT COALESCE(SUM(c.total), 0) FROM credit_notes c WHERE c.invoice_id = {t}.id AND c.status = 'Approved')";
+const INV_OWN = `(COALESCE({t}.total, 0) - ${INV_CN} - ${INV_RCV})`;
+const INV_ADJ = `(CASE WHEN ${INV_LIVE} AND {t}.sales_order_id IS NOT NULL THEN MAX(0, MIN(${INV_OWN},
+  (SELECT COALESCE(SUM(p.amount + COALESCE(p.tds_amount, 0)), 0) FROM payments p WHERE p.sales_order_id = {t}.sales_order_id AND p.kind = 'Advance (against sales order)' AND p.status = 'Received')
+  - (SELECT COALESCE(SUM(MAX(0, i2.total - (SELECT COALESCE(SUM(c.total), 0) FROM credit_notes c WHERE c.invoice_id = i2.id AND c.status = 'Approved')
+      - (SELECT COALESCE(SUM(p.amount + COALESCE(p.tds_amount, 0)), 0) FROM payments p WHERE p.invoice_id = i2.id AND p.status = 'Received'))), 0)
+     FROM invoices i2 WHERE i2.sales_order_id = {t}.sales_order_id AND i2.type = 'Tax Invoice' AND i2.status NOT IN ('Draft', 'Cancelled')
+       AND (i2.date < {t}.date OR (i2.date = {t}.date AND i2.id < {t}.id))))) ELSE 0 END)`;
+const INV_BAL = `(CASE WHEN {t}.type = 'Proforma Invoice' AND {t}.status <> 'Cancelled' THEN COALESCE({t}.total, 0) - ${INV_RCV} WHEN ${INV_LIVE} THEN ${INV_OWN} - ${INV_ADJ} ELSE 0 END)`;
+const INV_RET = `(CASE WHEN ${INV_LIVE} THEN MIN(MAX(${INV_BAL}, 0), COALESCE({t}.retention_amount, 0)) ELSE 0 END)`;
+const SO_RCPT = "(SELECT COALESCE(SUM(p.amount + COALESCE(p.tds_amount, 0)), 0) FROM payments p WHERE p.sales_order_id = {t}.id AND p.status = 'Received')";
+const SO_INV = "(SELECT COALESCE(SUM(i.total), 0) FROM invoices i WHERE i.sales_order_id = {t}.id AND i.type = 'Tax Invoice' AND i.status NOT IN ('Draft', 'Cancelled'))";
+const SO_CN = "(SELECT COALESCE(SUM(c.total), 0) FROM credit_notes c JOIN invoices i ON i.id = c.invoice_id WHERE i.sales_order_id = {t}.id AND c.status = 'Approved')";
 const RECEIVED_VALUE = "(SELECT COALESCE(SUM(m.qty * COALESCE(m.rate, 0)), 0) FROM stock_moves m WHERE m.type = 'INWARD' AND m.po_id = {t}.id)";
 const PAID = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.po_id = {t}.id AND p.status = 'Paid')";
 const DEBITED = "(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.po_id = {t}.id)";
@@ -171,6 +195,8 @@ export const ENTITIES = {
       { key: 'state', label: 'State', type: 'select', options: STATES, default: 'Maharashtra' },
       { key: 'pincode', label: 'Pincode', type: 'text' },
       { key: 'gstin', label: 'GSTIN', type: 'text' },
+      { key: 'pan', label: 'PAN', type: 'text', hint: 'For the TDS they deduct (Form 26AS)' },
+      { key: 'credit_days', label: 'Credit Days', type: 'number', default: 30, hint: 'Invoice due date = invoice date + these days, unless the milestone says otherwise' },
       { key: 'capacity', label: 'Hospital Capacity (beds)', type: 'text' },
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
     ],
@@ -318,7 +344,7 @@ export const ENTITIES = {
     list: ['requested_at', 'doc_type', 'doc_ref', 'stage', 'title', 'amount', 'requested_by', 'status', 'decided_by'],
     statusField: 'status',
     fields: [
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Discount', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Discount', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
       { key: 'doc_ref', label: 'Document Ref', type: 'text', readonly: true },
@@ -364,7 +390,7 @@ export const ENTITIES = {
     search: ['so_no', 'client_po_no', 'remarks'],
     list: ['so_no', 'date', 'customer_id', 'quotation_id', 'client_po_no', 'order_value', 'status', 'delivery_date'],
     statusField: 'status',
-    related: [['projects', 'sales_order_id'], ['boqs', 'sales_order_id'], ['invoices', 'sales_order_id']],
+    related: [['projects', 'sales_order_id'], ['boqs', 'sales_order_id'], ['invoices', 'sales_order_id'], ['payments', 'sales_order_id']],
     fields: [
       { key: 'so_no', label: 'SO No', type: 'text', readonly: true },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
@@ -376,11 +402,20 @@ export const ENTITIES = {
       { key: 'order_value', label: 'Order Value (basic ₹)', type: 'money' },
       { key: 'gst_rate', label: 'GST %', type: 'number', default: 18 },
       { key: 'total_value', label: 'Total incl. GST', type: 'money', computed: "ROUND(COALESCE({t}.order_value,0) * (1 + COALESCE({t}.gst_rate,0) / 100.0), 2)" },
-      { key: 'invoiced', label: 'Invoiced', type: 'money', computed: "(SELECT COALESCE(SUM(i.total),0) FROM invoices i WHERE i.sales_order_id = {t}.id AND i.status <> 'Cancelled')" },
-      { key: 'advance_received', label: 'Advance Received (₹)', type: 'money' },
+      { key: 'invoiced', label: 'Invoiced (tax invoices)', type: 'money', computed: `ROUND(${SO_INV}, 2)` },
+      { key: 'credited', label: 'Credit Notes', type: 'money', computed: `ROUND(${SO_CN}, 2)` },
+      { key: 'received', label: 'Received (incl. TDS)', type: 'money', computed: `ROUND(${SO_RCPT}, 2)` },
+      { key: 'receivable', label: 'Receivable (− = advance)', type: 'money', computed: `ROUND(${SO_INV} - ${SO_CN} - ${SO_RCPT}, 2)` },
+      { key: 'to_invoice', label: 'Still to Invoice', type: 'money', computed: `ROUND(COALESCE({t}.order_value,0) * (1 + COALESCE({t}.gst_rate,0) / 100.0) - ${SO_INV}, 2)` },
       { key: 'delivery_date', label: 'Committed Delivery', type: 'date' },
       { key: 'status', label: 'Status', type: 'select', options: ['Open', 'In Execution', 'Completed', 'Cancelled'], default: 'Open' },
       { key: 'payment_terms', label: 'Payment Terms', type: 'textarea', span: 2, default: '50% advance with PO, 45% against PI before dispatch & 5% against installation completion.' },
+      { key: 'milestones', label: 'Billing Milestones', type: 'lines', span: 2, hint: 'Invoices are raised against these (Create Invoice); the % add up to 100',
+        default: [{ description: 'Advance with PO', percent: 50, trigger: 'With PO / advance', days: 0 }, { description: 'Against PI before dispatch', percent: 45, trigger: 'Before dispatch', days: 0 }, { description: 'On installation completion', percent: 5, trigger: 'On installation', days: 30 }],
+        columns: [{ key: 'description', label: 'Milestone', type: 'text', width: 300 }, { key: 'percent', label: '%', type: 'number', width: 70 },
+          { key: 'trigger', label: 'When', type: 'select', options: MILESTONE_TRIGGERS, width: 190 }, { key: 'days', label: 'Credit days', type: 'number', width: 90 }] },
+      { key: 'retention_pct', label: 'Retention %', type: 'number', default: 0, hint: 'Part of each invoice the client holds back (e.g. 5% till handover / defect liability)' },
+      { key: 'retention_days', label: 'Retention Released After (days)', type: 'number', default: 365, hint: 'From the invoice date' },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
@@ -609,45 +644,100 @@ export const ENTITIES = {
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
+  // Tax invoice: Draft (no number) → Issue (number in date order, locked) → receipts / credit notes. Corrections only by
+  // credit note; cancellation (GM) only while nothing is received or credited. Proforma invoices ask for advances.
   invoices: {
     label: 'Invoices', singular: 'Invoice', group: 'Sales & Projects', icon: '💳', write: ACC,
-    display: "{t}.invoice_no",
-    search: ['invoice_no', 'notes', 'place_of_supply'],
-    list: ['invoice_no', 'date', 'customer_id', 'sales_order_id', 'total', 'paid', 'balance', 'due_date', 'status'],
+    display: "COALESCE({t}.invoice_no, 'Draft invoice #' || {t}.id)",
+    search: ['invoice_no', 'notes', 'place_of_supply', 'milestone'],
+    list: ['invoice_no', 'type', 'date', 'customer_id', 'sales_order_id', 'milestone', 'total', 'received', 'credited', 'balance', 'due_now', 'due_date', 'status'],
     statusField: 'status', print: 'invoice',
-    related: [['payments', 'invoice_id']],
+    related: [['payments', 'invoice_id'], ['credit_notes', 'invoice_id']],
     fields: [
-      { key: 'invoice_no', label: 'Invoice No', type: 'text', readonly: true },
+      { key: 'invoice_no', label: 'Invoice No', type: 'text', readonly: true, hint: 'Given when the invoice is issued' },
       { key: 'type', label: 'Type', type: 'select', options: ['Tax Invoice', 'Proforma Invoice'], default: 'Tax Invoice' },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
       { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', required: true },
       { key: 'sales_order_id', label: 'Sales Order', type: 'ref', ref: 'sales_orders' },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'milestone', label: 'Milestone', type: 'text', hint: 'From the sales order billing milestones' },
+      { key: 'milestone_no', label: 'Milestone No', type: 'number', hidden: true },
       { key: 'place_of_supply', label: 'Place of Supply', type: 'select', options: STATES, default: 'Maharashtra' },
-      { key: 'due_date', label: 'Due Date', type: 'date' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Issued', 'Partially Paid', 'Paid', 'Cancelled'], default: 'Draft' },
+      { key: 'due_date', label: 'Due Date', type: 'date', hint: 'Blank = invoice date + the customer\'s credit days, set when issued' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Issued', 'Partially Paid', 'Retention Held', 'Paid', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'retention_pct', label: 'Retention %', type: 'number', default: 0 },
+      { key: 'retention_amount', label: 'Retention (₹)', type: 'money', readonly: true, hint: 'Retention % of the invoice total, fixed when issued' },
+      { key: 'retention_due', label: 'Retention Due On', type: 'date' },
       { key: 'lines', label: 'Items', type: 'lines', span: 2, columns: LINE_COLS },
       { key: 'subtotal', label: 'Taxable Value', type: 'money', readonly: true },
       { key: 'tax', label: 'GST', type: 'money', readonly: true },
       { key: 'total', label: 'Invoice Total', type: 'money', readonly: true },
-      { key: 'paid', label: 'Received', type: 'money', computed: "(SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.invoice_id = {t}.id)" },
-      { key: 'balance', label: 'Balance', type: 'money', computed: "COALESCE({t}.total,0) - (SELECT COALESCE(SUM(p.amount),0) FROM payments p WHERE p.invoice_id = {t}.id)" },
+      { key: 'received', label: 'Received (incl. TDS)', type: 'money', computed: `ROUND(${INV_RCV}, 2)` },
+      { key: 'tds', label: 'TDS by Customer', type: 'money', computed: `ROUND(${INV_TDS}, 2)` },
+      { key: 'credited', label: 'Credit Notes', type: 'money', computed: `ROUND(${INV_CN}, 2)` },
+      { key: 'advance_adjusted', label: 'Advance Adjusted', type: 'money', computed: `ROUND(${INV_ADJ}, 2)` },
+      { key: 'balance', label: 'Balance', type: 'money', computed: `ROUND(${INV_BAL}, 2)` },
+      { key: 'retention_held', label: 'Retention Held', type: 'money', computed: `ROUND(${INV_RET}, 2)` },
+      { key: 'due_now', label: 'Due Now', type: 'money', computed: `ROUND(CASE WHEN ${INV_LIVE} THEN MAX(0, ${INV_BAL} - (CASE WHEN {t}.retention_due IS NOT NULL AND {t}.retention_due <= date('now', 'localtime') THEN 0 ELSE ${INV_RET} END)) ELSE 0 END, 2)` },
+      { key: 'issued_by', label: 'Issued By', type: 'text', readonly: true },
+      { key: 'cancel_reason', label: 'Cancellation Reason', type: 'text', readonly: true },
       { key: 'notes', label: 'Notes / Bank Details', type: 'textarea', span: 2 },
     ],
   },
+  // Money received from a customer: against a tax invoice, or an advance on a sales order (adjusted against its invoices
+  // later). Saved = locked; only the GM can reverse it, with a reason.
   payments: {
-    label: 'Payments Received', singular: 'Payment', group: 'Sales & Projects', icon: '💰', write: ACC,
-    display: "{t}.date || ' ₹' || {t}.amount",
-    search: ['reference', 'remarks', 'mode'],
-    list: ['date', 'invoice_id', 'customer_id', 'amount', 'mode', 'reference'],
+    label: 'Customer Receipts', singular: 'Receipt', group: 'Sales & Projects', icon: '💰', write: ACC,
+    display: "COALESCE({t}.receipt_no, '') || ' ₹' || {t}.amount",
+    search: ['receipt_no', 'reference', 'remarks', 'mode'],
+    list: ['date', 'receipt_no', 'customer_id', 'kind', 'invoice_id', 'sales_order_id', 'amount', 'tds_amount', 'mode', 'reference', 'status', 'bank_date', 'form16a'],
+    statusField: 'status',
     fields: [
-      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
-      { key: 'invoice_id', label: 'Against Invoice', type: 'ref', ref: 'invoices' },
-      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', required: true },
-      { key: 'amount', label: 'Amount (₹)', type: 'money', required: true },
+      { key: 'receipt_no', label: 'Receipt No', type: 'text', readonly: true, hint: 'Auto: RCT-001/2026-27' },
+      { key: 'date', label: 'Date Received', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'Received For', type: 'select', options: RECEIPT_KINDS, default: 'Against invoice' },
+      { key: 'invoice_id', label: 'Against Invoice', type: 'ref', ref: 'invoices', hint: 'A proforma invoice makes it an advance on its sales order' },
+      { key: 'sales_order_id', label: 'Sales Order', type: 'ref', ref: 'sales_orders', hint: 'Needed for an advance; taken from the invoice otherwise' },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', hint: 'Taken from the invoice / sales order' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true },
+      { key: 'amount', label: 'Amount Received in Bank (₹)', type: 'money', required: true },
+      { key: 'tds_section', label: 'TDS Deducted By Customer – Section', type: 'select', options: CUSTOMER_TDS },
+      { key: 'tds_amount', label: 'TDS Deducted (₹)', type: 'money', hint: 'As per the customer\'s payment advice; settles the invoice together with the amount' },
+      { key: 'settled', label: 'Settled on the Invoice (₹)', type: 'money', computed: "ROUND(COALESCE({t}.amount, 0) + COALESCE({t}.tds_amount, 0), 2)" },
       { key: 'mode', label: 'Mode', type: 'select', options: ['NEFT / RTGS', 'Cheque', 'UPI', 'Cash', 'DD', 'Other'], default: 'NEFT / RTGS' },
-      { key: 'reference', label: 'UTR / Cheque No', type: 'text' },
+      { key: 'reference', label: 'UTR / Cheque No', type: 'text', hint: 'Required except for cash; the same UTR cannot be entered twice' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Received', 'Reversed'], default: 'Received', readonly: true },
+      { key: 'received_by', label: 'Entered By', type: 'text', readonly: true },
+      { key: 'bank_date', label: 'Bank Reconciled On', type: 'date', readonly: true },
+      { key: 'form16a', label: 'TDS Certificate (Form 16A) Received', type: 'yn', readonly: true },
+      { key: 'reversed_reason', label: 'Reversal Reason', type: 'text', readonly: true },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Reduces what a customer owes on one invoice (rate difference, return, short supply…). The invoice itself is never
+  // edited. Approved by the GM; the number is given on approval.
+  credit_notes: {
+    label: 'Credit Notes', singular: 'Credit Note', group: 'Sales & Projects', icon: '↩️', write: ACC,
+    display: "COALESCE({t}.cn_no, 'Draft credit note #' || {t}.id)",
+    search: ['cn_no', 'reason', 'description'],
+    list: ['date', 'cn_no', 'customer_id', 'invoice_id', 'reason', 'taxable', 'tax', 'total', 'status'],
+    statusField: 'status', print: 'creditnote',
+    fields: [
+      { key: 'cn_no', label: 'Credit Note No', type: 'text', readonly: true, hint: 'Given when approved: CN-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', required: true, default: 'today' },
+      { key: 'invoice_id', label: 'Against Invoice', type: 'ref', ref: 'invoices', required: true },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', readonly: true },
+      { key: 'reason', label: 'Reason', type: 'select', options: ['Rate difference', 'Goods returned', 'Short supply', 'Discount', 'Billing error', 'Other'], default: 'Rate difference' },
+      { key: 'description', label: 'Details (printed)', type: 'textarea', span: 2, required: true },
+      { key: 'taxable', label: 'Taxable Value (₹)', type: 'money', required: true },
+      { key: 'gst_rate', label: 'GST %', type: 'number', hint: 'From the invoice if blank' },
+      { key: 'tax', label: 'GST (₹)', type: 'money', readonly: true },
+      { key: 'total', label: 'Total (₹)', type: 'money', readonly: true },
+      { key: 'place_of_supply', label: 'Place of Supply', type: 'text', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'requested_by', label: 'Prepared By', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
     ],
   },
   service_tickets: {

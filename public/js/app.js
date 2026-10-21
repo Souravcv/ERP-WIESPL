@@ -20,6 +20,7 @@ const $ = id => document.getElementById(id);
 const EXTRA_LINKS = {
   Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/project-analysis', '📈', 'Project Analysis', 'purchase_orders'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
+  'Sales & Projects': [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms']],
 };
 // [href, icon, label, who: 'admin' or a function key]
@@ -94,6 +95,7 @@ async function route() {
       case 'tasks': await tasksView(view); refreshPending(); break;
       case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'payables': { const { payablesView } = await import('./views/payables.js'); await payablesView(view, a || 'due', b); break; }
+      case 'receivables': { const { receivablesView } = await import('./views/receivables.js'); await receivablesView(view, a || 'ageing', b); break; }
       case 'bank-reco': { const { bankRecoView } = await import('./views/bankreco.js'); await bankRecoView(view); break; }
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));

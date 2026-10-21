@@ -149,7 +149,7 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
         intra ? [h('td.num', inr(t.tax / 2)), h('td.num', inr(t.tax / 2))] : h('td.num', inr(t.tax)), h('td.num', inr(t.total))))),
     h('p', h('b', amountInWords(t.total))),
     notes ? h('div.spec', { style: { marginTop: '8px' } }, notes) : null,
-    s.bank_details && title !== 'PURCHASE ORDER' ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Bank details: '), s.bank_details) : null,
+    s.bank_details && !['PURCHASE ORDER', 'CREDIT NOTE'].includes(title) ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Bank details: '), s.bank_details) : null,
     sign(s), footer()));
 }
 
@@ -378,9 +378,17 @@ export async function printView(root, kind, id) {
     const inv = await api(`/invoices/${id}`);
     const c = await api(`/customers/${inv.customer_id}`);
     const so = inv.sales_order_id ? await api(`/sales_orders/${inv.sales_order_id}`) : null;
-    title = inv.invoice_no;
-    doc = taxDoc({ title: inv.type === 'Proforma Invoice' ? 'PROFORMA INVOICE' : 'TAX INVOICE', no: inv.invoice_no, date: inv.date, party: c, partyLabel: 'Bill to:',
+    title = inv.invoice_no || 'Draft invoice';
+    doc = taxDoc({ title: inv.type === 'Proforma Invoice' ? 'PROFORMA INVOICE' : 'TAX INVOICE', no: inv.invoice_no || 'DRAFT – not issued', date: inv.date, party: c, partyLabel: 'Bill to:',
       refs: [['Sales Order', so?.so_no], ['Client PO', so?.client_po_no], ['Due date', fmtDate(inv.due_date)]], items: inv.lines || [], place: inv.place_of_supply, notes: inv.notes, s });
+  } else if (kind === 'creditnote') {
+    const cn = await api(`/credit_notes/${id}`);
+    const inv = await api(`/invoices/${cn.invoice_id}`);
+    const c = await api(`/customers/${cn.customer_id}`);
+    title = cn.cn_no || 'Draft credit note';
+    doc = taxDoc({ title: 'CREDIT NOTE', no: cn.cn_no || 'DRAFT – not approved', date: cn.date, party: c, partyLabel: 'Issued to:',
+      refs: [['Against invoice', inv.invoice_no], ['Invoice date', fmtDate(inv.date)], ['Reason', cn.reason]],
+      items: [{ description: cn.description, hsn: (inv.lines || [])[0]?.hsn || '', qty: 1, uom: 'Lot', rate: cn.taxable, gst: cn.gst_rate }], place: cn.place_of_supply, notes: '', s });
   } else if (kind === 'po') {
     const po = await api(`/purchase_orders/${id}`);
     const v = await api(`/vendors/${po.vendor_id}`);

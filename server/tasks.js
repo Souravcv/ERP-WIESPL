@@ -1,6 +1,7 @@
 // "My tasks": everything waiting for this person, from their role's permissions — BOQ sections to review, BOQs to make
 // Final, changes asked of them, requisitions to check, approvals, material to order, follow-ups, work orders without a BOQ.
 import { db } from './db.js';
+import { listRows } from './crud.js';
 import { canWrite, canView, hasFunction } from '../public/js/schema.js';
 import { canApprove } from './workflows.js';
 import { reviewsOf, storeOverview } from './boqflow.js';
@@ -64,6 +65,20 @@ export function myTasks(user) {
   if (hasFunction(role, 'pay_final')) {
     group('3way', '⚠', 'Bills more than the material received (3-way)', db.prepare("SELECT b.id, b.bill_no, b.match_note, v.name party FROM vendor_bills b LEFT JOIN vendors v ON v.id = b.vendor_id WHERE b.match_note LIKE 'Bills %' AND b.override_by IS NULL").all()
       .map(b => ({ title: `${b.bill_no} ${b.party || ''}`, sub: b.match_note, link: `#/view/vendor_bills/${b.id}`, late: true })));
+  }
+
+  // Receivables: drafts to issue, money overdue from customers (incl. retention now due), TDS certificates to collect.
+  if (canWrite('invoices', role)) {
+    group('issue', '💳', 'Invoices to check and issue', db.prepare("SELECT i.id, i.type, i.milestone, i.total, i.date, c.name customer FROM invoices i LEFT JOIN customers c ON c.id = i.customer_id WHERE i.status = 'Draft' ORDER BY i.id").all()
+      .map(i => ({ title: `Issue ${i.type === 'Proforma Invoice' ? 'proforma' : 'invoice'} to ${i.customer || ''} – ₹${Math.round(i.total || 0).toLocaleString('en-IN')}`,
+        sub: [i.milestone, `draft of ${fmt(i.date)}`].filter(Boolean).join(' · '), link: `#/view/invoices/${i.id}` })));
+    group('collect', '💰', 'Money overdue from customers', listRows('invoices', { type: 'Tax Invoice' })
+      .filter(i => !['Draft', 'Cancelled', 'Paid'].includes(i.status) && i.due_now > 0.5 && (i.due_date || i.date) < t)
+      .sort((a, b) => String(a.due_date).localeCompare(String(b.due_date))).slice(0, 40)
+      .map(i => ({ title: `Collect ₹${Math.round(i.due_now).toLocaleString('en-IN')} from ${i.customer_id_label || ''}`,
+        sub: `${i.invoice_no}${i.milestone ? ' · ' + i.milestone : ''} · due ${fmt(i.due_date)}`, link: `#/view/invoices/${i.id}`, due: i.due_date, late: true })));
+    group('16a', '📄', 'TDS certificates (Form 16A) to collect', db.prepare("SELECT p.id, p.receipt_no, p.tds_amount, p.date, c.name customer FROM payments p LEFT JOIN customers c ON c.id = p.customer_id WHERE p.status = 'Received' AND p.tds_amount > 0 AND COALESCE(p.form16a, 'No') <> 'Yes' AND p.date <= ? ORDER BY p.date LIMIT 30").all(addDays(t, -60))
+      .map(p => ({ title: `Form 16A from ${p.customer || ''} for ₹${Math.round(p.tds_amount).toLocaleString('en-IN')} TDS`, sub: `${p.receipt_no} of ${fmt(p.date)}`, link: `#/view/payments/${p.id}` })));
   }
 
   // Approvals this person may give

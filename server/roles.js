@@ -96,6 +96,13 @@ export function seedRoles() {
     db.prepare("UPDATE vendor_payments SET status = 'Paid' WHERE status IS NULL OR status = ''").run();
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_pay_v1', '\"1\"')").run();
   }
+  // Receivables: receipts recorded before the receipt rules count as received against their invoice.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'receivables_v1'").get()) {
+    db.prepare("UPDATE payments SET status = 'Received' WHERE status IS NULL OR status = ''").run();
+    db.prepare("UPDATE payments SET kind = CASE WHEN invoice_id IS NULL THEN 'Advance (against sales order)' ELSE 'Against invoice' END WHERE kind IS NULL OR kind = ''").run();
+    db.prepare("UPDATE payments SET sales_order_id = (SELECT sales_order_id FROM invoices i WHERE i.id = payments.invoice_id) WHERE sales_order_id IS NULL AND invoice_id IS NOT NULL").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('receivables_v1', '\"1\"')").run();
+  }
   // Work order → BOQ → design review → Final → store check: give the built-in roles the new functions once.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_boq_flow_v1'").get()) {
     const NEW = ['boq_review', 'boq_final', 'notify_store_check', 'notify_boq'];
