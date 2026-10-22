@@ -148,7 +148,7 @@ export async function bomView(root, bomId) {
         .map(([k, l]) => h('label', l, f[k]))),
       h('details', h('summary', 'Issue from store stock (optional) – pick the store item for components that come from the store'),
         h('table.data', h('thead', h('tr', h('th', 'Component'), h('th.num', 'Qty'), h('th', 'Store item'))), h('tbody', itemRows)))),
-    [{ label: 'Cancel', value: false }, { label: '🚚 Dispatch & make challan', cls: 'good', value: true }], { wide: true });
+    [{ label: 'Cancel', value: false }, { label: '📝 Make draft challan', cls: 'good', value: true }], { wide: true });
     if (!ok) return;
     const body = { picks: [...picks].map(([bom_item_id, p]) => ({ bom_item_id, qty: p.qty, item_id: p.item_id })), ...Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value])), vendor_id: vendorId };
     let r;
@@ -157,13 +157,11 @@ export async function bomView(root, bomId) {
       if (r === null) return;
     } catch (e) {
       if (!/Not enough stock|More than the BOQ/.test(e.message)) throw e;
-      if (!(await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Dispatch anyway', cls: 'danger solid', value: true }]))) return;
+      if (!(await modal('Please check', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Make it anyway', cls: 'danger solid', value: true }]))) return;
       r = await api(`/boms/${bomId}/dispatch`, { method: 'POST', body: { ...body, force: true, allowNegative: true, allowReserved: true } });
     }
-    await modal('Dispatched', h('p', `Challan ${r.challan.challan_no} created and marked Dispatched${r.stock_lines ? `; ${r.stock_lines} store item(s) issued from stock` : ''}. The BOQ now shows this material as sent.`),
-      [{ label: '🖨 Print challan', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return false; } },
-        r.stock_lines ? { label: '🖨 Print issue slip', action: () => { window.open(`#/print/stockdoc/OUTWARD?doc=${encodeURIComponent(r.challan.challan_no)}`, '_blank'); return false; } } : null,
-        { label: 'OK', cls: 'primary', value: true }].filter(Boolean));
+    await modal('Draft challan made', h('p', `Draft challan ${r.challan.challan_no} is ready. The store checks it and presses 🚚 Dispatch on the challan: then the store items are issued from stock and the material shows as sent.`),
+      [{ label: '🖨 Print draft', action: () => { window.open(`#/print/challan/${r.challan.id}`, '_blank'); return false; } }, { label: 'Open challan', action: () => { location.hash = `#/view/challans/${r.challan.id}`; return true; } }, { label: 'OK', cls: 'primary', value: true }]);
     bomView(root, bomId);
   }
 

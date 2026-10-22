@@ -42,6 +42,22 @@ function docNo(series, date, fmt) {
   return fmt(pad(seq, 3), fy);
 }
 
+// Requisition / PO lines for several sites: a line from a BOQ takes that BOQ and its project, a line without a site
+// takes the document's project. Returns the projects on the lines with a quantity (null when the lines are not saved).
+function siteLines(row, existing) {
+  if (!('lines' in row)) return null;
+  const lines = parse(row.lines, []);
+  const head = row.project_id ?? existing?.project_id ?? null;
+  const bomOf = db.prepare('SELECT b.id, b.project_id FROM bom_items i JOIN boms b ON b.id = i.bom_id WHERE i.id = ?');
+  for (const l of lines) {
+    if (l.bom_item_id && !l.bom_id) { const b = bomOf.get(Number(l.bom_item_id)); if (b) { l.bom_id = b.id; if (!l.project_id && b.project_id) l.project_id = b.project_id; } }
+    if (!l.project_id && head && (l.description || l.item_id)) l.project_id = Number(head);
+  }
+  row.lines = JSON.stringify(lines);
+  return [...new Set(lines.filter(l => Number(l.qty) > 0 && l.project_id).map(l => Number(l.project_id)))];
+}
+const siteNames = ids => db.prepare(`SELECT name, project_no FROM projects WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map(p => p.name).join(', ');
+
 const parse = (v, dflt) => {
   if (v == null) return dflt;
   if (typeof v !== 'string') return v;
@@ -89,6 +105,9 @@ export function beforeSave(name, row, existing, user) {
     case 'purchase_orders': {
       // WIESPL PO numbering: 008/2025-26, restarting every April.
       if (!existing && !row.po_no) row.po_no = docNo('po', date, (n, fy) => `${n}/20${fy}`);
+      const sites = siteLines(row, existing);
+      if (sites?.length > 1) { row.project_id = null; row.project_note = `Multiple sites: ${siteNames(sites)}`; }
+      else if (sites?.length === 1 && !(row.project_id ?? existing?.project_id)) row.project_id = sites[0];
       const vendorId = row.vendor_id ?? existing?.vendor_id;
       const projectId = row.project_id ?? existing?.project_id;
       if (projectId && !(row.project_note ?? existing?.project_note)) {
@@ -203,13 +222,17 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
-    case 'requisitions':
+    case 'requisitions': {
       if (!existing && !row.req_no) row.req_no = docNo('requisition', date, (n, fy) => `REQ-${n}/20${fy}`);
+      const sites = siteLines(row, existing);
+      if (sites?.length > 1) { row.project_id = null; row.project_name = `Multiple sites: ${siteNames(sites)}`; }
+      else if (sites?.length === 1 && !(row.project_id ?? existing?.project_id)) row.project_id = sites[0];
       if ((row.project_id ?? existing?.project_id) && !(row.project_name ?? existing?.project_name)) {
         const p = db.prepare('SELECT project_no, name FROM projects WHERE id = ?').get(row.project_id ?? existing.project_id);
         if (p) row.project_name = [p.name, p.project_no].filter(Boolean).join(' – ');
       }
       break;
+    }
     case 'items':
       if (!existing && !String(row.code ?? '').trim()) row.code = nextItemCode(row.category);
       if (row.code && db.prepare('SELECT 1 FROM items WHERE code = ? AND id <> ?').get(row.code, existing?.id ?? 0)) {

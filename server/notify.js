@@ -31,7 +31,7 @@ export function notifyNew(entity, row, actor) {
 }
 
 const APPROVAL_LINK = { Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}`,
-  Payment: id => `#/view/vendor_payments/${id}`, Expense: id => `#/view/expenses/${id}`, 'Credit Note': id => `#/view/credit_notes/${id}` };
+  Payment: id => `#/view/vendor_payments/${id}`, Expense: id => `#/view/expenses/${id}`, 'Credit Note': id => `#/view/credit_notes/${id}`, 'Sales Order': id => `#/view/sales_orders/${id}` };
 
 // An approval step is waiting: tell everyone allowed to approve it.
 export function notifyApprovalRequest(ap, actor) {

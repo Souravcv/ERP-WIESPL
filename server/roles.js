@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, audit, DATA_DIR } from './db.js';
 import { HttpError } from './crud.js';
-import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, defaultPermissions, setPermissions } from '../public/js/schema.js';
+import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, ROLE_SEES, defaultPermissions, setPermissions } from '../public/js/schema.js';
 
 const parse = s => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
 
@@ -102,6 +102,31 @@ export function seedRoles() {
     db.prepare("UPDATE payments SET kind = CASE WHEN invoice_id IS NULL THEN 'Advance (against sales order)' ELSE 'Against invoice' END WHERE kind IS NULL OR kind = ''").run();
     db.prepare("UPDATE payments SET sales_order_id = (SELECT sales_order_id FROM invoices i WHERE i.id = payments.invoice_id) WHERE sales_order_id IS NULL AND invoice_id IS NOT NULL").run();
     db.prepare("INSERT INTO settings (key, value) VALUES ('receivables_v1', '\"1\"')").run();
+  }
+  // Sales orders are approved by the GM.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_so_approval_v1'").get()) {
+    for (const [name, fns] of [['manager', ['approve_sales_order', 'stock_post']], ['store', ['stock_post']], ['purchase_head', ['stock_post']]]) {
+      const x = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (x) { const p = parse(x.perms); p.functions = [...new Set([...(p.functions || []), ...fns])]; db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name); }
+    }
+    db.prepare("UPDATE sales_orders SET status = 'Approved' WHERE status = 'Open'").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_so_approval_v1', '\"1\"')").run();
+  }
+  // Each built-in profile sees only its own work (once): other modules are hidden; access already given to a module the
+  // profile keeps is left as it is.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_visibility_v1'").get()) {
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      if (!ROLE_SEES[r.name]) continue;
+      const p = parse(r.perms);
+      const d = defaultPermissions(r.name).modules;
+      p.modules ||= {};
+      for (const m of Object.keys(ENTITIES)) {
+        if (!ROLE_SEES[r.name].includes(m)) p.modules[m] = 'none';
+        else if (!p.modules[m] || p.modules[m] === 'none') p.modules[m] = d[m];
+      }
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
   // Work order → BOQ → design review → Final → store check: give the built-in roles the new functions once.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_boq_flow_v1'").get()) {

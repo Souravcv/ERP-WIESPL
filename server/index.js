@@ -144,17 +144,42 @@ api.get('/part-photos', requireRole(), wrap(() => listPhotos()));
 api.post('/part-photos', requireRole(), express.raw({ type: () => true, limit: '9mb' }), wrap(req => addPhoto(String(req.query.part || ''), String(req.query.name || ''), String(req.query.caption || ''), req.body, req.user)));
 api.delete('/part-photos/:id', requireRole(), wrap(req => removePhoto(req.params.id)));
 api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
-// Document numbering: continue a series from your own book number (e.g. challans already at 1250 on paper).
+// Document numbering: continue any series from your own number (challan book, Smart Store GRN / issue numbers …).
+// fmt(n, fy) is the same format the numbering in hooks.js / stock.js uses; "used" is the highest number of this FY in the CRM.
+const pfx = () => getSettings().quote_prefix || 'WIESPL';
 const DOC_SERIES = [
-  { key: 'challan', label: 'Delivery Challan', prefix: 'DC', table: 'challans', col: 'challan_no' },
-  { key: 'challan_ret', label: 'Returnable Challan', prefix: 'RE', table: 'challans', col: 'challan_no' },
+  { key: 'stock_INWARD', label: 'GRN (Inward)', table: 'stock_moves', col: 'doc_no', where: "type = 'INWARD'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'stock_OUTWARD', label: 'Issue Slip (Outward)', table: 'stock_moves', col: 'doc_no', where: "type = 'OUTWARD'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'stock_TRANSFER', label: 'Transfer', table: 'stock_moves', col: 'doc_no', where: "type = 'TRANSFER'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'stock_RETURN', label: 'Return to Store', table: 'stock_moves', col: 'doc_no', where: "type = 'RETURN'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'stock_SCRAP', label: 'Scrap', table: 'stock_moves', col: 'doc_no', where: "type = 'SCRAP'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'challan', label: 'Delivery Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `DC-${n}/20${fy}` },
+  { key: 'challan_ret', label: 'Returnable Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `RE-${n}/20${fy}` },
+  { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
+  { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'so', label: 'Sales Order', table: 'sales_orders', col: 'so_no', fmt: (n, fy) => `${pfx()}/SO/${fy}/${n}` },
+  { key: 'project', label: 'Project (internal code)', table: 'projects', col: 'code', fmt: (n, fy) => `PRJ/${fy}/${n}` },
+  { key: 'boq', label: 'Work Order', table: 'boqs', col: 'boq_no', fmt: (n, fy) => `WO-${n}/20${fy}` },
+  { key: 'bom', label: 'BOQ', table: 'boms', col: 'bom_no', fmt: (n, fy) => `BOQ-${n}/20${fy}` },
+  { key: 'submittal', label: 'Material / Drawing Approval', table: 'material_approvals', col: 'submittal_no', fmt: (n, fy) => `MAS/${fy}/${n}` },
+  { key: 'proforma', label: 'Proforma Invoice', table: 'invoices', col: 'invoice_no', fmt: (n, fy) => `PI/${fy}/${n}` },
+  { key: 'invoice', label: 'Tax Invoice', table: 'invoices', col: 'invoice_no', where: "type = 'Tax Invoice'", fmt: (n, fy) => `${pfx()}/${fy}/${n}` },
+  { key: 'receipt', label: 'Customer Receipt', table: 'payments', col: 'receipt_no', fmt: (n, fy) => `RCT-${n}/20${fy}` },
+  { key: 'credit_note', label: 'Credit Note', table: 'credit_notes', col: 'cn_no', fmt: (n, fy) => `CN-${n}/20${fy}` },
+  { key: 'debit_note', label: 'Debit Note', table: 'debit_notes', col: 'dn_no', fmt: (n, fy) => `DN-${n}/20${fy}` },
+  { key: 'payment', label: 'Vendor Payment', table: 'vendor_payments', col: 'payment_no', fmt: (n, fy) => `PAY-${n}/20${fy}` },
+  { key: 'expense', label: 'Expense Voucher', table: 'expenses', col: 'voucher_no', fmt: (n, fy) => `EXP-${n}/20${fy}` },
+  { key: 'service', label: 'Service Ticket', table: 'service_tickets', col: 'ticket_no', fmt: (n, fy) => `SRV/${fy}/${n}` },
 ];
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 function docSeries(fy) {
   return DOC_SERIES.map(s => {
     const last = db.prepare('SELECT seq FROM counters WHERE name = ? AND fy = ?').get(s.key, fy)?.seq || 0;
-    const used = db.prepare(`SELECT ${s.col} n FROM ${s.table} WHERE ${s.col} LIKE ?`).all(`${s.prefix}-%/20${fy}`)
-      .reduce((m, r) => Math.max(m, Number(String(r.n).match(new RegExp(`^${s.prefix}-(\\d+)/`))?.[1]) || 0), 0);
-    return { key: s.key, label: s.label, prefix: s.prefix, fy, last, used, next: Math.max(last, used) + 1, example: `${s.prefix}-${String(Math.max(last, used) + 1).padStart(3, '0')}/20${fy}` };
+    const re = new RegExp('^' + reEsc(s.fmt('#N#', fy)).replace('#N#', '(\\d+)') + '$');
+    const used = db.prepare(`SELECT ${s.col} n FROM ${s.table} WHERE ${s.col} IS NOT NULL${s.where ? ' AND ' + s.where : ''}`).all()
+      .reduce((m, r) => Math.max(m, Number(String(r.n).trim().match(re)?.[1]) || 0), 0);
+    const next = Math.max(last, used) + 1;
+    return { key: s.key, label: s.label, fy, last, used, next, format: s.fmt('#', fy), used_no: used ? s.fmt(String(used).padStart(3, '0'), fy) : null, example: s.fmt(String(next).padStart(3, '0'), fy) };
   });
 }
 api.get('/admin/doc-numbers', requireRole(), wrap(req => docSeries(req.query.fy || fyOf())));
@@ -164,9 +189,9 @@ api.put('/admin/doc-numbers', requireRole(), wrap(req => {
   if (!s) throw new HttpError(400, 'Unknown document series');
   const next = Number(req.body?.next);
   if (!Number.isInteger(next) || next < 1 || next > 999999) throw new HttpError(400, 'Enter a whole number, e.g. 1251');
-  if (next <= s.used) throw new HttpError(400, `${s.prefix}-${String(s.used).padStart(3, '0')}/20${fy} is already used in the CRM, so the next number must be ${s.used + 1} or higher`);
+  if (next <= s.used) throw new HttpError(400, `${s.used_no} is already used in the CRM, so the next number must be ${s.used + 1} or higher`);
   db.prepare('INSERT INTO counters (name, fy, seq) VALUES (?, ?, ?) ON CONFLICT(name, fy) DO UPDATE SET seq = excluded.seq').run(s.key, fy, next - 1);
-  audit(req.user.name, 'settings', null, 'document number', `${s.label}: next ${s.prefix}-${next}/20${fy} (was ${s.next})`);
+  audit(req.user.name, 'settings', null, 'document number', `${s.label}: next ${s.format.replace('#', String(next).padStart(3, '0'))} (was ${s.example})`);
   return docSeries(fy).find(x => x.key === s.key);
 }));
 api.get('/audit', wrap(req => {
@@ -353,13 +378,20 @@ api.get('/projects/:id/analysis', wrap(req => {
   if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
   const project = getRow('projects', req.params.id);
   const LIVE = ['Cancelled', 'Rejected'];
-  const pos = listRows('purchase_orders', { project_id: project.id, limit: 5000 }).map(p => {
+  // POs for several sites count with this project's share of their lines (by value).
+  const shared = db.prepare(`SELECT DISTINCT p.id FROM purchase_orders p, json_each(p.lines) j
+    WHERE COALESCE(p.project_id, 0) <> ? AND json_extract(j.value, '$.project_id') = ?`).all(project.id, project.id).map(r => getRow('purchase_orders', r.id));
+  const pos = [...listRows('purchase_orders', { project_id: project.id, limit: 5000 }), ...shared].map(p => {
     // Received = material in (GRN) at the PO rate incl. GST; advance at risk = paid beyond that.
     const m = pay.poMoney(p.id);
+    const val = l => (Number(l.qty) || 0) * (Number(l.rate) || 0);
+    const all = (p.lines || []).reduce((s, l) => s + val(l), 0);
+    const share = p.project_id === project.id || !all ? 1 : (p.lines || []).filter(l => Number(l.project_id) === project.id).reduce((s, l) => s + val(l), 0) / all;
+    const k = n => Math.round((Number(n) || 0) * share * 100) / 100;
     const next = (p.payment_schedule || []).filter(x => x.status !== 'Paid' && x.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
-    return { id: p.id, po_no: p.po_no, date: p.date, vendor: p.vendor_id_label, status: p.status, stage: p.approval_stage, total: p.total || 0,
-      received_pct: p.total ? Math.min(100, Math.round(m.received_incl / p.total * 100)) : 0, received_value: m.received_incl, billed: m.billed, paid: m.paid,
-      advance_at_risk: m.advance_at_risk, balance: LIVE.includes(p.status) ? 0 : p.balance || 0, next_due: next ? { date: next.due_date, amount: next.amount, what: next.description } : null };
+    return { id: p.id, po_no: p.po_no + (share < 1 ? ` (${Math.round(share * 100)}% for this site)` : ''), date: p.date, vendor: p.vendor_id_label, status: p.status, stage: p.approval_stage, total: k(p.total),
+      received_pct: p.total ? Math.min(100, Math.round(m.received_incl / p.total * 100)) : 0, received_value: k(m.received_incl), billed: k(m.billed), paid: k(m.paid),
+      advance_at_risk: k(m.advance_at_risk), balance: LIVE.includes(p.status) ? 0 : k(p.balance), next_due: next ? { date: next.due_date, amount: k(next.amount), what: next.description } : null };
   });
   const live = pos.filter(p => !LIVE.includes(p.status));
   const approved = live.filter(p => !['Draft', 'Pending Approval'].includes(p.status));
@@ -403,7 +435,13 @@ api.get('/store/boq-check', wrap(req => { if (!canView('boms', req.user.role)) t
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- store
+// Outward and transfer slips go through a draft (below); the rest (GRN, return, scrap, adjustment) is saved at once.
 api.post('/stock/entry', need('stock_moves'), wrap(req => {
+  if (['OUTWARD', 'TRANSFER'].includes(req.body?.type)) throw new HttpError(400, 'Issue slips, dispatch challans and transfers are saved as a draft first; the store posts the draft');
+  return postStockEntry(req.body, req.user);
+}));
+function postStockEntry(reqBody, user) {
+  const req = { body: reqBody, user };
   const body = { ...req.body, allowWithoutPo: false, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
   if (['OUTWARD', 'TRANSFER', 'SCRAP'].includes(body.type)) {
     reservedCheck(body, body.lines, { projectId: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id), bomId: body.bom_id });
@@ -424,6 +462,47 @@ api.post('/stock/entry', need('stock_moves'), wrap(req => {
     });
   }
   return stock.stockEntry(body, req.user);
+}
+
+// ---------------------------------------------------------------- draft issue slips / dispatch challans / transfers
+const DRAFT_KEYS = ['type', 'date', 'doc_no', 'po_id', 'project_id', 'issued_to', 'requested_by', 'from_location', 'to_location', 'purpose', 'remarks', 'boq_id', 'bom_id',
+  'make_challan', 'challan', 'vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type', 'lines'];
+function draftRow(body) {
+  const type = body?.type;
+  if (!['OUTWARD', 'TRANSFER'].includes(type)) throw new HttpError(400, 'Only issue slips, dispatch challans and transfers are saved as drafts');
+  const lines = (body.lines || []).filter(l => l.item_id && Number(l.qty)).map(l => { const { poPending, boqPending, ...rest } = l; return rest; });
+  if (!lines.length) throw new HttpError(400, 'Add at least one item with a quantity');
+  if (type === 'TRANSFER' && !body.to_location) throw new HttpError(400, 'Enter where the material is transferred to');
+  const challan = !!(body.make_challan || body.bom_id || body.boq_id);
+  const payload = Object.fromEntries(DRAFT_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
+  payload.lines = lines;
+  const it = db.prepare('SELECT code, name, uom FROM items WHERE id = ?');
+  const items = lines.map(l => { const x = it.get(Number(l.item_id)); return `${x?.code || ''} ${x?.name || 'item ' + l.item_id} × ${l.qty} ${l.uom || x?.uom || ''}`.trim(); }).join('\n');
+  return { type, doc_kind: type === 'OUTWARD' ? (challan ? 'Dispatch challan' : 'Issue slip') : (challan ? 'Transfer with challan' : 'Transfer slip'),
+    date: body.date || new Date().toLocaleString('sv-SE').slice(0, 10), project_id: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id) || null,
+    issued_to: body.issued_to || null, to_location: body.to_location || null, item_count: lines.length, items, payload, remarks: body.remarks || null };
+}
+api.post('/stock/drafts', need('stock_moves'), wrap(req => insertRow('stock_drafts', { ...draftRow(req.body), status: 'Draft', prepared_by: req.user.name }, req.user, { system: true })));
+api.put('/stock/drafts/:id', need('stock_moves'), wrap(req => {
+  const d = getRow('stock_drafts', req.params.id);
+  if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
+  return updateRow('stock_drafts', d.id, draftRow(req.body), req.user, { system: true });
+}));
+api.post('/stock/drafts/:id/post', wrap(req => {
+  if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Posting issue slips / transfers is done by the store (Roles & Permissions → “Post draft issue slips …”)');
+  const d = getRow('stock_drafts', req.params.id);
+  if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
+  const p = d.payload || {};
+  return tx(() => {
+    const r = postStockEntry({ ...p, date: req.body?.date || p.date, allowNegative: !!req.body?.allowNegative, allowReserved: !!req.body?.allowReserved }, req.user);
+    updateRow('stock_drafts', d.id, { status: 'Posted', doc_no: r.doc_no, challan_id: r.challan?.id || null, posted_by: `${req.user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, req.user, { system: true });
+    return { ...r, draft_id: d.id };
+  });
+}));
+api.post('/stock/drafts/:id/cancel', need('stock_moves'), wrap(req => {
+  const d = getRow('stock_drafts', req.params.id);
+  if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
+  return updateRow('stock_drafts', d.id, { status: 'Cancelled' }, req.user, { system: true });
 }));
 api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
 api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
@@ -509,6 +588,15 @@ api.post('/admin/restore', requireRole(), express.raw({ type: () => true, limit:
 }));
 api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user)));
 api.post('/sales_orders/:id/project', need('projects'), wrap(req => wf.projectFromSalesOrder(req.params.id, req.user)));
+api.post('/sales_orders/:id/submit', need('sales_orders'), wrap(req => wf.submitForApproval('Sales Order', req.params.id, req.user)));
+// An approved order changes only through Revise: back to Draft, and to the GM again.
+api.post('/sales_orders/:id/revise', need('sales_orders'), wrap(req => {
+  const so = getRow('sales_orders', req.params.id);
+  if (!recv.SO_APPROVED.includes(so.status)) throw new HttpError(400, `Only an approved sales order is revised (this one is ${so.status})`);
+  const out = updateRow('sales_orders', so.id, { status: 'Draft', approved_by: null, approval_stage: null }, req.user, { system: true });
+  audit(req.user.name, 'sales_orders', so.id, 'revised', 'back to Draft for changes and GM approval');
+  return out;
+}));
 api.post('/sales_orders/:id/invoice', need('invoices'), wrap(req => recv.invoiceFromSalesOrder(req.params.id, req.body, req.user)));
 api.get('/sales_orders/:id/billing', wrap(req => { if (!canView('invoices', req.user.role)) throw new HttpError(403, 'No access to invoices'); return recv.soBilling(req.params.id); }));
 
@@ -518,6 +606,7 @@ const TRANSITIONS = {
   purchase_orders: { Draft: ['Cancelled'], Approved: ['Sent', 'Cancelled'], Sent: ['Cancelled'], Rejected: ['Draft', 'Cancelled'], 'Partially Received': ['Closed'] },
   requisitions: { Draft: ['Closed'], Rejected: ['Draft', 'Closed'], Approved: ['Closed'], 'Converted to PO': ['Closed'] },
   challans: { Draft: ['Cancelled'] },
+  sales_orders: { Draft: ['Cancelled'], Rejected: ['Draft', 'Cancelled'], Approved: ['In Execution', 'Cancelled'], 'In Execution': ['Completed'] },
 };
 api.post('/:entity/:id/status', wrap(req => {
   const { entity, id } = req.params;
@@ -585,6 +674,9 @@ const LOCKED = {
   invoices: ['Issued', 'Partially Paid', 'Retention Held', 'Paid', 'Cancelled'],
   payments: ['Received', 'Reversed'],
   credit_notes: ['Pending Approval', 'Approved'],
+  // Approved: changed only after “Revise” (back to the GM).
+  sales_orders: ['Pending Approval', 'Approved', 'In Execution', 'Completed', 'Cancelled'],
+  stock_drafts: ['Posted', 'Cancelled'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));

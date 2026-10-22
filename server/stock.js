@@ -42,7 +42,14 @@ export function stockEntry(body, user) {
   }
 
   return tx(() => {
-    const docNo = body.doc_no || (() => { const { seq, fy } = nextSeq(`stock_${type}`, date); return `${String(seq).padStart(3, '0')}/20${fy}`; })();
+    // Next number of the series; a number already in the CRM (e.g. imported from Smart Store) is skipped.
+    const docNo = body.doc_no || (() => {
+      for (;;) {
+        const { seq, fy } = nextSeq(`stock_${type}`, date);
+        const no = `${String(seq).padStart(3, '0')}/20${fy}`;
+        if (!db.prepare('SELECT 1 FROM stock_moves WHERE type = ? AND doc_no = ?').get(type, no)) return no;
+      }
+    })();
     const header = Object.fromEntries(HEADER_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
     let po = null;
     // A PO number typed by hand that matches a PO in the CRM counts as "against that PO", so the PO tracker shows it.
@@ -64,20 +71,23 @@ export function stockEntry(body, user) {
     }
     const created = [];
     for (const l of lines) {
+      // Which PO line: the one chosen on the GRN, else the first line of the same item that is still pending.
+      let idx = -1;
+      if (po) {
+        idx = Number.isInteger(l.po_line) && po.lines[l.po_line] ? l.po_line : -1;
+        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id) && (Number(x.received) || 0) < (Number(x.qty) || 0));
+        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id));
+      }
+      // A PO for several sites: the material received belongs to the project of its PO line.
+      const lineProject = l.project_id || (idx >= 0 && po.lines[idx].project_id) || header.project_id || (type === 'INWARD' && po?.project_id) || null;
       const row = insertRow('stock_moves', {
         ...header, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: Number(l.qty),
         rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
         remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
-        hsn: l.hsn || null, gst_rate: l.gst ?? null,
+        hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: lineProject ? Number(lineProject) : null,
       }, user, { system: true });
       created.push(row.id);
-      if (po) {
-        // Which PO line: the one chosen on the GRN, else the first line of the same item that is still pending.
-        let idx = Number.isInteger(l.po_line) && po.lines[l.po_line] ? l.po_line : -1;
-        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id) && (Number(x.received) || 0) < (Number(x.qty) || 0));
-        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id));
-        if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
-      }
+      if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
     }
     if (po) {
       const ordered = po.lines.filter(x => Number(x.qty) > 0);

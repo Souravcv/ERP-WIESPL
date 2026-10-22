@@ -14,6 +14,7 @@ const fmt = d => (d ? d.split('-').reverse().join('-') : '');
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + (Number(n) || 0)); return x.toLocaleString('sv-SE').slice(0, 10); };
 const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 864e5);
 const LIVE_TAX = "type = 'Tax Invoice' AND status NOT IN ('Draft', 'Cancelled')";
+export const SO_APPROVED = ['Approved', 'In Execution', 'Completed'];
 
 // ---------------------------------------------------------------- sales order billing
 // The order's milestones with the invoices raised against each.
@@ -30,7 +31,7 @@ export function soBilling(soId) {
 // Draft invoice for one milestone (or a custom % / amount, e.g. a running bill).
 export function invoiceFromSalesOrder(soId, body = {}, user) {
   const so = getRow('sales_orders', soId);
-  if (so.status === 'Cancelled') throw new HttpError(400, 'This sales order is cancelled');
+  if (!SO_APPROVED.includes(so.status)) throw new HttpError(400, `Sales order ${so.so_no} is ${so.status}; invoices are made once the GM has approved it`);
   const type = body.type === 'Proforma Invoice' ? 'Proforma Invoice' : 'Tax Invoice';
   let basic, desc, milestone = null, milestoneNo = null;
   const n = Number(body.milestone_no) || 0;

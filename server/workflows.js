@@ -8,6 +8,7 @@ const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
 const DOCS = {
   Quotation: { entity: 'quotations', ref: 'quote_no', amount: 'grand_total', title: r => `${r.subject || 'Quotation'} — ${r.customer_id_label || ''}`, settingKey: 'require_quote_approval' },
+  'Sales Order': { entity: 'sales_orders', ref: 'so_no', amount: 'total_value', noLines: true, title: r => `Sales order – ${r.customer_id_label || ''}${r.client_po_no ? ' – client PO ' + r.client_po_no : ''}` },
   'Purchase Order': { entity: 'purchase_orders', ref: 'po_no', amount: 'total', title: r => `PO to ${r.vendor_id_label || ''}`, settingKey: 'require_po_approval' },
   Requisition: { entity: 'requisitions', ref: 'req_no', amount: null, title: r => `Requisition – ${r.project_name || r.project_id_label || ''} (${(r.lines || []).length} items)` },
   Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
@@ -20,7 +21,7 @@ const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes'];
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders'];
 
 export function canApprove(docType, stage, user) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
@@ -118,12 +119,12 @@ export function requisitionToPO(id, body, user) {
     return {
       item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
       qty: Number(l.qty), uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18,
-      ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}),
+      ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}), ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}),
     };
   });
   return tx(() => {
     const po = insertRow('purchase_orders', {
-      vendor_id: Number(body.vendor_id), project_id: r.project_id, requisition_id: r.id, bom_id: r.bom_id || null, lines, status: 'Draft', prepared_by: user.name,
+      vendor_id: Number(body.vendor_id), project_id: r.project_id, project_note: r.project_id ? undefined : r.project_name || undefined, requisition_id: r.id, bom_id: r.bom_id || null, lines, status: 'Draft', prepared_by: user.name,
     }, user, { system: true });
     updateRow('requisitions', id, { status: 'Converted to PO' }, user, { system: true });
     notifyNew('purchase_orders', po, user);
@@ -172,7 +173,7 @@ export function convertToSalesOrder(id, body, user) {
     const so = insertRow('sales_orders', {
       customer_id: q.customer_id, quotation_id: q.id, enquiry_id: q.enquiry_id,
       client_po_no: body?.client_po_no || null, client_po_date: body?.client_po_date || null,
-      order_value: q.basic_total, gst_rate: q.gst_rate, status: 'Open',
+      order_value: q.basic_total, gst_rate: q.gst_rate, status: 'Draft',
     }, user, { system: true });
     updateRow('quotations', id, { status: 'Won' }, user, { system: true });
     return so;

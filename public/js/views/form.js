@@ -14,6 +14,7 @@ const LOCKED = {
   invoices: ['Issued', 'Partially Paid', 'Retention Held', 'Paid', 'Cancelled'],
   payments: ['Received', 'Reversed'],
   credit_notes: ['Pending Approval', 'Approved'],
+  sales_orders: ['Pending Approval', 'Approved', 'In Execution', 'Completed', 'Cancelled'],
 };
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
@@ -94,6 +95,13 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
     const rows = lines.map((l, i) => {
       const amount = amounts ? h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0))) : null;
       const cells = f.columns.map(c => {
+        // A reference column (e.g. the site / project of a requisition line): a list of that module's records.
+        if (c.type === 'ref') {
+          const sel = h('select', { disabled: readonly }, h('option', { value: '' }, c.blank || '—'), (refs[c.ref] || []).map(o => h('option', { value: o.id }, o.label)));
+          sel.value = l[c.key] ?? '';
+          sel.onchange = () => { l[c.key] = sel.value ? Number(sel.value) : null; };
+          return h('td', sel);
+        }
         const inp = c.type === 'select' ? h('select', { disabled: readonly }, c.options.map(o => h('option', o)))
           : c.type === 'textarea' || (c.key === 'description' && !f.schedule)
             ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
@@ -139,7 +147,9 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
       amounts ? totalsBox : null);
     totals();
   }
-  if (f.itemRef) refOptions('items').then(o => { items = o; render(); }).catch(fail); else render();
+  const refs = {};
+  const refCols = [...new Set(f.columns.filter(c => c.type === 'ref').map(c => c.ref))];
+  Promise.all([f.itemRef ? refOptions('items').then(o => { items = o; }) : null, ...refCols.map(r => refOptions(r).then(o => { refs[r] = o; }))]).then(render).catch(fail);
   return { el: wrap, get: () => lines, set: next => { lines = next.map(l => ({ ...l })); render(); }, refresh: totals };
 }
 
@@ -160,7 +170,8 @@ async function fillFromRequisition(reqId, inputs) {
   const mapped = await Promise.all(reqLines.map(async l => {
     const it = l.item_id ? await api(`/items/${l.item_id}`).catch(() => null) : null;
     return { item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
-      qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18, ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}) };
+      qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18, ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}),
+      ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}) };
   }));
   inputs.lines.set([...keep, ...mapped]);
   if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.set(r.project_id);
@@ -395,8 +406,17 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }
       break;
     }
-    case 'sales_orders':
+    case 'sales_orders': {
       if (row.quotation_id) A.push(h('a.btn', { href: `#/quotation/${row.quotation_id}` }, 'Quotation'));
+      const approved = ['Approved', 'In Execution', 'Completed'].includes(row.status);
+      if (['Draft', 'Rejected'].includes(row.status) && can('sales_orders')) A.push(h('button.btn.primary', { onclick: submit }, '📤 Submit to GM'));
+      if (row.status === 'Approved' && can('sales_orders')) A.push(h('button.btn.good', { onclick: status('In Execution') }, '▶ In execution'));
+      if (row.status === 'In Execution' && can('sales_orders')) A.push(h('button.btn.good', { onclick: status('Completed', 'Mark this sales order Completed?') }, '✔ Completed'));
+      if (approved && can('sales_orders')) A.push(h('button.btn', { title: 'Change value, GST, milestones or retention: back to Draft and to the GM again', onclick: go(async () => {
+        if (!(await confirmBox('Revise this approved sales order? It goes back to Draft; after your changes, Submit it to the GM again.'))) return;
+        await post(`/sales_orders/${id}/revise`); toast('Back to Draft'); reload();
+      }) }, '↩ Revise'));
+      if (!approved) { if (row.status !== 'Cancelled') A.push(h('span.muted', 'Invoices, project and work order are made once the GM has approved it')); break; }
       if (can('projects')) A.push(h('button.btn', { onclick: go(() => post(`/sales_orders/${id}/project`), p => (location.hash = `#/view/projects/${p.id}`)) }, '🏗️ Create Project'));
       if (row.quotation_id && can('boqs')) A.push(h('button.btn', { title: 'Work order with every quotation line and quantity; then ⚙️ Generate BOQ', onclick: go(() => post(`/sales_orders/${id}/work-order`), r => { toast(`Work order ${r.boq.boq_no}: ${r.lines} line(s) from the quotation`); location.hash = `#/boq/${r.boq.id}`; }) }, '📂 Create Work Order'));
       if (can('invoices')) A.push(h('button.btn.primary', { onclick: go(async () => {
@@ -426,8 +446,25 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('payments')) A.push(h('button.btn', { onclick: () => newRecord('payments', { kind: 'Advance (against sales order)', sales_order_id: id, customer_id: row.customer_id }) }, '💰 Advance received'));
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${row.customer_id}` }, '📒 Customer statement'));
       break;
+    }
     case 'boq_items':
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
+      break;
+    case 'stock_drafts':
+      if (row.status === 'Draft' && hasFunction(state.user.role, 'stock_post')) A.push(h('button.btn.good', { onclick: go(async () => {
+        if (!(await confirmBox(`Post ${row.doc_kind.toLowerCase()} draft #${id}? ${row.item_count} item(s) leave the stock and the number is given. It cannot be changed afterwards.`, 'Post'))) return;
+        const { postDraft, postedDialog } = await import('./stock.js');
+        const r = await postDraft(id);
+        if (r) { await postedDialog(r); reload(); }
+      }) }, '✔ Post (reduce stock)'));
+      if (row.status === 'Draft' && !hasFunction(state.user.role, 'stock_post')) A.push(h('span.muted', 'Waiting for the store to post it'));
+      if (row.status === 'Draft' && can('stock_moves')) A.push(h('a.btn', { href: `#/stock-entry?draft=${id}` }, '✎ Edit'));
+      if (row.status === 'Draft' && can('stock_moves')) A.push(h('button.btn.danger', { onclick: go(async () => {
+        if (!(await confirmBox(`Cancel draft #${id}? Nothing was issued, so the stock is not affected.`, 'Cancel draft'))) return;
+        await post(`/stock/drafts/${id}/cancel`); toast('Draft cancelled'); reload();
+      }) }, '✖ Cancel draft'));
+      if (row.status === 'Posted' && row.doc_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.type}?doc=${encodeURIComponent(row.doc_no)}`, target: '_blank' }, '🖨 Issue / transfer slip'));
+      if (row.challan_id) A.push(h('a.btn', { href: `#/view/challans/${row.challan_id}` }, '🚚 Challan'));
       break;
     case 'challans': {
       const st = row.status;
@@ -435,7 +472,8 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (row.issue_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.issue_type || 'OUTWARD'}?doc=${encodeURIComponent(row.issue_no)}`, target: '_blank' }, '🖨 Issue Slip'));
       if (row.bom_id) A.push(h('a.btn', { href: `#/bom/${row.bom_id}` }, '📑 BOQ status'));
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📂 Work order status'));
-      if (can(entity) && st === 'Draft') A.push(h('button.btn.good', { onclick: go(async () => {
+      if (can(entity) && st === 'Draft' && !hasFunction(state.user.role, 'stock_post')) A.push(h('span.muted', 'Draft: the store dispatches it (issues the stock)'));
+      if (can(entity) && st === 'Draft' && hasFunction(state.user.role, 'stock_post')) A.push(h('button.btn.good', { onclick: go(async () => {
         const stockLines = (row.lines || []).filter(l => l.item_id).length;
         if (!(await confirmBox(`Dispatch ${row.challan_no}? The material is marked as sent against the work order${stockLines ? ` and ${stockLines} store item(s) are issued from stock` : ''}. The challan cannot be edited afterwards.`, 'Dispatch'))) return;
         try {

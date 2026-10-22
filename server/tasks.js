@@ -81,6 +81,12 @@ export function myTasks(user) {
       .map(p => ({ title: `Form 16A from ${p.customer || ''} for ₹${Math.round(p.tds_amount).toLocaleString('en-IN')} TDS`, sub: `${p.receipt_no} of ${fmt(p.date)}`, link: `#/view/payments/${p.id}` })));
   }
 
+  // Draft issue slips / dispatch challans / transfers waiting to be posted.
+  if (hasFunction(role, 'stock_post')) {
+    group('post', '📤', 'Draft issues / transfers to post', db.prepare("SELECT d.id, d.doc_kind, d.item_count, d.issued_to, d.to_location, d.prepared_by, d.date, p.name project FROM stock_drafts d LEFT JOIN projects p ON p.id = d.project_id WHERE d.status = 'Draft' ORDER BY d.date, d.id").all()
+      .map(d => ({ title: `Post ${d.doc_kind.toLowerCase()} – ${d.item_count} item(s)${d.project || d.issued_to || d.to_location ? ' for ' + (d.project || d.issued_to || d.to_location) : ''}`, sub: `draft #${d.id} by ${d.prepared_by || ''} · ${fmt(d.date)}`, link: `#/view/stock_drafts/${d.id}` })));
+  }
+
   // Approvals this person may give
   const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id").all()
     .filter(a => canApprove(a.doc_type, a.stage, user));

@@ -163,14 +163,15 @@ function challanLines(boq, picks, user, force) {
 
 const CHALLAN_KEYS = ['date', 'vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type', 'remarks'];
 
-// Dispatch from the BOQ window: the challan is created automatically (status Dispatched),
-// store items on it are issued from stock, and the BOQ shows them as sent.
-export function dispatchFromBoq(boqId, body, user) {
+// Dispatch from the work order window: a Draft challan is made; the store dispatches it (store items issued from stock,
+// the work order shows them as sent). From a posted stock-entry draft (post: true) it is dispatched at once.
+export function dispatchFromBoq(boqId, body, user, { post = false } = {}) {
   const boq = getRow('boqs', boqId);
   return tx(() => {
     const lines = challanLines(boq, body?.picks, user, body?.force);
     const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => body?.[k]).map(k => [k, body[k]]));
     const ch = insertRow('challans', { ...extra, boq_id: boq.id, project_id: boq.project_id, customer_id: boq.customer_id, status: 'Draft', lines }, user, { system: true });
+    if (!post) return { challan: ch, stock_lines: 0, draft: true };
     const stockLines = lines.filter(l => l.item_id).map(l => ({ item_id: l.item_id, qty: l.qty, remark: l.remark }));
     if (stockLines.length) {
       stockEntry({ type: 'OUTWARD', date: ch.date, doc_no: ch.challan_no, project_id: boq.project_id, issued_to: firstLine(ch.ship_to) || boq.title,
@@ -188,7 +189,7 @@ export function issueAgainstBoq(body, user) {
   const picks = (body.lines || []).filter(l => l.boq_item_id && Number(l.qty) > 0);
   if (!picks.length) throw new HttpError(400, 'Pick at least one BOQ line with a quantity');
   if (picks.some(l => !l.item_id)) throw new HttpError(400, 'Pick the store item on every line (it is remembered for the next dispatch)');
-  return dispatchFromBoq(boq.id, { ...body, picks }, user);
+  return dispatchFromBoq(boq.id, { ...body, picks }, user, { post: true });
 }
 
 // Earlier versions kept BOQ lines per project: give each such project its own BOQ.
@@ -207,6 +208,7 @@ export function migrateProjectBoqs() {
 }
 
 export function dispatchChallan(id, body, user) {
+  if (!hasFunction(user.role, 'stock_post')) throw new HttpError(403, 'Dispatching a challan issues stock: it is done by the store (Roles & Permissions → “Post draft issue slips …”)');
   const ch = getRow('challans', id);
   if (ch.status !== 'Draft') throw new HttpError(400, `Challan is already ${ch.status}`);
   const lines = (ch.lines || []).filter(l => Number(l.qty) > 0);
@@ -431,13 +433,15 @@ function bomChallanLines(bom, picks, user, force) {
   return lines;
 }
 
-// Dispatch from the BOQ window: challan made automatically, store items issued, BOQ shows them as sent.
-export function dispatchFromBom(bomId, body, user) {
+// Dispatch from the BOQ window: a Draft challan is made; the store dispatches it (store items issued, BOQ shows them as
+// sent). From a posted stock-entry draft (post: true) it is dispatched at once.
+export function dispatchFromBom(bomId, body, user, { post = false } = {}) {
   const bom = getRow('boms', bomId);
   return tx(() => {
     const lines = bomChallanLines(bom, body?.picks, user, body?.force);
     const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => body?.[k]).map(k => [k, body[k]]));
     const ch = insertRow('challans', { ...extra, bom_id: bom.id, boq_id: bom.work_order_id || null, project_id: bom.project_id, customer_id: bom.customer_id, status: 'Draft', lines }, user, { system: true });
+    if (!post) return { challan: ch, stock_lines: 0, draft: true };
     const stockLines = lines.filter(l => l.item_id).map(l => ({ item_id: l.item_id, qty: l.qty, remark: l.remark }));
     if (stockLines.length) {
       stockEntry({ type: 'OUTWARD', date: ch.date, doc_no: ch.challan_no, project_id: bom.project_id, issued_to: firstLine(ch.ship_to) || bom.client,
@@ -455,7 +459,7 @@ export function issueAgainstBom(body, user) {
   const picks = (body.lines || []).filter(l => l.bom_item_id && Number(l.qty) > 0);
   if (!picks.length) throw new HttpError(400, 'Pick at least one BOQ component with a quantity');
   if (picks.some(l => !l.item_id)) throw new HttpError(400, 'Pick the store item on every line (it is remembered for the next dispatch)');
-  return dispatchFromBom(bom.id, { ...body, picks }, user);
+  return dispatchFromBom(bom.id, { ...body, picks }, user, { post: true });
 }
 
 // Stock Entry → Outward / Transfer with "also make a delivery challan": the issue is already saved,

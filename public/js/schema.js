@@ -73,15 +73,32 @@ export const ROLE_INFO = {
   technical: { label: 'Technical Manager', description: 'Projects, BOQs and drawings' },
 };
 
+// What each built-in profile works with; everything else is hidden from it (an admin can still change this under
+// Roles & Permissions). Admin and GM see everything.
+const BOQ_VIEW = ['boqs', 'boq_items', 'boms', 'bom_items', 'material_lists'];
+export const ROLE_SEES = {
+  sales: ['customers', 'contacts', 'enquiries', 'followups', 'quotations', 'products', 'approvals', 'material_approvals', 'sales_orders', 'projects'],
+  accounts: ['customers', 'contacts', 'quotations', 'approvals', 'sales_orders', 'projects', 'challans', 'invoices', 'payments', 'credit_notes', 'vendors', 'requisitions',
+    'purchase_orders', 'vendor_bills', 'debit_notes', 'vendor_payments', 'expenses', 'items', 'stock_moves'],
+  store: ['approvals', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'stock_drafts'],
+  engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'challans', 'service_tickets', 'requisitions', 'items', 'stock_moves', 'stock_drafts'],
+  purchase: ['approvals', 'projects', ...BOQ_VIEW, 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves'],
+  purchase_head: ['approvals', 'projects', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'debit_notes', 'items', 'stock_moves', 'stock_drafts'],
+  technical: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'requisitions', 'purchase_orders', 'items'],
+};
+export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
+
 // Special actions a role may be allowed, beyond module access.
 export const FUNCTIONS = {
   approve_quotation: 'Approve quotations',
+  approve_sales_order: 'Approve sales orders (GM)',
   approve_requisition: 'Approve material requisitions (Purchase Head step)',
   po_check: 'PO step 1 – Purchase approval (Purchase Head: vendor, material & quantity)',
   po_technical: 'PO step 2 – Technical approval (Technical Manager: specifications)',
   po_commercial: 'PO step 3 – Commercial approval: prices, charges, payment terms & due dates',
   po_final: 'PO step 4 – Final approval by GM',
   stock_opening: 'Create 1 April opening stock for all items',
+  stock_post: 'Post draft issue slips / dispatch challans / transfers (reduces stock)',
   allow_negative: 'Issue more than the available stock',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
@@ -103,10 +120,10 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 export const NOTIFY_FUNCTIONS = { requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
-  purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
-  store: ['stock_opening', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  store: ['stock_opening', 'stock_post', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
@@ -116,6 +133,7 @@ export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + ad
 // Approval steps; who may approve is the role's function list.
 export const APPROVAL_FLOWS = {
   Quotation: [{ stage: 'Approval', fn: 'approve_quotation' }],
+  'Sales Order': [{ stage: 'GM', fn: 'approve_sales_order' }],
   Requisition: [{ stage: 'Purchase Head', fn: 'approve_requisition' }],
   // As on the printed PO: Purchase → Technical → Commercial → GM.
   'Purchase Order': [
@@ -340,11 +358,12 @@ export const ENTITIES = {
   approvals: {
     label: 'Approval Requests', singular: 'Approval', group: 'Approvals', icon: '✅', write: ALL, noCreate: true,
     display: "{t}.doc_type || ' ' || COALESCE({t}.doc_ref, '')",
+    totalOnceBy: ['doc_type', 'doc_id'],
     search: ['doc_type', 'doc_ref', 'title', 'requested_by', 'comments'],
     list: ['requested_at', 'doc_type', 'doc_ref', 'stage', 'title', 'amount', 'requested_by', 'status', 'decided_by'],
     statusField: 'status',
     fields: [
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Discount', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Discount', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
       { key: 'doc_ref', label: 'Document Ref', type: 'text', readonly: true },
@@ -385,7 +404,7 @@ export const ENTITIES = {
 
   // ---------------------------------------------------------------- Sales & Projects (ERP)
   sales_orders: {
-    label: 'Sales Orders', singular: 'Sales Order', group: 'Sales & Projects', icon: '🤝', write: ['admin', 'manager', 'sales', 'accounts'],
+    label: 'Sales Orders', singular: 'Sales Order', group: 'Approvals', icon: '🤝', write: ['admin', 'manager', 'sales', 'accounts'],
     display: "{t}.so_no",
     search: ['so_no', 'client_po_no', 'remarks'],
     list: ['so_no', 'date', 'customer_id', 'quotation_id', 'client_po_no', 'order_value', 'status', 'delivery_date'],
@@ -408,7 +427,9 @@ export const ENTITIES = {
       { key: 'receivable', label: 'Receivable (− = advance)', type: 'money', computed: `ROUND(${SO_INV} - ${SO_CN} - ${SO_RCPT}, 2)` },
       { key: 'to_invoice', label: 'Still to Invoice', type: 'money', computed: `ROUND(COALESCE({t}.order_value,0) * (1 + COALESCE({t}.gst_rate,0) / 100.0) - ${SO_INV}, 2)` },
       { key: 'delivery_date', label: 'Committed Delivery', type: 'date' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Open', 'In Execution', 'Completed', 'Cancelled'], default: 'Open' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'In Execution', 'Completed', 'Rejected', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By (GM)', type: 'text', readonly: true },
       { key: 'payment_terms', label: 'Payment Terms', type: 'textarea', span: 2, default: '50% advance with PO, 45% against PI before dispatch & 5% against installation completion.' },
       { key: 'milestones', label: 'Billing Milestones', type: 'lines', span: 2, hint: 'Invoices are raised against these (Create Invoice); the % add up to 100',
         default: [{ description: 'Advance with PO', percent: 50, trigger: 'With PO / advance', days: 0 }, { description: 'Against PI before dispatch', percent: 45, trigger: 'Before dispatch', days: 0 }, { description: 'On installation completion', percent: 5, trigger: 'On installation', days: 30 }],
@@ -802,7 +823,7 @@ export const ENTITIES = {
     fields: [
       { key: 'req_no', label: 'Req No', type: 'text', readonly: true },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
-      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', hint: 'For several sites, choose the site on each line below; this then shows “Multiple sites”' },
       { key: 'bom_id', label: 'Against BOQ', type: 'ref', ref: 'boms', hint: 'Copies the components still to be procured' },
       { key: 'project_name', label: 'Project Name (as printed)', type: 'text', hint: 'Filled from the project if left blank' },
       { key: 'requested_by', label: 'Requester', type: 'person', default: 'me' },
@@ -815,6 +836,8 @@ export const ENTITIES = {
         { key: 'qty', label: 'Qty', type: 'number', width: 80 },
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+        { key: 'project_id', label: 'Site / Project', type: 'ref', ref: 'projects', width: 190, blank: '(as above)' },
+        { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       { key: 'approved_by', label: 'Approved By (Purchase Head)', type: 'text', readonly: true },
       { key: 'approved_at', label: 'Approved At', type: 'text', readonly: true },
@@ -855,6 +878,8 @@ export const ENTITIES = {
         { key: 'uom', label: 'UOM', type: 'text', width: 64 },
         { key: 'rate', label: 'Rate', type: 'money', width: 100 },
         { key: 'gst', label: 'GST %', type: 'number', width: 60 },
+        { key: 'project_id', label: 'Site / Project', type: 'ref', ref: 'projects', width: 190, blank: '(as above)' },
+        { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       // Charges are part of the taxable value (before GST), each shown on the PO.
       { key: 'freight_charges', label: 'Freight Charges (₹)', type: 'money' },
@@ -1043,6 +1068,32 @@ export const ENTITIES = {
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
     ],
   },
+  // Outward (issue slip / dispatch challan) and transfers are prepared as drafts: nothing leaves the stock until someone
+  // allowed to post checks and posts the draft; posting gives the issue / transfer / challan number.
+  stock_drafts: {
+    label: 'Draft Issues & Transfers', singular: 'Draft Slip', group: 'Store', icon: '📝', write: STORE.concat('engineer'), noCreate: true,
+    display: "'Draft #' || {t}.id || ' · ' || COALESCE({t}.doc_kind, '')",
+    search: ['doc_kind', 'issued_to', 'to_location', 'items', 'remarks', 'doc_no'],
+    list: ['date', 'doc_kind', 'project_id', 'issued_to', 'to_location', 'item_count', 'prepared_by', 'status', 'doc_no'],
+    statusField: 'status',
+    fields: [
+      { key: 'doc_kind', label: 'Document', type: 'select', options: ['Issue slip', 'Dispatch challan', 'Transfer slip', 'Transfer with challan'], readonly: true },
+      { key: 'type', label: 'Movement', type: 'select', options: ['OUTWARD', 'TRANSFER'], readonly: true },
+      { key: 'date', label: 'Date', type: 'date', readonly: true },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true },
+      { key: 'issued_to', label: 'Issued To / Site', type: 'text', readonly: true },
+      { key: 'to_location', label: 'Transfer To', type: 'text', readonly: true },
+      { key: 'item_count', label: 'Items', type: 'number', readonly: true },
+      { key: 'items', label: 'Materials', type: 'textarea', span: 2, readonly: true },
+      { key: 'payload', label: 'Slip', type: 'json', hidden: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Posted', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'doc_no', label: 'Issue / Transfer No (when posted)', type: 'text', readonly: true },
+      { key: 'challan_id', label: 'Delivery Challan', type: 'ref', ref: 'challans', readonly: true },
+      { key: 'prepared_by', label: 'Prepared By', type: 'text', readonly: true },
+      { key: 'posted_by', label: 'Posted By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
   stock_moves: {
     label: 'Stock Movements', singular: 'Stock Movement', group: 'Store', icon: '🔁', write: STORE.concat('engineer'),
     display: "COALESCE({t}.doc_no, '') || ' ' || {t}.type",
@@ -1094,7 +1145,7 @@ export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
 export function defaultPermissions(role) {
   const modules = {};
   for (const [name, ent] of Object.entries(ENTITIES)) {
-    modules[name] = role === 'manager' ? 'full' : (ent.write || []).includes(role) ? 'edit' : role === 'store' && ent.group === 'CRM' ? 'none' : 'view';
+    modules[name] = role === 'manager' ? 'full' : !roleSees(role, name) ? 'none' : (ent.write || []).includes(role) ? 'edit' : 'view';
   }
   return { modules, functions: DEFAULT_FUNCTIONS[role] || [] };
 }

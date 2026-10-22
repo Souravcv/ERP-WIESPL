@@ -153,6 +153,14 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
     sign(s), footer()));
 }
 
+// A requisition / PO for several sites: each line is printed with its site (nothing is added for a single site).
+async function siteLabels(lines = []) {
+  const ids = new Set(lines.filter(l => l.project_id && Number(l.qty) > 0).map(l => Number(l.project_id)));
+  if (ids.size < 2) return;
+  const names = new Map((await api('/projects/options').catch(() => [])).map(o => [Number(o.id), o.label]));
+  for (const l of lines) if (l.project_id) l.site = names.get(Number(l.project_id)) || '';
+}
+
 // ---------------------------------------------------------------- WIESPL purchase order (format WIESPL/PUR./02/R0)
 const plainName = s => String(s || '').replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '').replace(/\s*\(auto\)$/, '');
 function companyHead(s, title) {
@@ -202,7 +210,7 @@ function poDoc(po, v, s) {
       h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
       h('tbody', lines.map(l => h('tr',
         td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
-        td([h('div.spec', l.spec || ''), hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
+        td([h('div.spec', l.spec || ''), l.site ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `Site: ${l.site}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
         td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
         td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
       h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
@@ -245,7 +253,7 @@ function requisitionDoc(r, s) {
       h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`, h('br'), `Works : ${s.works_address}`, h('br'), `Tel. : ${s.phone}`)),
       h('tr', h('td', { colspan: 2 }, h('b', 'Project Name :- '), r.project_name || r.project_id_label || ''), h('td', { colspan: 2 }, h('b', 'Req No - '), r.req_no), h('td', { colspan: 2 }, h('b', 'Date '), fmtDate(r.date))),
       h('tr', ['Sr. No.', 'Material Description', 'Specification', 'Qty.', 'UOM', 'Remark'].map(x => h('th', x))),
-      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', l.remark || ''))),
+      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', [l.remark, l.site && `Site: ${l.site}`].filter(Boolean).join(' · ')))),
       Array.from({ length: blanks }, () => h('tr', Array.from({ length: 6 }, () => h('td', { style: { height: '22px' } }, '')))),
       h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: 3 }, 'Sign of Purchase Head')),
       h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td'), h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? `${r.approved_by} (${r.approved_at || ''})` : r.status))))));
@@ -391,6 +399,7 @@ export async function printView(root, kind, id) {
       items: [{ description: cn.description, hsn: (inv.lines || [])[0]?.hsn || '', qty: 1, uom: 'Lot', rate: cn.taxable, gst: cn.gst_rate }], place: cn.place_of_supply, notes: '', s });
   } else if (kind === 'po') {
     const po = await api(`/purchase_orders/${id}`);
+    await siteLabels(po.lines);
     const v = await api(`/vendors/${po.vendor_id}`);
     title = `PO ${po.po_no} ${v.name}`;
     doc = poDoc(po, v, s);
@@ -406,6 +415,7 @@ export async function printView(root, kind, id) {
     doc = bomDoc(bom, rows, s);
   } else if (kind === 'requisition') {
     const r = await api(`/requisitions/${id}`);
+    await siteLabels(r.lines);
     title = r.req_no;
     doc = requisitionDoc(r, s);
   } else if (kind === 'techsheet') {

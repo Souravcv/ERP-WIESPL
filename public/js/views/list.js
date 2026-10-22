@@ -40,9 +40,11 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true, sel
     const tbody = h('tbody', slice.map(r => h('tr.clickable', { onclick: () => (location.hash = recordHref(entity, r.id)) },
       selected ? h('td', tick(selected.has(r.id), on => (on ? selected.add(r.id) : selected.delete(r.id)))) : null,
       cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : ''), display(c, r))))));
+    // A document with several approval steps has one row per step: its amount counts once in the total.
+    const once = ent.totalOnceBy ? [...new Map(data.map(r => [ent.totalOnceBy.map(k => r[k]).join('|'), r])).values()] : data;
     const tfoot = totals && moneyCols.length && rows.length > 1
       ? h('tfoot', h('tr', selected ? h('td') : null, cols.map((c, i) => h('td' + (c.type === 'money' ? '.num' : ''),
-        c.type === 'money' ? inr(data.reduce((s, r) => s + (Number(r[c.key]) || 0), 0)) : i === 0 ? `Total (${data.length})` : ''))))
+        c.type === 'money' ? inr(once.reduce((s, r) => s + (Number(r[c.key]) || 0), 0)) : i === 0 ? (once.length === data.length ? `Total (${data.length})` : `Total (${once.length} documents)`) : ''))))
       : null;
     wrap.replaceChildren(
       rows.length ? h('div.table-wrap', h('table.data', thead, tbody, tfoot)) : h('div.empty', 'No records yet'),

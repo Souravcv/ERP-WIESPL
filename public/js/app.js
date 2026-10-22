@@ -18,7 +18,7 @@ const $ = id => document.getElementById(id);
 // Screens that are not a single module list, shown at the top of their menu group.
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
-  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/project-analysis', '📈', 'Project Analysis', 'purchase_orders'],
+  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   'Sales & Projects': [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms']],

@@ -8,6 +8,36 @@ const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST'];
 const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment' };
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
+const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
+const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type'];
+
+// Post a draft slip (stock goes down, the number is given). Short or reserved stock asks first. null = not posted.
+export async function postDraft(id, extra = {}) {
+  try {
+    return await api(`/stock/drafts/${id}/post`, { method: 'POST', body: extra });
+  } catch (e) {
+    if (/Not enough stock/.test(e.message) && !extra.allowNegative) {
+      const may = hasFunction(state.user.role, 'allow_negative');
+      const ok = await modal('Not enough stock', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
+        h('p', may ? 'Post anyway? Stock will go negative for these items.' : 'Reduce the quantity on the draft, record the inward first, or ask someone allowed to issue more than the available stock.')),
+        may ? [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }] : [{ label: 'OK', value: false }]);
+      return ok ? postDraft(id, { ...extra, allowNegative: true }) : null;
+    }
+    if (/^Reserved for other projects/.test(e.message) && !extra.allowReserved) {
+      const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }]);
+      return ok ? postDraft(id, { ...extra, allowReserved: true }) : null;
+    }
+    throw e;
+  }
+}
+export async function postedDialog(r) {
+  clearRefCache('items');
+  const open = url => { window.open(url, '_blank'); return false; };
+  await modal('Posted', h('p', `${MOVE_TYPES[r.type]?.label || r.type} ${r.doc_no} posted with ${r.count} item(s); stock is updated.${r.challan ? ` Delivery challan ${r.challan.challan_no} is Dispatched.` : ''}`), [
+    { label: '🖨 Print issue slip', action: () => open(`#/print/stockdoc/${r.type}?doc=${encodeURIComponent(r.doc_no)}`) },
+    r.challan ? { label: '🖨 Print challan', action: () => open(`#/print/challan/${r.challan.id}`) } : null,
+    { label: 'OK', cls: 'primary', value: true }].filter(Boolean));
+}
 const suggest = (list, attrs = {}) => {
   const id = 'sg-' + Math.random().toString(36).slice(2);
   return h('span', { style: { display: 'contents' } }, h('input', { list: id, ...attrs }), h('datalist', { id }, list.map(v => h('option', { value: v }))));
@@ -33,6 +63,13 @@ function poStatus(po) {
 // ---------------------------------------------------------------- Stock entry (one slip, many items)
 export async function stockEntryView(root) {
   const p = qs();
+  // Editing a draft: open the slip as it was saved (a draft against a BOQ / work order reloads with its pending list).
+  const draft = p.draft ? await api(`/stock_drafts/${p.draft}`) : null;
+  if (draft && draft.status !== 'Draft') { toast(`That slip is already ${draft.status}`); location.hash = `#/view/stock_drafts/${draft.id}`; return; }
+  const dp = draft?.payload || {};
+  if (draft && dp.bom_id && !p.bom) { location.hash = `#/stock-entry?type=OUTWARD&bom=${dp.bom_id}&draft=${draft.id}`; return; }
+  if (draft && dp.boq_id && !p.boq) { location.hash = `#/stock-entry?type=OUTWARD&boq=${dp.boq_id}&draft=${draft.id}`; return; }
+  if (draft) p.type = draft.type;
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
   const [items, vendors, projects, allPos, boqOpts, bomOpts] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
     canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : [],
@@ -89,6 +126,12 @@ export async function stockEntryView(root) {
     }
     if (!pendingOpts.length) toast('Everything in this BOQ has already been sent');
   }
+  if (draft) {
+    for (const k of ['date', 'project_id', 'issued_to', 'requested_by', 'from_location', 'to_location', 'purpose', 'remarks']) if (dp[k] != null) header[k] = dp[k];
+    lines = (dp.lines || []).map(l => ({ ...l }));
+    makeChallan = !!dp.make_challan;
+    Object.assign(ch, dp.challan || {}, Object.fromEntries(CHALLAN_KEYS.filter(k => dp[k] != null).map(k => [k, dp[k]])));
+  }
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
   if (p.vendor) header.vendor_id = Number(p.vendor);
@@ -132,7 +175,8 @@ export async function stockEntryView(root) {
     const pick = (k, opts, label) => field(label, itemPicker(opts, header[k] ? Number(header[k]) : null, { onPick: id => { header[k] = id; } }));
     const date = v('date', h('input', { type: 'date' }));
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
-    const F = [field('Date *', date), field({ INWARD: 'GRN No', OUTWARD: 'Issue No', TRANSFER: 'Transfer No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
+    const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
+      : field({ INWARD: 'GRN No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
       F.push(field('Against PO *', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
@@ -143,8 +187,12 @@ export async function stockEntryView(root) {
     if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
     if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
     if (['OUTWARD', 'TRANSFER'].includes(type) && !boq && !bom) {
-      const box = h('input', { type: 'checkbox', checked: makeChallan, style: { width: 'auto' }, onchange: e => { makeChallan = e.target.checked; ch.challan_type ||= type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'; render(); } });
-      F.push(h('label.span-2', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 600 } }, box, `Also make a delivery challan (issue slip and challan are both printed)`));
+      // Which document: an internal issue slip, or a dispatch / delivery challan (to site or a vendor) with it.
+      const opts = type === 'OUTWARD' ? [['slip', 'Issue slip (production / internal)'], ['challan', 'Dispatch challan (to site / vendor)']] : [['slip', 'Transfer slip'], ['challan', 'Transfer with delivery challan']];
+      const doc = h('select', opts.map(([v2, l]) => h('option', { value: v2 }, l)));
+      doc.value = makeChallan ? 'challan' : 'slip';
+      doc.onchange = () => { makeChallan = doc.value === 'challan'; ch.challan_type ||= type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'; render(); };
+      F.push(field('Document *', doc));
     }
     if (boq || bom || makeChallan) {
       const cv = (k, el) => { el.value = ch[k] ?? ''; el.oninput = el.onchange = () => { ch[k] = el.value; }; return el; };
@@ -209,7 +257,25 @@ export async function stockEntryView(root) {
     recalc();
   }
 
+  // Outward / transfer: saved as a draft (no stock change); someone allowed to post checks and posts it.
+  async function saveDraft() {
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null })) };
+    delete payload.doc_no;
+    if (makeChallan && !boq && !bom) Object.assign(payload, { make_challan: true, challan: ch });
+    if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
+    if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');
+    if (type === 'TRANSFER' && !header.to_location) throw new Error('Enter where the material is transferred to');
+    const d = draft ? await api(`/stock/drafts/${draft.id}`, { method: 'PUT', body: payload }) : await api('/stock/drafts', { method: 'POST', body: payload });
+    const may = hasFunction(state.user.role, 'stock_post');
+    const choice = await modal('Draft saved', h('p', `Draft #${d.id} (${d.doc_kind}, ${d.item_count} item(s)) is saved. Nothing has left the stock yet: ${may ? 'post it now, or later from Store → Draft Issues & Transfers.' : 'the store checks and posts it.'}`), [
+      may ? { label: '✔ Post now', cls: 'good', value: 'post' } : null, { label: 'Open draft', value: 'open' }, { label: 'New entry', cls: 'primary', value: 'new' }].filter(Boolean));
+    if (choice === 'post') { const r = await postDraft(d.id); if (r) await postedDialog(r); location.hash = r ? `#/stock-entry?type=${type}&t=${Date.now()}` : `#/view/stock_drafts/${d.id}`; return; }
+    if (choice === 'open') { location.hash = `#/view/stock_drafts/${d.id}`; return; }
+    location.hash = `#/stock-entry?type=${type}&t=${Date.now()}`;
+  }
+
   async function save(allowNegative = false, allowReserved = false) {
+    if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
@@ -251,17 +317,21 @@ export async function stockEntryView(root) {
     }
   }
 
-  const tabs = h('div.tabs', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD'), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
+  const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
+  saveLabel();
+  const tabs = h('div.tabs', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
     tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', ENTRY_TYPES[i] === type));
+    saveLabel();
     render();
   }
   root.replaceChildren(
-    h('div.page-head', h('h1', '🔁 Stock Entry'), h('div.actions',
+    h('div.page-head', h('h1', draft ? `🔁 Stock Entry – draft #${draft.id}` : '🔁 Stock Entry'), h('div.actions', h('a.btn', { href: '#/list/stock_drafts?status=Draft' }, '📝 Drafts'),
       h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn', { href: '#/list/stock_moves' }, 'All movements'),
       canWrite('stock_moves', state.user.role) ? h('a.btn', { href: '#/import?kind=items', title: 'Upload the WIESPL Smart Store workbook (items, opening stock and all inward / outward / transfer / return / scrap entries), or a stock movements sheet' }, '📥 Import Excel') : null,
-      canWrite('stock_moves', state.user.role) ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save Entry') : null)),
-    h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap. One slip can hold many items; numbers like 001/2026-27 are given automatically per type and restart every April.'),
+      canWrite('stock_moves', state.user.role) ? saveBtn : null)),
+    h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap. Issue slips, dispatch challans and transfers are saved as a draft and reduce the stock only when the store posts them. Numbers like 001/2026-27 are given per type and restart every April (Settings → Document numbers to continue your own series).'),
     tabs, body);
   render();
 }
