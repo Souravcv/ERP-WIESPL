@@ -17,6 +17,7 @@ import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, 
 import * as notify from './notify.js';
 import { publicRouter, unfinishedLeads, briefFor } from './public.js';
 import { migratePhotos, listPhotos, addPhoto, removePhoto } from './photos.js';
+import * as sig from './signatures.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
@@ -138,6 +139,16 @@ api.delete('/users/:id', requireRole(), wrap(req => {
   return { ok: true };
 }));
 api.get('/settings', wrap(() => getSettings()));
+// company stamp and personal signatures (printed only where an approval was given)
+sig.migrateSignatures();
+const sendImage = (res, file) => { res.set('Cache-Control', 'private, max-age=300'); res.sendFile(file); };
+api.get('/brand/stamp', (req, res, next) => { try { sendImage(res, sig.stampFile()); } catch (e) { next(e); } });
+api.put('/brand/stamp', requireRole(), express.raw({ type: () => true, limit: '3mb' }), wrap(req => sig.saveStamp(req.body, req.user)));
+api.delete('/brand/stamp', requireRole(), wrap(req => sig.removeStamp(req.user)));
+api.get('/signatures', wrap(() => ({ stamp: sig.stampVersion(), people: sig.listSignatures() })));
+api.get('/signatures/:id', (req, res, next) => { try { sendImage(res, sig.signatureFile(req.params.id)); } catch (e) { next(e); } });
+api.put('/signatures/:id', express.raw({ type: () => true, limit: '3mb' }), wrap(req => sig.saveSignature(req.params.id === 'me' ? req.user.id : req.params.id, req.body, req.user)));
+api.delete('/signatures/:id', wrap(req => sig.removeSignature(req.params.id === 'me' ? req.user.id : req.params.id, req.user)));
 // real photos of each OT part, shown to clients on the enquiry form
 migratePhotos();
 api.get('/part-photos', requireRole(), wrap(() => listPhotos()));

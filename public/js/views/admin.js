@@ -2,6 +2,7 @@ import { h, api, state, toast, fail, modal, badge, download, confirmBox, clearRe
 import { ENTITIES, GROUPS, FUNCTIONS, ACCESS_LEVELS, setPermissions, canWrite } from '../schema.js';
 import { table } from './list.js';
 import { PART_UI, PHOTO_SLOTS } from '../parts.js';
+import { stampEditor, signatureDialog } from '../signs.js';
 import { inr } from '../calc.js';
 
 // ---------------------------------------------------------------- users (each user gets one role)
@@ -146,7 +147,23 @@ export async function settingsView(root) {
   };
   root.replaceChildren(h('div.page-head', h('h1', '⚙️ Company & Quotation Settings'), h('div.actions', h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save settings'))),
     h('p.muted', 'The scope sheet matrix and per-quotation text can be edited inside each quotation (Letter, Terms & Scope tab). Changes here apply to new quotations.'),
-    sections, await docNumbersCard(), photosCard());
+    sections, await docNumbersCard(), signCard(), photosCard());
+}
+
+// Company stamp, and signatures of people who approve but do not use the CRM themselves (everyone else adds their own with ✍️ My signature).
+function signCard() {
+  const list = h('div.toolbar');
+  const load = async () => {
+    const [users, sg] = await Promise.all([api('/users'), api('/signatures')]);
+    const has = new Set((sg.people || []).map(p => p.user_id));
+    list.replaceChildren(...users.filter(u => u.active !== 0).map(u => h('button.btn.small' + (has.has(u.id) ? '.primary' : ''),
+      { onclick: () => signatureDialog(u.id, u.name).then(load).catch(fail) }, `${has.has(u.id) ? '✓ ' : '✍️ '}${u.name}`)));
+  };
+  load().catch(fail);
+  return h('div.card', h('h2', '🔏 Company stamp & signatures'),
+    h('p.muted', 'Printed only where an approval has been given: PO (each approver in their own column, the stamp with the final approval), requisition, quotation, credit note, challan and BOQ. Upload the stamp on white paper: the white background is removed automatically. A clear, high-resolution scan prints best.'),
+    h('h3', 'Company stamp'), stampEditor(),
+    h('h3', 'Signatures'), h('p.muted', 'Everyone can add their own with the ✍️ My signature button at the top. Here an admin can add one for a person who approves but does not log in (written to the activity log). ✓ = signature saved.'), list);
 }
 
 // Continue a document series from your own book number (this financial year).

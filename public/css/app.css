@@ -208,6 +208,12 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .doc .sign .space { height: 50px; }
 .doc .landscape { }
 .print-bar { position: sticky; top: 0; background: #12284d; color: #fff; padding: 8px 16px; display: flex; gap: 10px; align-items: center; z-index: 10; }
+/* stamp and signatures on approved documents */
+.doc img.sig { display: block; max-height: 46px; max-width: 160px; margin: 0 auto 2px; }
+.doc img.stamp { display: block; height: 78px; margin: 0 auto 2px; opacity: .93; }
+.doc .sign .space.signed { height: auto; min-height: 50px; display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+.doc .sign .space.signed img { margin: 0; }
+.doc .signame { font-size: 11px; }
 @media print {
   body > *:not(.print-root) { display: none !important; }
   .print-root { display: block !important; }

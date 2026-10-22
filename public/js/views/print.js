@@ -1,4 +1,5 @@
 import { h, api, state, fmtDate } from '../ui.js';
+import { loadSigns, sigImg, stampImg, plainSigner } from '../signs.js';
 import { bomDoc } from './bom.js';
 import { bomRows } from './form.js';
 import { PROJECT, ROOM, SITE, roomCalc } from '../brief-fields.js';
@@ -14,7 +15,7 @@ function letterhead(s) {
       s.gstin ? h('div', `GSTIN: ${s.gstin}`) : null));
 }
 const footer = () => h('img.foot-img', { src: 'letterfoot.jpeg', alt: '' });
-const sign = s => h('div.sign', h('div', h('b', `For, ${s.company_name}`)), h('div.space'), h('div', h('b', 'AUTHORISED SIGNATORY')));
+const sign = (s, by) => h('div.sign', h('div', h('b', `For, ${s.company_name}`)), h('div.space' + (by ? '.signed' : ''), by ? [stampImg(), sigImg(by)] : null), h('div', h('b', 'AUTHORISED SIGNATORY')), by ? h('div.signame', plainSigner(by)) : null);
 const page = (...c) => h('div.page', ...c);
 
 function bar(title) {
@@ -52,7 +53,7 @@ function quotationDoc(q, s) {
     h('table', { style: { width: 'auto', marginLeft: '20px' } }, h('tbody', sections.map((sec, i) =>
       h('tr', h('td', { style: { border: 'none' } }, `•  ANNEXURE ${ROMAN[i]}`), h('td', { style: { border: 'none' } }, `-  ${sec[1]}`))))),
     ...lines(s.letter_closing).map(l => h('p', l)),
-    h('p', 'Yours faithfully,'), sign(s), footer()));
+    h('p', 'Yours faithfully,'), sign(s, q.approved_by), footer()));
 
   if (num('usp')) {
     pages.push(page(letterhead(s), h('h2', `ANNEXURE ${num('usp')}`), h('h3', s.usp_title || 'Distinctive features of WIESPL HVAC Systems'),
@@ -103,7 +104,7 @@ function quotationDoc(q, s) {
       h('tbody', opt.map((l, i) => h('tr', h('td', i + 1), h('td.spec', h('b', l.name), h('br'), ...multiline(l.description)), h('td.num', inr(l.rate)), h('td.num', inr(l.install)),
         h('td.num', inr(lineBasicRate(l))), h('td.num', l.qty), h('td', l.uom), h('td.num', inr(lineBasicRate(l) * (Number(l.qty) || 0))))))),
       h('p', 'Optional items are not included in the above total. GST extra as applicable.')] : null,
-    sign(s)));
+    sign(s, q.approved_by)));
 
   if (num('summary')) {
     pages.push(page(letterhead(s), h('h2', `ANNEXURE ${num('summary')}`), h('h3', 'SUMMARY'),
@@ -123,13 +124,13 @@ function quotationDoc(q, s) {
       annex.scope !== false && (d.scope_matrix || []).length ? [h('h3', { style: { marginTop: '16px' } }, 'SCOPE SHEET'),
         h('table', h('thead', h('tr', h('th', 'Sr. No.'), h('th', 'Particulars'), h('th', 'WIESPL Scope'), h('th', 'Client Scope'))),
           h('tbody', d.scope_matrix.map((r, i) => h('tr', h('td', String.fromCharCode(65 + i)), h('td', r[0]), h('td.spec', r[1]), h('td.spec', r[2])))))] : null,
-      sign(s), footer()));
+      sign(s, q.approved_by), footer()));
   }
   return h('div.doc', pages);
 }
 
 // ---------------------------------------------------------------- GST invoice / PO
-function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes, s }) {
+function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes, s, approvedBy }) {
   const intra = (place || '').toLowerCase() === (s.state || 'Maharashtra').toLowerCase();
   const t = linesTotals(items);
   return h('div.doc', page(letterhead(s), h('h2', title),
@@ -150,11 +151,12 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
     h('p', h('b', amountInWords(t.total))),
     notes ? h('div.spec', { style: { marginTop: '8px' } }, notes) : null,
     s.bank_details && !['PURCHASE ORDER', 'CREDIT NOTE'].includes(title) ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Bank details: '), s.bank_details) : null,
-    sign(s), footer()));
+    sign(s, approvedBy), footer()));
 }
 
 // A requisition / PO for several sites: each line is printed with its site (nothing is added for a single site).
-async function siteLabels(lines = []) {
+async function siteLabels(lines) {
+  lines = lines || []; // a document saved without lines has lines: null
   const ids = new Set(lines.filter(l => l.project_id && Number(l.qty) > 0).map(l => Number(l.project_id)));
   if (ids.size < 2) return;
   const names = new Map((await api('/projects/options').catch(() => [])).map(o => [Number(o.id), o.label]));
@@ -236,8 +238,8 @@ function poDoc(po, v, s) {
     // Sign-offs in the approval order: Purchase → Technical → Commercial → GM.
     h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By', 'Purchase Approval', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '20%' } }, x))),
-      h('tr', [plainName(po.prepared_by) || po.created_by, plainName(po.purchase_approved_by), plainName(po.tech_approved_by), plainName(po.comm_approved_by), plainName(po.approved_by)]
-        .map(x => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, x || ''))),
+      h('tr', [po.prepared_by || po.created_by, po.purchase_approved_by, po.tech_approved_by, po.comm_approved_by, po.approved_by]
+        .map((x, i) => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, i === 4 && x ? stampImg() : null, x ? sigImg(x) : null, plainName(x) || ''))),
       h('tr', ['Purchase Executive', 'Purchase Head', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x))))),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
@@ -256,7 +258,8 @@ function requisitionDoc(r, s) {
       lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', [l.remark, l.site && `Site: ${l.site}`].filter(Boolean).join(' · ')))),
       Array.from({ length: blanks }, () => h('tr', Array.from({ length: 6 }, () => h('td', { style: { height: '22px' } }, '')))),
       h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: 3 }, 'Sign of Purchase Head')),
-      h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td'), h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? `${r.approved_by} (${r.approved_at || ''})` : r.status))))));
+      h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.approved_by ? sigImg(r.requested_by) : null, r.requested_by || ''), h('td', { style: { textAlign: 'center', verticalAlign: 'middle' } }, r.approved_by ? stampImg() : null),
+        h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? [sigImg(r.approved_by), `${plainSigner(r.approved_by)} (${r.approved_at || ''})`] : r.status))))));
 }
 
 // Techno-commercial requirement sheet (MD, 13 Oct 2026): the enquiry, the detailed form per OT with design figures,
@@ -322,7 +325,7 @@ function challanDoc(c, project, s) {
     h('p', { style: { fontSize: '11px' } }, 'Material dispatched against the above work order for supply / installation at site. Please check the material on receipt and sign with date and stamp.'),
     h('table', { style: { marginTop: '18px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By', 'Checked By (Store)', 'Driver / Transporter', "Receiver's Sign, Date & Stamp"].map(x => h('th', { style: { width: '25%' } }, x))),
-      h('tr', [plainName(c.dispatched_by) || c.created_by, '', '', c.received_by ? `${c.received_by}${c.delivered_date ? ' · ' + fmtDate(c.delivered_date) : ''}` : ''].map(x => h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, x || ''))))),
+      h('tr', [plainName(c.dispatched_by) || c.created_by, '', '', c.received_by ? `${c.received_by}${c.delivered_date ? ' · ' + fmtDate(c.delivered_date) : ''}` : ''].map((x, i) => h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, i === 0 && c.dispatched_by ? [stampImg(), sigImg(c.dispatched_by)] : null, x || ''))))),
     h('div', { style: { marginTop: '6px' } }, h('b', `For, ${s.company_name}`)),
     c.status === 'Draft' ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, 'DRAFT – not yet dispatched') : null,
     footer()));
@@ -377,6 +380,7 @@ export async function printView(root, kind, id) {
   root.replaceChildren(h('div.empty', 'Preparing document…'));
   const s = await api('/settings');
   state.settings = s;
+  await loadSigns();
   let doc, title;
   if (kind === 'quotation') {
     const q = await api(`/quotations/${id}`);
@@ -396,7 +400,7 @@ export async function printView(root, kind, id) {
     title = cn.cn_no || 'Draft credit note';
     doc = taxDoc({ title: 'CREDIT NOTE', no: cn.cn_no || 'DRAFT – not approved', date: cn.date, party: c, partyLabel: 'Issued to:',
       refs: [['Against invoice', inv.invoice_no], ['Invoice date', fmtDate(inv.date)], ['Reason', cn.reason]],
-      items: [{ description: cn.description, hsn: (inv.lines || [])[0]?.hsn || '', qty: 1, uom: 'Lot', rate: cn.taxable, gst: cn.gst_rate }], place: cn.place_of_supply, notes: '', s });
+      items: [{ description: cn.description, hsn: (inv.lines || [])[0]?.hsn || '', qty: 1, uom: 'Lot', rate: cn.taxable, gst: cn.gst_rate }], place: cn.place_of_supply, notes: '', s, approvedBy: cn.approved_by });
   } else if (kind === 'po') {
     const po = await api(`/purchase_orders/${id}`);
     await siteLabels(po.lines);

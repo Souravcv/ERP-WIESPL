@@ -2,6 +2,7 @@
 // (requisition → PO → GRN), what is sent to site and what is pending. Dispatch makes the challan automatically.
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy, reservedRetry } from '../ui.js';
 import { canWrite, hasFunction } from '../schema.js';
+import { sigImg, stampImg } from '../signs.js';
 import { itemPicker, attachments, bomRows, toProcure } from './form.js';
 
 const firstLine = s => String(s || '').split('\n')[0];
@@ -355,7 +356,7 @@ export function bomDoc(bom, rows, s) {
     h('table', h('tbody', h('tr', h('td', { style: { width: '75%' } }, h('b', 'CLIENT - '), bom.client || ''), h('td', h('b', 'Date - '), fmtDate(bom.date))),
       h('tr', h('td', h('b', 'BOQ No - '), bom.bom_no, bom.project_id_label ? `   ·   Project: ${bom.project_id_label}` : ''), h('td', bom.work_order_id_label ? `WO: ${bom.work_order_id_label.split(' · ')[0]}` : '')))),
     h('table', { style: { marginTop: '6px' } }, h('thead', h('tr', ['SR.NO.', 'COMPONENT NAME', 'SPECIFICATIONS', 'DIMENSIONS', 'QTY', 'UOM', 'MOC', 'DRAWING MODEL NO', 'Remark', 'MAKE'].map(x => h('th', x)))), h('tbody', body)),
-    h('table', { style: { marginTop: '10px' } }, h('tbody', h('tr', h('td', { style: { height: '50px', verticalAlign: 'top', width: '60%' } }, h('b', 'Prepared By :- '), bom.prepared_by || ''),
-      h('td', { style: { verticalAlign: 'top' } }, h('b', 'Approved By :- '), bom.approved_by || '')))),
+    h('table', { style: { marginTop: '10px' } }, h('tbody', h('tr', h('td', { style: { height: '50px', verticalAlign: 'top', width: '60%' } }, h('b', 'Prepared By :- '), bom.prepared_by || '', bom.approved_by ? sigImg(bom.prepared_by) : null),
+      h('td', { style: { verticalAlign: 'top' } }, h('b', 'Approved By :- '), bom.approved_by || '', bom.approved_by ? [sigImg(bom.approved_by), stampImg()] : null)))),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.bom_doc_no || 'WIESPL/MFG/00')));
 }

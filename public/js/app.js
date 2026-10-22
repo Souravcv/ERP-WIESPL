@@ -5,6 +5,7 @@ import { listView } from './views/list.js';
 import { recordView } from './views/form.js';
 import { quotationView } from './views/quotation.js';
 import { printView } from './views/print.js';
+import { signatureDialog } from './signs.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 import { boqView } from './views/dispatch.js';
@@ -193,6 +194,7 @@ $('login-form').addEventListener('submit', async e => {
 });
 $('btn-logout').onclick = async () => { await api('/logout', { method: 'POST' }).catch(() => {}); location.hash = ''; location.reload(); };
 $('btn-password').onclick = () => changePassword(false).catch(fail);
+$('btn-signature').onclick = () => signatureDialog().catch(fail);
 $('menu-btn').onclick = () => $('sidebar').classList.toggle('open');
 $('global-search').addEventListener('submit', e => {
   e.preventDefault();
