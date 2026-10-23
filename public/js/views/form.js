@@ -131,6 +131,7 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
           const it = await api(`/items/${itemId}`);
           Object.assign(l, { description: l.description || it.name, uom: it.uom || l.uom, hsn: l.hsn || it.hsn || '' });
           if (amounts) Object.assign(l, { rate: l.rate || it.rate || 0, gst: l.gst ?? it.gst_rate ?? 18 });
+          if (f.costKey && !Number(l[f.costKey])) l[f.costKey] = it.rate || 0;
           render();
         } }), l.bom_item_id ? h('div.muted', { style: { fontSize: '11px' } }, '📑 from BOQ') : null);
       }
@@ -171,7 +172,7 @@ async function fillFromRequisition(reqId, inputs) {
     const it = l.item_id ? await api(`/items/${l.item_id}`).catch(() => null) : null;
     return { item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
       qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18, ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}),
-      ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}) };
+      ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}), ...(l.site ? { site: l.site } : {}) };
   }));
   inputs.lines.set([...keep, ...mapped]);
   if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.set(r.project_id);
@@ -367,10 +368,12 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'customers':
       if (can('enquiries')) A.push(h('button.btn', { onclick: () => newRecord('enquiries', { customer_id: id }) }, '+ New Enquiry'));
       if (can('contacts')) A.push(h('button.btn', { onclick: () => newRecord('contacts', { customer_id: id }) }, '+ Contact'));
-      if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { customer_id: id }) }, '+ Service Ticket'));
+      if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { customer_id: id, hospital: row.name, city: row.place }) }, '+ Complaint'));
+      if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { customer_id: id, hospital: row.name, site: row.place }) }, '🧮 Costing sheet'));
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
     case 'enquiries':
+      if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { enquiry_id: id, customer_id: row.customer_id || undefined, hospital: row.hospital_name, site: row.place, title: [row.type_of_work, row.hospital_name].filter(Boolean).join(' – ') }) }, '🧮 Costing sheet'));
       if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));
       if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
@@ -449,6 +452,104 @@ function actionsFor(entity, row, reload, ctx = {}) {
     }
     case 'boq_items':
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
+      break;
+    case 'service_tickets': {
+      const pre = { ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined };
+      if (can('service_reports')) A.push(h('button.btn.primary', { onclick: () => newRecord('service_reports', { ...pre, call_type: row.amc_id ? 'AMC Service Visit' : row.under_warranty === 'Yes' ? 'Warranty' : 'Break Down Call', problem: row.complaint, contact_name: row.contact_person, mobile: row.contact_no }) }, '📋 Service report'));
+      if (can('service_work_orders')) A.push(h('button.btn', { onclick: () => newRecord('service_work_orders', { ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined, location: row.city }) }, '🧰 Parts (work order)'));
+      if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { kind: 'Service', ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined, site: row.city, title: `Service – ${row.equipment || 'system'} – ${row.hospital || ''}` }) }, '🧮 Service costing'));
+      if (can('rca_reports')) A.push(h('button.btn', { onclick: () => newRecord('rca_reports', pre) }, '🔍 RCA'));
+      break;
+    }
+    case 'amc_contracts':
+      if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { amc_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, city: row.city, contact_person: row.contact_person, contact_no: row.mobile, under_warranty: 'Yes' }) }, '🛠️ New complaint'));
+      if (can('service_reports')) A.push(h('button.btn.primary', { onclick: () => newRecord('service_reports', { amc_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, call_type: row.cover_status === 'In Warranty' ? 'Warranty' : 'AMC Service Visit', contact_name: row.contact_person, mobile: row.mobile, email: row.email }) }, '📋 Service visit report'));
+      if (can('amc_contracts') && row.amc_amount > 0) A.push(h('button.btn', { onclick: go(async () => {
+        if (!(await confirmBox(`Make a proforma invoice for the AMC of ${row.hospital}: ₹ ${inr(row.amc_amount)} incl. GST?`, 'Make PI'))) return;
+        const inv = await post(`/amc_contracts/${id}/proforma`); toast(`Proforma ${inv.invoice_no} made`); location.hash = `#/view/invoices/${inv.id}`;
+      }) }, '🧾 AMC proforma invoice'));
+      break;
+    case 'service_work_orders':
+      A.push(h('a.btn', { href: `#/print/swo/${id}`, target: '_blank' }, '🖨 Print'));
+      if (!row.mr_id && can('material_requests')) A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (!(await confirmBox('Send these parts to the store as a material request? The store issues what it has and sends the rest to purchase.', 'Send to store'))) return;
+        const r = await post(`/service_work_orders/${id}/to-store`); toast(`Material request ${r.request.mr_no} sent to the store`); reload();
+      }) }, '📦 Send to store'));
+      if (row.mr_id) A.push(h('a.btn', { href: `#/view/material_requests/${row.mr_id}` }, '🙋 Its material request'));
+      break;
+    case 'service_reports':
+      A.push(h('a.btn', { href: `#/print/servicereport/${id}`, target: '_blank' }, '🖨 Print service report'));
+      break;
+    case 'rca_reports':
+      A.push(h('a.btn', { href: `#/print/rca/${id}`, target: '_blank' }, '🖨 Print RCA'));
+      break;
+    case 'costing_sheets':
+      A.push(h('a.btn', { href: `#/print/costing/${id}`, target: '_blank' }, row.kind === 'Service' ? '🖨 Service quotation' : '🖨 Quotation (selling prices)'));
+      if (row.kind === 'Sales' && can('quotations')) A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        const qs = (await api('/quotations?status=Draft&limit=200')).filter(q => !row.customer_id || !q.customer_id || q.customer_id === row.customer_id);
+        if (!qs.length) { toast('No Draft quotation for this customer: make the quotation first (CRM → Quotations)'); return; }
+        const sel = h('select', qs.map(q => h('option', { value: q.id }, `${q.quote_no} · ${q.customer_id_label || ''} · ${q.subject || ''}`)));
+        if (!(await modal('Add to quotation', h('div.grid', h('p.muted', `The lines go in at selling price (cost + ${row.margin_pct}%), plus transport ₹ ${inr(row.transport || 0)}, under the heading “${row.title}”.`), h('label', 'Draft quotation', sel)),
+          [{ label: 'Cancel', value: false }, { label: '➕ Add lines', cls: 'primary', value: true }]))) return;
+        const r = await post(`/costing_sheets/${id}/to-quotation`, { quotation_id: Number(sel.value) }); toast(`Added to ${r.quotation.quote_no}`); location.hash = `#/quotation/${r.quotation.id}`;
+      }) }, '➕ Add to quotation'));
+      if (!row.invoice_id && can('costing_sheets')) A.push(h('button.btn', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (!(await confirmBox(`Make a proforma invoice of ₹ ${inr(row.grand_total)} (selling prices) for ${row.hospital || 'the customer'}?`, 'Make PI'))) return;
+        const inv = await post(`/costing_sheets/${id}/proforma`); toast(`Proforma ${inv.invoice_no} made`); location.hash = `#/view/invoices/${inv.id}`;
+      }) }, '🧾 Proforma invoice'));
+      break;
+    case 'material_requests': {
+      const st = row.status, store = hasFunction(state.user.role, 'stock_post');
+      A.push(h('a.btn', { href: `#/print/mr/${id}`, target: '_blank' }, '🖨 Print'));
+      if (['Draft', 'Rejected'].includes(st) && can('material_requests')) A.push(h('button.btn.primary', { onclick: busy(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        await post(`/material_requests/${id}/submit`); toast('Sent to the store'); reload();
+      }) }, '📤 Send to store'));
+      if (['Submitted', 'Partly Issued', 'Sent to Purchase'].includes(st) && store) A.push(h('button.btn.good', { onclick: go(async () => {
+        // The store's split: issue what is in stock, send the rest to purchase.
+        const plan = await api(`/material_requests/${id}/stock`);
+        const inputs = plan.map(p => ({ p, issue: h('input', { type: 'number', step: 'any', min: 0, value: p.issue, style: { width: '80px' } }), buy: h('input', { type: 'number', step: 'any', min: 0, value: p.purchase, style: { width: '80px' } }) }));
+        const production = String(row.purpose || '').startsWith('Production');
+        const ok = await modal(`Process ${row.mr_no} – ${row.requested_by || ''}`, h('div.grid',
+          h('p.muted', `Issue = goes out on a draft ${production ? 'Material Transfer Note to the production stock' : 'issue slip'} (post it to reduce stock). Purchase = goes to the Purchase Head as a requisition with the site on each line. Free stock leaves out what is reserved for Final BOQs.`),
+          h('div.table-wrap', h('table.data', h('thead', h('tr', ['Material', 'Site', 'Asked', 'Issued', 'On order', 'In stock', 'Free', 'Issue now', 'Purchase'].map(x => h('th', x)))),
+            h('tbody', inputs.map(({ p, issue, buy }) => h('tr', h('td', p.description || '—', p.item_id ? null : h('div.muted', { style: { fontSize: '11px' } }, 'not a store item: purchase only')), h('td', p.site || ''),
+              h('td.num', `${p.qty} ${p.uom}`), h('td.num', p.issued || ''), h('td.num', p.to_purchase || ''), h('td.num', p.stock), h('td.num', { style: { color: p.free < p.need ? 'var(--warn)' : '' } }, p.free),
+              h('td', p.item_id ? issue : '—'), h('td', buy))))))),
+          [{ label: 'Cancel', value: false }, { label: '✔ Issue & send to purchase', cls: 'good', value: true }], { wide: true });
+        if (!ok) return;
+        const r = await post(`/material_requests/${id}/process`, { lines: inputs.map(({ p, issue, buy }) => ({ line: p.line, issue: Number(issue.value) || 0, purchase: Number(buy.value) || 0 })) });
+        toast([r.draft && `Draft #${r.draft.id} made (post it to issue)`, r.requisition && `Requisition ${r.requisition.req_no} sent to the Purchase Head`].filter(Boolean).join(' · '));
+        if (r.draft && (await confirmBox(`Open draft #${r.draft.id} to post it now?`, 'Open draft'))) { location.hash = `#/view/stock_drafts/${r.draft.id}`; return; }
+        reload();
+      }) }, st === 'Submitted' ? '📦 Process (issue / purchase)' : '📦 Issue now'));
+      if (st === 'Submitted' && store) A.push(h('button.btn.danger', { onclick: go(async () => {
+        const why = h('textarea', { rows: 3, placeholder: 'e.g. not needed / use item X instead / wrong quantity' });
+        if (!(await modal('Return this request?', h('label', 'Reason *', why), [{ label: 'Back', value: false }, { label: '↩ Return', cls: 'danger solid', value: true }]))) return;
+        await post(`/material_requests/${id}/reject`, { reason: why.value }); toast('Returned to the requester'); reload();
+      }) }, '↩ Return'));
+      if (st !== 'Draft') A.push(h('a.btn', { href: `#/list/stock_drafts?mr_id=${id}` }, '📝 Its issue slips / MTNs'));
+      break;
+    }
+    case 'production_entries':
+      if (row.status === 'Draft' && hasFunction(state.user.role, 'production_post')) A.push(h('button.btn.good', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (!(await confirmBox(`Post ${row.entry_no}? ${row.qty} ${row.uom || ''} of ${row.fg_item_id_label || 'the finished good'} go into store stock and the material used leaves the production stock.`, 'Post'))) return;
+        try { await post(`/production_entries/${id}/post`, {}); }
+        catch (e) {
+          if (/Enter the raw material used/.test(e.message)) { if (!(await confirmBox('No raw material is entered. Post anyway (nothing used from the production stock)?', 'Post anyway'))) return; await post(`/production_entries/${id}/post`, { noMaterial: true }); }
+          else if (/Not enough in the production stock/.test(e.message) && hasFunction(state.user.role, 'allow_negative')) {
+            if (!(await modal('Production stock is short', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }]))) return;
+            await post(`/production_entries/${id}/post`, { allowShort: true });
+          } else throw e;
+        }
+        toast('Posted: finished goods in stock'); reload();
+      }) }, '✔ Post (finished goods into stock)'));
+      if (row.status === 'Posted') A.push(h('a.btn', { href: `#/print/stockdoc/PRODUCED?doc=${encodeURIComponent(row.entry_no)}`, target: '_blank' }, '🖨 Production note'));
+      A.push(h('a.btn', { href: '#/production' }, '🏭 Daily output & production stock'));
       break;
     case 'stock_drafts':
       if (row.status === 'Draft' && hasFunction(state.user.role, 'stock_post')) A.push(h('button.btn.good', { onclick: go(async () => {

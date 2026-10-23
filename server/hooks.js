@@ -2,6 +2,7 @@
 import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
+import { prefillProduction } from './storeflow.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -57,6 +58,26 @@ function siteLines(row, existing) {
   return [...new Set(lines.filter(l => Number(l.qty) > 0 && l.project_id).map(l => Number(l.project_id)))];
 }
 const siteNames = ids => db.prepare(`SELECT name, project_no FROM projects WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map(p => p.name).join(', ');
+
+// date + n months (− 1 day for "end of period")
+function addMonths(d, n, dayShift = 0) {
+  const x = new Date(String(d).slice(0, 10) + 'T00:00:00');
+  if (Number.isNaN(x.getTime())) return null;
+  x.setMonth(x.getMonth() + n);
+  x.setDate(x.getDate() + dayShift);
+  return x.toLocaleString('sv-SE').slice(0, 10);
+}
+// Service report / RCA: hospital, customer and contact from the complaint (or the AMC) when not typed.
+function fillFromTicket(row, existing, entity) {
+  const tid = row.ticket_id ?? existing?.ticket_id;
+  const t = tid && db.prepare('SELECT hospital, customer_id, contact_person, contact_no, amc_id FROM service_tickets WHERE id = ?').get(Number(tid));
+  const a = (row.amc_id ?? existing?.amc_id ?? t?.amc_id) && db.prepare('SELECT hospital, customer_id, contact_person, mobile, email FROM amc_contracts WHERE id = ?').get(Number(row.amc_id ?? existing?.amc_id ?? t?.amc_id));
+  const src = t || a;
+  if (!src) return;
+  if (!(row.hospital ?? existing?.hospital)) row.hospital = src.hospital;
+  if (!(row.customer_id ?? existing?.customer_id) && src.customer_id) row.customer_id = src.customer_id;
+  if (entity === 'service_reports' && !(row.amc_id ?? existing?.amc_id) && t?.amc_id) row.amc_id = t.amc_id;
+}
 
 const parse = (v, dflt) => {
   if (v == null) return dflt;
@@ -222,6 +243,16 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
+    case 'material_requests':
+      if (!existing && !row.mr_no) row.mr_no = docNo('material_request', date, (n, fy) => `MR-${n}/20${fy}`);
+      break;
+    case 'production_entries': {
+      if (!existing && !row.entry_no) row.entry_no = docNo('production', date, (n, fy) => `PRD-${n}/20${fy}`);
+      const fg = row.fg_item_id ?? existing?.fg_item_id;
+      if (fg && !(row.uom ?? existing?.uom)) row.uom = db.prepare('SELECT uom FROM items WHERE id = ?').get(Number(fg))?.uom || null;
+      if (!existing) prefillProduction(row);
+      break;
+    }
     case 'requisitions': {
       if (!existing && !row.req_no) row.req_no = docNo('requisition', date, (n, fy) => `REQ-${n}/20${fy}`);
       const sites = siteLines(row, existing);
@@ -290,10 +321,74 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
-    case 'service_tickets':
+    case 'service_tickets': {
       if (!existing && !row.ticket_no) row.ticket_no = docNo('service', date, (n, fy) => `SRV/${fy}/${n}`);
+      const cid = row.customer_id ?? existing?.customer_id;
+      if (cid && !(row.hospital ?? existing?.hospital)) {
+        const c = db.prepare('SELECT name, place FROM customers WHERE id = ?').get(Number(cid));
+        if (c) { row.hospital = c.name; if (!(row.city ?? existing?.city)) row.city = c.place || null; }
+      }
+      const amc = row.amc_id ?? existing?.amc_id;
+      if (amc && !(row.hospital ?? existing?.hospital)) row.hospital = db.prepare('SELECT hospital FROM amc_contracts WHERE id = ?').get(Number(amc))?.hospital || null;
       if ((row.status === 'Resolved' || row.status === 'Closed') && !(row.closed_date ?? existing?.closed_date)) row.closed_date = today();
       break;
+    }
+    case 'amc_contracts': {
+      const months = Number(row.warranty_months ?? existing?.warranty_months) || 0;
+      const ws = row.warranty_start ?? existing?.warranty_start;
+      if (ws && months && !(row.warranty_end ?? existing?.warranty_end)) row.warranty_end = addMonths(ws, months, -1);
+      const pc = row.particle_count_date ?? existing?.particle_count_date;
+      if (pc && !(row.particle_next ?? existing?.particle_next)) row.particle_next = addMonths(pc, 12, -1);
+      // A new AMC period without a visit plan: S1 at the start, then every 12 / n months.
+      const start = row.amc_start ?? existing?.amc_start;
+      const plan = parse(row.service_plan ?? existing?.service_plan, []);
+      const nVis = Number(row.services_covered ?? existing?.services_covered) || 0;
+      if (start && nVis > 0 && !plan.length) {
+        row.service_plan = JSON.stringify(Array.from({ length: nVis }, (_, k) => ({ visit: `S${k + 1}`, planned: addMonths(start, Math.round(k * 12 / nVis)), done: '', report: '', remark: '' })));
+      }
+      const cid = row.customer_id ?? existing?.customer_id;
+      if (cid && !(row.hospital ?? existing?.hospital)) row.hospital = db.prepare('SELECT name FROM customers WHERE id = ?').get(Number(cid))?.name || null;
+      break;
+    }
+    case 'service_work_orders':
+      if (!existing && !row.swo_no) row.swo_no = docNo('swo', date, (n, fy) => `SW/${n}/20${fy}`);
+      break;
+    case 'service_reports':
+      if (!existing && !row.report_no) row.report_no = docNo('service_report', date, (n, fy) => `SR-${n}/20${fy}`);
+      fillFromTicket(row, existing, 'service_reports');
+      break;
+    case 'rca_reports':
+      if (!existing && !row.rca_no) row.rca_no = docNo('rca', date, (n, fy) => `RCA-${n}/20${fy}`);
+      fillFromTicket(row, existing, 'rca_reports');
+      if ((row.ticket_id ?? existing?.ticket_id) && !(row.complaint_details ?? existing?.complaint_details)) {
+        const t = db.prepare('SELECT date, complaint FROM service_tickets WHERE id = ?').get(Number(row.ticket_id ?? existing.ticket_id));
+        if (t) { row.complaint_details = t.complaint; if (!(row.complaint_date ?? existing?.complaint_date)) row.complaint_date = t.date; }
+      }
+      break;
+    case 'costing_sheets': {
+      if (!existing && !row.cs_no) row.cs_no = docNo('costing', date, (n, fy) => `CS-${n}/20${fy}`);
+      const v = k => row[k] !== undefined ? row[k] : existing?.[k];
+      const kind = v('kind') || 'Sales';
+      if (v('margin_pct') == null || v('margin_pct') === '') {
+        const s = getSettings();
+        row.margin_pct = Number(kind === 'Service' ? s.service_margin_pct ?? 30 : s.sales_margin_pct ?? 20);
+      }
+      const lines = parse(v('lines'), []);
+      const rate = db.prepare('SELECT rate, hsn FROM items WHERE id = ?');
+      for (const l of lines) if (l.item_id && (l.cost === '' || l.cost == null)) { const it = rate.get(Number(l.item_id)); l.cost = it?.rate || 0; if (!l.hsn && it?.hsn) l.hsn = it.hsn; }
+      if ('lines' in row) row.lines = JSON.stringify(lines);
+      const r2 = x => Math.round((Number(x) || 0) * 100) / 100;
+      const material = r2(lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.cost) || 0), 0));
+      const visits = r2((Number(v('visit_days')) || 0) * (Number(v('day_rate')) || 0));
+      const cost = r2(material + (Number(v('labour')) || 0) + visits + (Number(v('travel')) || 0) + (Number(v('other_cost')) || 0));
+      const margin = r2(cost * (Number(v('margin_pct')) || 0) / 100);
+      const selling = r2(cost + margin + (Number(v('transport')) || 0));
+      const gst = r2(selling * (Number(v('gst_rate') ?? 18) || 0) / 100);
+      Object.assign(row, { material_cost: material, cost_total: cost, margin_amount: margin, selling_total: selling, gst_amount: gst, grand_total: r2(selling + gst) });
+      const cid = v('customer_id');
+      if (cid && !v('hospital')) row.hospital = db.prepare('SELECT name FROM customers WHERE id = ?').get(Number(cid))?.name || null;
+      break;
+    }
     case 'material_approvals':
       if (!existing && !row.submittal_no) row.submittal_no = docNo('submittal', row.submitted_date || today(), (n, fy) => `MAS/${fy}/${n}`);
       break;
@@ -468,6 +563,23 @@ export function afterSave(name, id, user, deleted) {
   if (name === 'invoices') {
     const r = deleted || db.prepare('SELECT sales_order_id FROM invoices WHERE id = ?').get(id);
     refreshReceivables({ invoiceId: deleted ? null : id, soId: r?.sales_order_id });
+  }
+  if (name === 'service_reports' && !deleted) {
+    const r = db.prepare('SELECT report_no, date, end_date, status, call_type, ticket_id, amc_id, work_done FROM service_reports WHERE id = ?').get(id);
+    if (r?.status === 'Completed') {
+      if (r.ticket_id) db.prepare("UPDATE service_tickets SET status = 'Closed', closed_date = COALESCE(NULLIF(closed_date, ''), ?), resolution = COALESCE(NULLIF(resolution, ''), ?) WHERE id = ? AND status <> 'Closed'")
+        .run(r.end_date || r.date, r.work_done || null, r.ticket_id);
+      if (r.amc_id && r.call_type === 'AMC Service Visit') {
+        const a = db.prepare('SELECT service_plan FROM amc_contracts WHERE id = ?').get(r.amc_id);
+        const plan = parse(a?.service_plan, []);
+        if (!plan.some(p => p.report === r.report_no)) {
+          const next = plan.filter(p => !p.done).sort((x, y) => String(x.planned || '9999').localeCompare(String(y.planned || '9999')))[0];
+          if (next) { next.done = r.end_date || r.date; next.report = r.report_no; }
+          else plan.push({ visit: `S${plan.length + 1}`, planned: '', done: r.end_date || r.date, report: r.report_no, remark: 'extra visit' });
+          db.prepare('UPDATE amc_contracts SET service_plan = ? WHERE id = ?').run(JSON.stringify(plan), r.amc_id);
+        }
+      }
+    }
   }
   if (name === 'credit_notes') {
     const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);

@@ -26,6 +26,9 @@ import { myTasks } from './tasks.js';
 import * as pay from './payments.js';
 import * as bankreco from './bankreco.js';
 import * as recv from './receivables.js';
+import * as sf from './storeflow.js';
+import * as svc from './service.js';
+const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
 import * as roles from './roles.js';
@@ -40,6 +43,7 @@ roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 importer.linkInwardPOs();
+sf.backfillLeadTimes();
 purgeExpiredSessions();
 notify.purgeOld();
 
@@ -161,11 +165,17 @@ const pfx = () => getSettings().quote_prefix || 'WIESPL';
 const DOC_SERIES = [
   { key: 'stock_INWARD', label: 'GRN (Inward)', table: 'stock_moves', col: 'doc_no', where: "type = 'INWARD'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'stock_OUTWARD', label: 'Issue Slip (Outward)', table: 'stock_moves', col: 'doc_no', where: "type = 'OUTWARD'", fmt: (n, fy) => `${n}/20${fy}` },
-  { key: 'stock_TRANSFER', label: 'Transfer', table: 'stock_moves', col: 'doc_no', where: "type = 'TRANSFER'", fmt: (n, fy) => `${n}/20${fy}` },
+  { key: 'stock_TRANSFER', label: 'Material Transfer Note (MTN)', table: 'stock_moves', col: 'doc_no', where: "type = 'TRANSFER'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'stock_RETURN', label: 'Return to Store', table: 'stock_moves', col: 'doc_no', where: "type = 'RETURN'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'stock_SCRAP', label: 'Scrap', table: 'stock_moves', col: 'doc_no', where: "type = 'SCRAP'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'challan', label: 'Delivery Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `DC-${n}/20${fy}` },
   { key: 'challan_ret', label: 'Returnable Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `RE-${n}/20${fy}` },
+  { key: 'material_request', label: 'Material Request (to store)', table: 'material_requests', col: 'mr_no', fmt: (n, fy) => `MR-${n}/20${fy}` },
+  { key: 'production', label: 'Production Entry', table: 'production_entries', col: 'entry_no', fmt: (n, fy) => `PRD-${n}/20${fy}` },
+  { key: 'swo', label: 'Service Work Order', table: 'service_work_orders', col: 'swo_no', fmt: (n, fy) => `SW/${n}/20${fy}` },
+  { key: 'service_report', label: 'Service Report', table: 'service_reports', col: 'report_no', fmt: (n, fy) => `SR-${n}/20${fy}` },
+  { key: 'rca', label: 'Root Cause Analysis', table: 'rca_reports', col: 'rca_no', fmt: (n, fy) => `RCA-${n}/20${fy}` },
+  { key: 'costing', label: 'Costing Sheet', table: 'costing_sheets', col: 'cs_no', fmt: (n, fy) => `CS-${n}/20${fy}` },
   { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
   { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'so', label: 'Sales Order', table: 'sales_orders', col: 'so_no', fmt: (n, fy) => `${pfx()}/SO/${fy}/${n}` },
@@ -180,7 +190,7 @@ const DOC_SERIES = [
   { key: 'debit_note', label: 'Debit Note', table: 'debit_notes', col: 'dn_no', fmt: (n, fy) => `DN-${n}/20${fy}` },
   { key: 'payment', label: 'Vendor Payment', table: 'vendor_payments', col: 'payment_no', fmt: (n, fy) => `PAY-${n}/20${fy}` },
   { key: 'expense', label: 'Expense Voucher', table: 'expenses', col: 'voucher_no', fmt: (n, fy) => `EXP-${n}/20${fy}` },
-  { key: 'service', label: 'Service Ticket', table: 'service_tickets', col: 'ticket_no', fmt: (n, fy) => `SRV/${fy}/${n}` },
+  { key: 'service', label: 'Complaint (service ticket)', table: 'service_tickets', col: 'ticket_no', fmt: (n, fy) => `SRV/${fy}/${n}` },
 ];
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 function docSeries(fy) {
@@ -472,27 +482,33 @@ function postStockEntry(reqBody, user) {
       return { ...r, challan: dispatch.challanForIssue(body, r, req.user) };
     });
   }
-  return stock.stockEntry(body, req.user);
+  const r = stock.stockEntry(body, req.user);
+  // Lead time of each item received against a PO: PO date → GRN date.
+  if (body.type === 'INWARD') for (const id of new Set((body.lines || []).map(l => Number(l.item_id)).filter(Boolean))) sf.refreshLeadTime(id);
+  return r;
 }
 
+// ---------------------------------------------------------------- material requests (anyone → store) and production
+api.post('/material_requests/:id/submit', need('material_requests'), wrap(req => { const r = sf.submitMR(req.params.id, req.user); notify.notifyNew('material_requests', r, req.user); return r; }));
+api.get('/material_requests/:id/stock', wrap(req => { if (!canView('material_requests', req.user.role)) throw new HttpError(403, 'No access'); return sf.mrStock(req.params.id); }));
+api.post('/material_requests/:id/process', wrap(req => sf.processMR(req.params.id, req.body, req.user)));
+api.post('/material_requests/:id/reject', wrap(req => sf.rejectMR(req.params.id, req.body, req.user)));
+api.post('/production_entries/:id/post', wrap(req => sf.postProduction(req.params.id, req.body, req.user)));
+const prodView = req => { if (!canView('production_entries', req.user.role)) throw new HttpError(403, 'No access to production'); };
+api.get('/production/stock', wrap(req => { prodView(req); return sf.productionStock(); }));
+api.get('/production/daily', wrap(req => { prodView(req); return sf.dailyOutput(req.query); }));
+
+// ---------------------------------------------------------------- service and costing sheets
+api.post('/service_work_orders/:id/to-store', wrap(req => svc.swoToStore(req.params.id, req.user)));
+api.post('/amc_contracts/:id/proforma', wrap(req => svc.amcPI(req.params.id, req.user)));
+api.post('/costing_sheets/:id/to-quotation', wrap(req => svc.costingToQuotation(req.params.id, req.body?.quotation_id, req.user)));
+api.post('/costing_sheets/:id/proforma', wrap(req => svc.costingPI(req.params.id, req.user)));
+api.get('/costing_sheets/:id/selling', wrap(req => { if (!canView('costing_sheets', req.user.role)) throw new HttpError(403, 'No access'); return svc.sellingLines(getRow('costing_sheets', req.params.id)); }));
+api.get('/dashboard/service', wrap(req => { if (!canView('service_tickets', req.user.role)) throw new HttpError(403, 'No access to service'); return svc.serviceDashboard(); }));
+api.post('/service/import/complaints', need('service_tickets'), express.raw({ type: () => true, limit: '20mb' }), wrap(req => svc.importComplaints(req.body, req.user)));
+api.post('/service/import/amc', need('amc_contracts'), express.raw({ type: () => true, limit: '20mb' }), wrap(req => svc.importAmc(req.body, req.user)));
+
 // ---------------------------------------------------------------- draft issue slips / dispatch challans / transfers
-const DRAFT_KEYS = ['type', 'date', 'doc_no', 'po_id', 'project_id', 'issued_to', 'requested_by', 'from_location', 'to_location', 'purpose', 'remarks', 'boq_id', 'bom_id',
-  'make_challan', 'challan', 'vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type', 'lines'];
-function draftRow(body) {
-  const type = body?.type;
-  if (!['OUTWARD', 'TRANSFER'].includes(type)) throw new HttpError(400, 'Only issue slips, dispatch challans and transfers are saved as drafts');
-  const lines = (body.lines || []).filter(l => l.item_id && Number(l.qty)).map(l => { const { poPending, boqPending, ...rest } = l; return rest; });
-  if (!lines.length) throw new HttpError(400, 'Add at least one item with a quantity');
-  if (type === 'TRANSFER' && !body.to_location) throw new HttpError(400, 'Enter where the material is transferred to');
-  const challan = !!(body.make_challan || body.bom_id || body.boq_id);
-  const payload = Object.fromEntries(DRAFT_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
-  payload.lines = lines;
-  const it = db.prepare('SELECT code, name, uom FROM items WHERE id = ?');
-  const items = lines.map(l => { const x = it.get(Number(l.item_id)); return `${x?.code || ''} ${x?.name || 'item ' + l.item_id} × ${l.qty} ${l.uom || x?.uom || ''}`.trim(); }).join('\n');
-  return { type, doc_kind: type === 'OUTWARD' ? (challan ? 'Dispatch challan' : 'Issue slip') : (challan ? 'Transfer with challan' : 'Transfer slip'),
-    date: body.date || new Date().toLocaleString('sv-SE').slice(0, 10), project_id: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id) || null,
-    issued_to: body.issued_to || null, to_location: body.to_location || null, item_count: lines.length, items, payload, remarks: body.remarks || null };
-}
 api.post('/stock/drafts', need('stock_moves'), wrap(req => insertRow('stock_drafts', { ...draftRow(req.body), status: 'Draft', prepared_by: req.user.name }, req.user, { system: true })));
 api.put('/stock/drafts/:id', need('stock_moves'), wrap(req => {
   const d = getRow('stock_drafts', req.params.id);
@@ -688,6 +704,8 @@ const LOCKED = {
   // Approved: changed only after “Revise” (back to the GM).
   sales_orders: ['Pending Approval', 'Approved', 'In Execution', 'Completed', 'Cancelled'],
   stock_drafts: ['Posted', 'Cancelled'],
+  material_requests: ['Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed'],
+  production_entries: ['Posted'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
@@ -747,6 +765,8 @@ api.delete('/:entity/:id', wrap(req => {
   if (!row) throw new HttpError(404, 'Record not found');
   if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
+  if (entity === 'production_entries' && row.status === 'Posted') throw new HttpError(409, 'A posted production entry cannot be deleted');
+  if (entity === 'material_requests' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} material request cannot be deleted`);
   if (entity === 'payments') throw new HttpError(409, 'A receipt cannot be deleted; the GM can reverse it with a reason (e.g. cheque bounced)');
   if (entity === 'invoices' && row.status !== 'Draft') throw new HttpError(409, `An issued invoice cannot be deleted${hasFunction(req.user.role, 'pay_final') ? '; cancel it (with a reason) or make a credit note' : '; the GM can cancel it, or make a credit note'}`);
   if (entity === 'credit_notes' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} credit note cannot be deleted`);

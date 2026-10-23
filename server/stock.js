@@ -124,6 +124,7 @@ export function stockSummary(q = {}) {
       switch (m.type) {
         case 'OPENING': r.adjust += qty - bal; bal = qty; break;
         case 'INWARD': r.inward += qty; r.inward_value += qty * (m.rate ?? it.rate ?? 0); bal += qty; break;
+        case 'PRODUCED': r.inward += qty; r.produced = (r.produced || 0) + qty; bal += qty; break;
         case 'OUTWARD': r.outward += qty; r.consumption_value += qty * (m.rate ?? it.rate ?? 0); r.months.add(m.date.slice(0, 7)); bal -= qty; break;
         case 'TRANSFER': r.transfer += qty; r.consumption_value += qty * (m.rate ?? it.rate ?? 0); r.months.add(m.date.slice(0, 7)); bal -= qty; break;
         case 'RETURN': r.return += qty; bal += qty; break;

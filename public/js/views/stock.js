@@ -6,7 +6,7 @@ import { itemPicker, bomRows } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST'];
-const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment' };
+const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment' };
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
 const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type'];
@@ -188,7 +188,7 @@ export async function stockEntryView(root) {
     if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
     if (['OUTWARD', 'TRANSFER'].includes(type) && !boq && !bom) {
       // Which document: an internal issue slip, or a dispatch / delivery challan (to site or a vendor) with it.
-      const opts = type === 'OUTWARD' ? [['slip', 'Issue slip (production / internal)'], ['challan', 'Dispatch challan (to site / vendor)']] : [['slip', 'Transfer slip'], ['challan', 'Transfer with delivery challan']];
+      const opts = type === 'OUTWARD' ? [['slip', 'Issue slip (production / internal)'], ['challan', 'Dispatch challan (to site / vendor)']] : [['slip', 'Material Transfer Note (MTN)'], ['challan', 'MTN with delivery challan']];
       const doc = h('select', opts.map(([v2, l]) => h('option', { value: v2 }, l)));
       doc.value = makeChallan ? 'challan' : 'slip';
       doc.onchange = () => { makeChallan = doc.value === 'challan'; ch.challan_type ||= type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'; render(); };

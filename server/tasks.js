@@ -81,6 +81,16 @@ export function myTasks(user) {
       .map(p => ({ title: `Form 16A from ${p.customer || ''} for ₹${Math.round(p.tds_amount).toLocaleString('en-IN')} TDS`, sub: `${p.receipt_no} of ${fmt(p.date)}`, link: `#/view/payments/${p.id}` })));
   }
 
+  // Material requests waiting for the store's decision.
+  if (hasFunction(role, 'stock_post')) {
+    group('mr', '🙋', 'Material requests to process', db.prepare("SELECT id, mr_no, requested_by, department, site, needed_by, lines FROM material_requests WHERE status = 'Submitted' ORDER BY COALESCE(needed_by, '9999'), id").all()
+      .map(m => ({ title: `${m.mr_no}: ${JSON.parse(m.lines || '[]').length} material(s) for ${m.requested_by || ''} (${m.department || ''})`, sub: [m.site, m.needed_by && `needed by ${fmt(m.needed_by)}`].filter(Boolean).join(' · '),
+        link: `#/view/material_requests/${m.id}`, due: m.needed_by, late: m.needed_by && m.needed_by < t })));
+  }
+  // Your own requests the store returned.
+  group('mr_back', '↩', 'Your material requests returned by the store', db.prepare("SELECT id, mr_no, store_note FROM material_requests WHERE status = 'Rejected' AND (created_by = ? OR requested_by = ?)").all(user.name, user.name)
+    .map(m => ({ title: `${m.mr_no} returned`, sub: String(m.store_note || '').split('\n').pop(), link: `#/view/material_requests/${m.id}`, late: true })));
+
   // Draft issue slips / dispatch challans / transfers waiting to be posted.
   if (hasFunction(role, 'stock_post')) {
     group('post', '📤', 'Draft issues / transfers to post', db.prepare("SELECT d.id, d.doc_kind, d.item_count, d.issued_to, d.to_location, d.prepared_by, d.date, p.name project FROM stock_drafts d LEFT JOIN projects p ON p.id = d.project_id WHERE d.status = 'Draft' ORDER BY d.date, d.id").all()

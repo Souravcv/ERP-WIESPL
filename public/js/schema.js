@@ -3,7 +3,7 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service'];
 
 const ALL = ROLES;
 const CRM = ['admin', 'manager', 'sales'];
@@ -11,6 +11,7 @@ const ACC = ['admin', 'manager', 'accounts'];
 const PURCHASE = ['admin', 'manager', 'purchase', 'purchase_head', 'accounts', 'store'];
 const STORE = ['admin', 'manager', 'store', 'purchase', 'purchase_head', 'accounts'];
 const ENG = ['admin', 'manager', 'engineer', 'sales', 'technical'];
+const SERVICE = ['admin', 'manager', 'service', 'engineer'];
 
 // GSTIN state codes: the first two digits of a GSTIN give the supplier's state.
 export const GST_STATE_CODES = {
@@ -36,8 +37,9 @@ export const MOVE_TYPES = {
   RETURN: { label: 'Return Material', sign: 1, doc: 'RET' },
   SCRAP: { label: 'Scrap', sign: -1, doc: 'SCR' },
   ADJUST: { label: 'Adjustment (+/-)', sign: 1, doc: 'ADJ' },
+  PRODUCED: { label: 'Production (finished goods made)', sign: 1, doc: 'PRD' },
 };
-const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP') THEN -${m}.qty ELSE 0 END`;
+const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST','PRODUCED') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP') THEN -${m}.qty ELSE 0 END`;
 // Quantity of a BOQ line sent on challans with the given statuses (challan lines carry boq_item_id).
 const BOQ_SENT = statuses => `(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.qty') AS REAL)), 0) FROM challans c, json_each(c.lines) j
   WHERE c.status IN (${statuses}) AND CAST(json_extract(j.value, '$.boq_item_id') AS INTEGER) = {t}.id)`;
@@ -71,20 +73,25 @@ export const ROLE_INFO = {
   purchase: { label: 'Purchase Executive', description: 'Vendors, requisitions, prepares purchase orders' },
   purchase_head: { label: 'Purchase Head', description: 'Approves material requisitions, checks POs; purchase and store' },
   technical: { label: 'Technical Manager', description: 'Projects, BOQs and drawings' },
+  production: { label: 'Production Supervisor', description: 'Material requests to the store, production stock, finished goods made per day' },
+  service: { label: 'Service Coordinator', description: 'Complaints, AMC / warranty register, service work orders, service reports, RCA, service quotations' },
 };
 
 // What each built-in profile works with; everything else is hidden from it (an admin can still change this under
 // Roles & Permissions). Admin and GM see everything.
 const BOQ_VIEW = ['boqs', 'boq_items', 'boms', 'bom_items', 'material_lists'];
+const SERVICE_VIEW = ['service_tickets', 'amc_contracts', 'service_work_orders', 'service_reports', 'rca_reports'];
 export const ROLE_SEES = {
-  sales: ['customers', 'contacts', 'enquiries', 'followups', 'quotations', 'products', 'approvals', 'material_approvals', 'sales_orders', 'projects'],
+  sales: ['customers', 'contacts', 'enquiries', 'followups', 'quotations', 'products', 'approvals', 'material_approvals', 'sales_orders', 'projects', 'costing_sheets', 'items'],
   accounts: ['customers', 'contacts', 'quotations', 'approvals', 'sales_orders', 'projects', 'challans', 'invoices', 'payments', 'credit_notes', 'vendors', 'requisitions',
-    'purchase_orders', 'vendor_bills', 'debit_notes', 'vendor_payments', 'expenses', 'items', 'stock_moves'],
-  store: ['approvals', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'stock_drafts'],
-  engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'challans', 'service_tickets', 'requisitions', 'items', 'stock_moves', 'stock_drafts'],
-  purchase: ['approvals', 'projects', ...BOQ_VIEW, 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves'],
-  purchase_head: ['approvals', 'projects', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'debit_notes', 'items', 'stock_moves', 'stock_drafts'],
-  technical: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'requisitions', 'purchase_orders', 'items'],
+    'purchase_orders', 'vendor_bills', 'debit_notes', 'vendor_payments', 'expenses', 'items', 'stock_moves', 'amc_contracts', 'costing_sheets'],
+  store: ['approvals', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'stock_drafts', 'material_requests', 'production_entries', 'service_work_orders'],
+  engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'challans', ...SERVICE_VIEW, 'material_requests', 'items', 'stock_moves', 'stock_drafts'],
+  purchase: ['approvals', 'projects', ...BOQ_VIEW, 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests'],
+  purchase_head: ['approvals', 'projects', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'debit_notes', 'items', 'stock_moves', 'stock_drafts', 'material_requests', 'production_entries'],
+  technical: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'requisitions', 'purchase_orders', 'items', 'material_requests', ...SERVICE_VIEW],
+  production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
+  service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices'],
 };
 export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
 
@@ -98,7 +105,8 @@ export const FUNCTIONS = {
   po_commercial: 'PO step 3 – Commercial approval: prices, charges, payment terms & due dates',
   po_final: 'PO step 4 – Final approval by GM',
   stock_opening: 'Create 1 April opening stock for all items',
-  stock_post: 'Post draft issue slips / dispatch challans / transfers (reduces stock)',
+  stock_post: 'Post draft issue slips / dispatch challans / transfers (reduces stock) and process material requests',
+  production_post: 'Post production entries (finished goods into stock)',
   allow_negative: 'Issue more than the available stock',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
@@ -113,20 +121,23 @@ export const FUNCTIONS = {
   boq_review: 'BOQ – review / edit department sections (design review)',
   boq_final: 'BOQ – make Final (freeze, reserve stock, auto requisition) and reopen',
   notify_store_check: 'Pop-up: BOQ final – store stock check & auto requisition',
+  notify_material_request: 'Pop-up: new material request to the store',
 };
 // Departments a BOQ section belongs to; each one is reviewed before the BOQ can be made Final.
 export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels', 'Doors', 'MGPS', 'Flooring / Civil', 'Lighting', 'Bought-out'];
 // Pop-up notifications per new document; approval requests always go to whoever may approve that step.
-export const NOTIFY_FUNCTIONS = { requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
+export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
   purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
-  store: ['stock_opening', 'stock_post', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  store: ['stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
+  production: ['production_post'],
+  service: ['import'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -762,27 +773,233 @@ export const ENTITIES = {
     ],
   },
   service_tickets: {
-    label: 'Service / Complaints', singular: 'Service Ticket', group: 'Sales & Projects', icon: '🛠️', write: ENG.concat('store'),
-    display: "{t}.ticket_no",
-    search: ['ticket_no', 'complaint', 'assigned_to', 'resolution'],
-    list: ['ticket_no', 'date', 'customer_id', 'category', 'priority', 'complaint', 'assigned_to', 'status'],
+    label: 'Complaint Register', singular: 'Complaint', group: 'Service', icon: '🛠️', write: SERVICE.concat('store'),
+    display: "{t}.ticket_no || ' ' || COALESCE({t}.hospital, '')",
+    search: ['ticket_no', 'hospital', 'city', 'equipment', 'complaint', 'assigned_to', 'resolution'],
+    list: ['ticket_no', 'date', 'hospital', 'city', 'mode', 'equipment', 'complaint', 'assigned_to', 'status', 'closed_date'],
     statusField: 'status',
     fields: [
       { key: 'ticket_no', label: 'Ticket No', type: 'text', readonly: true },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
-      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers', required: true },
+      { key: 'mode', label: 'Mode of Complaint', type: 'select', options: ['Telephonic', 'WhatsApp', 'Email', 'Visit', 'Other'], default: 'Telephonic' },
+      { key: 'hospital', label: 'Customer / Hospital Name', type: 'text', required: true },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'city', label: 'Address / City', type: 'text' },
+      { key: 'contact_person', label: 'Contact Person', type: 'text' },
+      { key: 'contact_no', label: 'Contact No', type: 'tel' },
+      { key: 'amc_id', label: 'AMC / Warranty', type: 'ref', ref: 'amc_contracts' },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'category', label: 'Category', type: 'select', options: ['Breakdown', 'Preventive Maintenance', 'Warranty', 'AMC Visit', 'Validation', 'Installation Support', 'Other'], default: 'Breakdown' },
       { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'], default: 'Medium' },
-      { key: 'equipment', label: 'Equipment (AHU, Panel, Door...)', type: 'text' },
+      { key: 'equipment', label: 'Instrument Name', type: 'text', suggest: ['ODU', 'AHU', 'AHU Control Panel', 'PLC', 'LAF System', 'Surgeon Control Panel', 'Door', 'Sky Light', 'VMR', 'VFD', 'Motor', 'Pendant', 'MGPS', 'Pass Box', 'Other'] },
       { key: 'under_warranty', label: 'Under Warranty / AMC', type: 'yn' },
-      { key: 'complaint', label: 'Complaint', type: 'textarea', span: 2, required: true },
+      { key: 'complaint', label: 'Problem', type: 'textarea', span: 2, required: true },
       { key: 'reported_by', label: 'Reported By (client)', type: 'text' },
-      { key: 'assigned_to', label: 'Assigned Engineer', type: 'person' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Open', 'In Progress', 'Waiting for Parts', 'Resolved', 'Closed'], default: 'Open' },
-      { key: 'closed_date', label: 'Closed Date', type: 'date' },
-      { key: 'resolution', label: 'Resolution / Action Taken', type: 'textarea', span: 2 },
+      { key: 'assigned_to', label: 'Assigned Person', type: 'person' },
+      { key: 'status', label: 'Complaint Status', type: 'select', options: ['Open', 'In Progress', 'Waiting for Parts', 'Resolved', 'Closed'], default: 'Open' },
+      { key: 'closed_date', label: 'Date of Completion', type: 'date' },
+      { key: 'resolution', label: 'Solution', type: 'textarea', span: 2 },
+      { key: 'remark', label: 'Remark', type: 'text' },
       { key: 'charges', label: 'Charges (₹)', type: 'money' },
+      { key: 'days_open', label: 'Days Open', type: 'number', computed: "CAST(julianday(COALESCE(NULLIF({t}.closed_date, ''), date('now', 'localtime'))) - julianday({t}.date) AS INTEGER)" },
+    ],
+  },
+
+
+  // ---------------------------------------------------------------- Service
+  // AMC / warranty register: one row per client system, with the planned service visits (S1–S4), the AMC period and
+  // amount, and the particle count due date. A service report on an AMC visit ticks off the next planned visit.
+  amc_contracts: {
+    label: 'AMC / Warranty Register', singular: 'AMC / Warranty', group: 'Service', icon: '🛡️', write: SERVICE,
+    display: "COALESCE({t}.hospital, '') || COALESCE(' – ' || {t}.system_details, '')",
+    search: ['client_id', 'hospital', 'customer_name', 'city', 'contact_person', 'system_details', 'email', 'mobile'],
+    list: ['client_id', 'hospital', 'city', 'system_details', 'coverage', 'warranty_end', 'amc_start', 'amc_end', 'amc_amount', 'next_service', 'cover_status'],
+    fields: [
+      { key: 'client_id', label: 'Client ID', type: 'text' },
+      { key: 'hospital', label: 'Hospital Name', type: 'text', required: true, span: 2 },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'customer_name', label: 'Customer / Doctor', type: 'text' },
+      { key: 'address', label: 'Address', type: 'textarea', span: 2 },
+      { key: 'city', label: 'City', type: 'text' },
+      { key: 'state', label: 'State', type: 'select', options: STATES },
+      { key: 'contact_person', label: 'Contact Person', type: 'text' },
+      { key: 'mobile', label: 'Mobile', type: 'tel' },
+      { key: 'email', label: 'Email', type: 'text' },
+      { key: 'system_details', label: 'System Details', type: 'text', suggest: ['MOD Setup', 'LAF', 'In Built LAF', 'IVF set up', 'AHU', 'ODU'] },
+      { key: 'coverage', label: 'Coverage', type: 'select', options: ['AMC', 'CAMC', 'Warranty', 'None'], default: 'AMC' },
+      { key: 'warranty_months', label: 'Warranty (months)', type: 'number', default: 12 },
+      { key: 'warranty_start', label: 'Warranty Start', type: 'date' },
+      { key: 'warranty_end', label: 'Warranty End', type: 'date', hint: 'Start + months if blank' },
+      { key: 'services_covered', label: 'Services Covered per Year', type: 'number', default: 3 },
+      { key: 'service_plan', label: 'Service Visits (S1, S2 …)', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        { key: 'visit', label: 'Visit', type: 'text', width: 60 }, { key: 'planned', label: 'Planned', type: 'date', width: 140 },
+        { key: 'done', label: 'Done On', type: 'date', width: 140 }, { key: 'report', label: 'Service Report', type: 'text', width: 140 }, { key: 'remark', label: 'Remark', type: 'text', width: 200 }] },
+      { key: 'amc_start', label: 'AMC Start', type: 'date' },
+      { key: 'amc_end', label: 'AMC End', type: 'date' },
+      { key: 'amc_amount_agreement', label: 'AMC Amount as per Agreement (₹)', type: 'money' },
+      { key: 'amc_amount', label: 'AMC Amount (₹, incl. GST)', type: 'money' },
+      { key: 'variance', label: 'Variance (₹)', type: 'money', computed: "ROUND(COALESCE({t}.amc_amount, 0) - COALESCE({t}.amc_amount_agreement, 0), 2)" },
+      { key: 'particle_count_date', label: 'Particle Count Done On', type: 'date' },
+      { key: 'particle_next', label: 'Next Particle Count', type: 'date', hint: 'One year after the last if blank' },
+      { key: 'next_service', label: 'Next Service Due', type: 'date', computed: "(SELECT MIN(json_extract(j.value, '$.planned')) FROM json_each(COALESCE({t}.service_plan, '[]')) j WHERE COALESCE(json_extract(j.value, '$.done'), '') = '' AND COALESCE(json_extract(j.value, '$.planned'), '') <> '')" },
+      { key: 'cover_status', label: 'Status', type: 'select', options: ['In Warranty', 'AMC Active', 'Renewal Due', 'Expired', 'No Cover'],
+        computed: "CASE WHEN {t}.warranty_end >= date('now', 'localtime') THEN 'In Warranty' WHEN {t}.amc_end IS NULL OR {t}.amc_end = '' THEN 'No Cover' WHEN {t}.amc_end < date('now', 'localtime') THEN 'Expired' WHEN {t}.amc_end <= date('now', 'localtime', '+60 days') THEN 'Renewal Due' ELSE 'AMC Active' END" },
+      { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+    ],
+  },
+  // Parts for a service job: prepared by the service coordinator, sent to the store as a material request.
+  service_work_orders: {
+    label: 'Service Work Orders', singular: 'Service Work Order', group: 'Service', icon: '🧰', write: SERVICE.concat('store'),
+    display: "{t}.swo_no",
+    search: ['swo_no', 'hospital', 'location', 'order_from', 'additional_details'],
+    list: ['swo_no', 'date', 'hospital', 'location', 'order_from', 'received_by', 'status'],
+    statusField: 'status', print: 'swo',
+    fields: [
+      { key: 'swo_no', label: 'S.W.O. No', type: 'text', readonly: true, hint: 'Auto: SW/001/2026-27' },
+      { key: 'date', label: 'Order Date', type: 'date', default: 'today', required: true },
+      { key: 'hospital', label: 'Client Name', type: 'text', required: true },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'location', label: 'Work Location', type: 'text' },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets' },
+      { key: 'amc_id', label: 'AMC / Warranty', type: 'ref', ref: 'amc_contracts' },
+      { key: 'order_from', label: 'Order Received From', type: 'text', hint: 'e.g. Bio-medical, engineer' },
+      { key: 'received_by', label: 'Order Received By', type: 'person', default: 'me' },
+      { key: 'lines', label: 'Parts & Material', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
+        { key: 'description', label: 'Parts & Material Description', type: 'text', width: 300 }, { key: 'make', label: 'Make & Model', type: 'text', width: 140 },
+        { key: 'qty', label: 'Qty', type: 'number', width: 70 }, { key: 'uom', label: 'UOM', type: 'text', width: 60 }, { key: 'remark', label: 'Remark', type: 'text', width: 160 }] },
+      { key: 'old_material_status', label: 'Old Material Status', type: 'textarea', span: 2 },
+      { key: 'additional_details', label: 'Additional Details', type: 'textarea', span: 2, hint: 'e.g. received PO, waiting for advance; system in warranty' },
+      { key: 'dispatch_through', label: 'Material Dispatch Through', type: 'select', options: ['', 'By Courier', 'By Hand', 'Transport', 'Engineer carrying'] },
+      { key: 'docket', label: 'Docket Details', type: 'text' },
+      { key: 'authorized_by', label: 'Work Authorized By', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Sent to Store', 'Dispatched', 'Completed', 'Cancelled'], default: 'Draft' },
+      { key: 'mr_id', label: 'Material Request', type: 'ref', ref: 'material_requests', readonly: true },
+    ],
+  },
+  // Service report of a visit: call type, system, problem / work done, the 24-step checklist, testing parameters,
+  // air flow & damper readings and the customer's feedback. Completing it closes the complaint / ticks the AMC visit.
+  service_reports: {
+    label: 'Service Reports', singular: 'Service Report', group: 'Service', icon: '📋', write: SERVICE,
+    display: "{t}.report_no || ' ' || COALESCE({t}.hospital, '')",
+    search: ['report_no', 'hospital', 'attended_by', 'problem', 'work_done'],
+    list: ['report_no', 'date', 'hospital', 'call_type', 'attended_by', 'ticket_id', 'amc_id', 'status'],
+    statusField: 'status', print: 'servicereport',
+    fields: [
+      { key: 'report_no', label: 'Report No', type: 'text', readonly: true, hint: 'Auto: SR-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'time_in', label: 'Time', type: 'text' },
+      { key: 'hospital', label: 'Hospital Name', type: 'text', required: true },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'call_type', label: 'Status of Call', type: 'select', options: ['AMC Service Visit', 'Chargeable Basis', 'Break Down Call', 'Warranty'], default: 'Break Down Call' },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets' },
+      { key: 'amc_id', label: 'AMC / Warranty', type: 'ref', ref: 'amc_contracts' },
+      { key: 'complaint_from', label: 'Complaint From', type: 'text' },
+      { key: 'contact_name', label: 'Mr. / Ms.', type: 'text' },
+      { key: 'mobile', label: 'Mobile No', type: 'tel' },
+      { key: 'email', label: 'Email Id', type: 'text' },
+      { key: 'ahu_capacity', label: 'AHU Capacity', type: 'text' },
+      { key: 'ac_tr', label: 'AC (TR)', type: 'text' },
+      { key: 'odu_count', label: 'No of ODU', type: 'text' },
+      { key: 'plc_sr', label: 'PLC Sr No', type: 'text' },
+      { key: 'gsm_sr', label: 'GSM Model Sr No', type: 'text' },
+      { key: 'problem', label: 'Problem Observation', type: 'textarea', span: 2 },
+      { key: 'work_done', label: 'Work Done / Resolving Issue', type: 'textarea', span: 2 },
+      { key: 'end_date', label: 'End of Service Date', type: 'date' },
+      { key: 'end_time', label: 'End Time', type: 'text' },
+      { key: 'attended_by', label: 'Call Attended By', type: 'text' },
+      { key: 'checklist', label: 'Annexure I – Service Protocol Check List', type: 'lines', span: 2, amounts: false, schedule: true, default: [{"step":"Checking & cleaning of AHU filters – pre filter with water, fine filter & fresh air filter by blower","done":""},{"step":"Checking & cleaning of ESP filter with cotton","done":""},{"step":"Checking of all electrical wiring – motor, heater, UV & ESP","done":""},{"step":"Checking & cleaning of AC coil","done":""},{"step":"Cleaning of AC coil drain tray & piping by water at full pressure","done":""},{"step":"Checking motor electrical connections, belt alignment, heater connections & current, UV on/off, ESP connections","done":""},{"step":"Cleaning of AHU inside area by water & cloth","done":""},{"step":"Cleaning of AHU outside body by water","done":""},{"step":"Checking CFM of return, supply, fresh & bypass air and damper opening","done":""},{"step":"Checking de-fumigation fan electrical connection & switches","done":""},{"step":"Checking PLC based AHU control panel wiring & cleaning of panel","done":""},{"step":"Checking AC outdoor fan, compressor, wiring, suction & liquid line pressure, LP/HP connection","done":""},{"step":"Cleaning of outdoor unit return grill (back side) by water","done":""},{"step":"Cleaning inside OT – all return air grills; checking UV tube light assembly","done":""},{"step":"Checking surgeon control panel & outside panel – electrical wiring connections","done":""},{"step":"Checking pendant alignment & electrical connections","done":""},{"step":"Checking OT door accessories & their alignment","done":""},{"step":"Checking all panelling silicon joints","done":""},{"step":"Checking plenum tube lights & 2×2 lights","done":""},{"step":"Checking setting of temperature & humidity","done":""},{"step":"Checking HEPA pressure & room pressure meter","done":""},{"step":"Checking electrical connections of X-ray viewer & switches","done":""},{"step":"Checking pass box UV light & door lock","done":""},{"step":"Checking supply air & return air CFM","done":""}],
+        columns: [{ key: 'step', label: 'Service protocol step', type: 'text', width: 560 }, { key: 'done', label: 'Yes / No', type: 'select', options: ['', 'Yes', 'No', 'N/A'], width: 90 }] },
+      { key: 'ot_no', label: 'OT No (testing)', type: 'text' },
+      { key: 'vfd_hz', label: 'VFD Freq (Hz)', type: 'text' },
+      { key: 'hepa_pa', label: 'HEPA Pressure (Pa)', type: 'text' },
+      { key: 'positive_pa', label: 'Positive Pressure (Pa)', type: 'text' },
+      { key: 'ambient_c', label: 'Ambient Temp (°C)', type: 'text' },
+      { key: 'readings', label: 'Testing Parameters', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        {"key":"timing","label":"Timing","type":"text","width":62}, {"key":"ot_temp","label":"OT °C","type":"text","width":62}, {"key":"rh","label":"RH %","type":"text","width":62}, {"key":"comp1","label":"Comp AC1 A","type":"text","width":62}, {"key":"comp2","label":"Comp AC2 A","type":"text","width":62}, {"key":"blower","label":"Blower A","type":"text","width":62}, {"key":"heater_r","label":"Heater R","type":"text","width":62}, {"key":"heater_y","label":"Heater Y","type":"text","width":62}, {"key":"heater_b","label":"Heater B","type":"text","width":62}, {"key":"coil","label":"Coil °C","type":"text","width":62}, {"key":"suction","label":"Suction PSI","type":"text","width":62}, {"key":"discharge","label":"Discharge PSI","type":"text","width":62}, {"key":"remark","label":"Remark","type":"text","width":140}] },
+      { key: 'airflow', label: 'Air Flow & Damper Opening (CFM / velocity m/s)', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        {"key":"ot","label":"OT","type":"text","width":62}, {"key":"r1","label":"Return R1","type":"text","width":62}, {"key":"r2","label":"R2","type":"text","width":62}, {"key":"r3","label":"R3","type":"text","width":62}, {"key":"r4","label":"R4","type":"text","width":62}, {"key":"h1","label":"Supply HEPA 1","type":"text","width":62}, {"key":"h2","label":"HEPA 2","type":"text","width":62}, {"key":"h3","label":"HEPA 3","type":"text","width":62}, {"key":"h4","label":"HEPA 4","type":"text","width":62}, {"key":"h5","label":"HEPA 5","type":"text","width":62}, {"key":"h6","label":"HEPA 6","type":"text","width":62}, {"key":"return_open","label":"Return open %","type":"text","width":62}, {"key":"fresh_open","label":"Fresh open %","type":"text","width":62}, {"key":"bypass_open","label":"Bypass open %","type":"text","width":62}] },
+      { key: 'fb_courtesy', label: 'Courtesy & professionalism of our staff', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
+      { key: 'fb_information', label: 'Information provided by our staff', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
+      { key: 'fb_wait', label: 'Wait time for service', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
+      { key: 'fb_overall', label: 'Overall service provided', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
+      { key: 'fb_resolution', label: 'Resolution of your concern', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
+      { key: 'additional_feedback', label: 'Additional Feedback / Information', type: 'textarea', span: 2 },
+      { key: 'customer_rep', label: 'Customer / Representative (name)', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Completed'], default: 'Draft' },
+    ],
+  },
+  // Root cause analysis of a complaint (format WIESPL RCA template).
+  rca_reports: {
+    label: 'Root Cause Analysis (RCA)', singular: 'RCA', group: 'Service', icon: '🔍', write: SERVICE,
+    display: "{t}.rca_no || ' ' || COALESCE({t}.hospital, '')",
+    search: ['rca_no', 'hospital', 'complaint_details', 'root_cause'],
+    list: ['rca_no', 'date', 'hospital', 'complaint_date', 'complaint_details', 'status'],
+    statusField: 'status', print: 'rca',
+    fields: [
+      { key: 'rca_no', label: 'RCA No', type: 'text', readonly: true, hint: 'Auto: RCA-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets' },
+      { key: 'hospital', label: 'Hospital Name', type: 'text', required: true },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'contact_person', label: 'Contact Person', type: 'text' },
+      { key: 'email', label: 'Email', type: 'text' },
+      { key: 'phone', label: 'Ph. No.', type: 'tel' },
+      { key: 'complaint_date', label: 'Date of Complaint', type: 'date' },
+      { key: 'complaint_details', label: 'Complaint Details', type: 'textarea', span: 2 },
+      { key: 'action_date', label: 'Date of Action Taken', type: 'date' },
+      { key: 'action_by', label: 'Action Taken By', type: 'text' },
+      { key: 'observation', label: 'Observation before resolving the issue', type: 'textarea', span: 2 },
+      { key: 'team', label: 'Investigative Team', type: 'text', span: 2 },
+      { key: 'findings', label: 'Findings', type: 'textarea', span: 2 },
+      { key: 'root_cause', label: 'Identification of Root Cause', type: 'textarea', span: 2 },
+      { key: 'corrective_action', label: 'Corrective Action', type: 'textarea', span: 2 },
+      { key: 'preventive_action', label: 'Preventive Action (so it does not happen again)', type: 'textarea', span: 2 },
+      { key: 'authorized', label: 'Authorized Persons – Name & Designation', type: 'textarea', span: 2 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Sent to Client', 'Accepted by Client'], default: 'Draft' },
+    ],
+  },
+  // Costing sheet: the material (with its cost), labour / visits and other costs; selling = cost + the company's % +
+  // transport to the site. Sales sheets add their lines to a quotation; service sheets print as a service quotation
+  // and make the proforma invoice. Customers only ever see the selling prices.
+  costing_sheets: {
+    label: 'Costing Sheets', singular: 'Costing Sheet', group: 'CRM', icon: '🧮', write: ['admin', 'manager', 'sales', 'service'],
+    display: "{t}.cs_no || ' · ' || COALESCE({t}.title, '')",
+    search: ['cs_no', 'title', 'hospital', 'site'],
+    list: ['cs_no', 'date', 'kind', 'hospital', 'title', 'cost_total', 'margin_pct', 'transport', 'selling_total', 'status'],
+    statusField: 'status', print: 'costing',
+    fields: [
+      { key: 'cs_no', label: 'Costing No', type: 'text', readonly: true, hint: 'Auto: CS-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'Costing For', type: 'select', options: ['Sales', 'Service'], default: 'Sales' },
+      { key: 'title', label: 'What is quoted', type: 'text', required: true, span: 2 },
+      { key: 'customer_id', label: 'Customer (CRM)', type: 'ref', ref: 'customers' },
+      { key: 'hospital', label: 'Hospital / Client', type: 'text' },
+      { key: 'site', label: 'Site (for transport)', type: 'text' },
+      { key: 'enquiry_id', label: 'Enquiry', type: 'ref', ref: 'enquiries' },
+      { key: 'quotation_id', label: 'Quotation', type: 'ref', ref: 'quotations', readonly: true },
+      { key: 'ticket_id', label: 'Complaint (service)', type: 'ref', ref: 'service_tickets' },
+      { key: 'amc_id', label: 'AMC / Warranty (service)', type: 'ref', ref: 'amc_contracts' },
+      { key: 'lines', label: 'Material (cost)', type: 'lines', span: 2, itemRef: true, amounts: false, costKey: 'cost', hint: 'Pick the store item: its last price comes as the cost; change it if needed', columns: [
+        { key: 'description', label: 'Material', type: 'text', width: 260 }, { key: 'hsn', label: 'HSN / SAC', type: 'text', width: 80 },
+        { key: 'qty', label: 'Qty', type: 'number', width: 70 }, { key: 'uom', label: 'UOM', type: 'text', width: 60 }, { key: 'cost', label: 'Unit Cost ₹', type: 'money', width: 110 }, { key: 'remark', label: 'Remark', type: 'text', width: 140 }] },
+      { key: 'labour', label: 'Labour / Installation Cost (₹)', type: 'money', hint: 'Sales: installation; service: leave 0 and use the visit days below' },
+      { key: 'visit_days', label: 'Engineer Visit (man-days)', type: 'number' },
+      { key: 'day_rate', label: 'Cost per Man-day (₹)', type: 'money' },
+      { key: 'travel', label: 'Travel / Lodging Cost (₹)', type: 'money' },
+      { key: 'other_cost', label: 'Other Cost (₹)', type: 'money' },
+      { key: 'margin_pct', label: 'Company % (added on cost)', type: 'number', hint: 'Blank = the default in Settings → Costing (sales / service)' },
+      { key: 'transport', label: 'Transport to Site (₹)', type: 'money', hint: 'Added to the selling price at cost' },
+      { key: 'gst_rate', label: 'GST %', type: 'number', default: 18 },
+      { key: 'material_cost', label: 'Material Cost (₹)', type: 'money', readonly: true },
+      { key: 'cost_total', label: 'Total Cost (₹)', type: 'money', readonly: true },
+      { key: 'margin_amount', label: 'Company Margin (₹)', type: 'money', readonly: true },
+      { key: 'selling_total', label: 'Selling Price before GST (₹)', type: 'money', readonly: true, hint: 'Cost + company % + transport' },
+      { key: 'gst_amount', label: 'GST (₹)', type: 'money', readonly: true },
+      { key: 'grand_total', label: 'Total incl. GST (₹)', type: 'money', readonly: true },
+      { key: 'validity', label: 'Validity', type: 'text', default: '30 days' },
+      { key: 'terms', label: 'Terms (printed)', type: 'textarea', span: 2 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Quoted', 'Won', 'Lost'], default: 'Draft' },
+      { key: 'invoice_id', label: 'Proforma Invoice', type: 'ref', ref: 'invoices', readonly: true },
     ],
   },
 
@@ -836,7 +1053,8 @@ export const ENTITIES = {
         { key: 'qty', label: 'Qty', type: 'number', width: 80 },
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'remark', label: 'Remark', type: 'text', width: 160 },
-        { key: 'project_id', label: 'Site / Project', type: 'ref', ref: 'projects', width: 190, blank: '(as above)' },
+        { key: 'site', label: 'Site / Hospital', type: 'text', width: 170 },
+        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)' },
         { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       { key: 'approved_by', label: 'Approved By (Purchase Head)', type: 'text', readonly: true },
@@ -878,7 +1096,8 @@ export const ENTITIES = {
         { key: 'uom', label: 'UOM', type: 'text', width: 64 },
         { key: 'rate', label: 'Rate', type: 'money', width: 100 },
         { key: 'gst', label: 'GST %', type: 'number', width: 60 },
-        { key: 'project_id', label: 'Site / Project', type: 'ref', ref: 'projects', width: 190, blank: '(as above)' },
+        { key: 'site', label: 'Site / Hospital', type: 'text', width: 150 },
+        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)' },
         { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       // Charges are part of the taxable value (before GST), each shown on the PO.
@@ -1058,7 +1277,7 @@ export const ENTITIES = {
       { key: 'gst_rate', label: 'GST %', type: 'number', default: 18 },
       { key: 'hsn', label: 'HSN Code', type: 'text', hint: 'Optional; pre-filled on POs' },
       { key: 'reorder_level', label: 'Minimum Stock Level', type: 'number', default: 0 },
-      { key: 'lead_days', label: 'Lead Time (days)', type: 'number', hint: 'Days from requisition to material in store; BOQ order-by date = required-by − lead time (blank = 7)' },
+      { key: 'lead_days', label: 'Lead Time (days)', type: 'number', hint: 'Worked out by itself from PO date to GRN date (average of the last 5 receipts against a PO); BOQ order-by date = required-by − lead time (blank = 7)' },
       { key: 'preferred_vendor_id', label: 'Preferred Vendor', type: 'ref', ref: 'vendors' },
       { key: 'location', label: 'Store Location / Rack', type: 'text' },
       { key: 'description', label: 'Specification', type: 'textarea', span: 2 },
@@ -1066,6 +1285,74 @@ export const ENTITIES = {
       { key: 'stock', label: 'Current Stock', type: 'number', computed: STOCK_SQL },
       { key: 'stock_value', label: 'Stock Value (₹)', type: 'money', computed: `ROUND(${STOCK_SQL} * COALESCE({t}.rate, 0), 2)` },
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+    ],
+  },
+  // Anyone who needs material asks the store. The store checks the stock and splits each request: what is in stock goes
+  // out on a draft issue slip / MTN (to the production stock for production), what is short goes to the Purchase Head
+  // as a purchase requisition (with the site on every line).
+  material_requests: {
+    label: 'Material Requests (to Store)', singular: 'Material Request', group: 'Store', icon: '🙋', write: ALL,
+    display: "{t}.mr_no",
+    search: ['mr_no', 'requested_by', 'department', 'site', 'remarks'],
+    list: ['mr_no', 'date', 'requested_by', 'department', 'purpose', 'site', 'needed_by', 'status'],
+    statusField: 'status', print: 'mr',
+    fields: [
+      { key: 'mr_no', label: 'MR No', type: 'text', readonly: true, hint: 'Auto: MR-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'requested_by', label: 'Requested By', type: 'person', default: 'me' },
+      { key: 'department', label: 'Department', type: 'select', options: ['Production', 'Site / Installation', 'Service', 'Electrical (BGM)', 'R&D', 'HVAC', 'Office'], default: 'Production' },
+      { key: 'purpose', label: 'Material For', type: 'select', options: ['Production (to production stock)', 'Site / project', 'Service work', 'Office / general'], default: 'Production (to production stock)' },
+      { key: 'site', label: 'Site / Hospital', type: 'text', hint: 'Where it is used; a line can have its own site' },
+      { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects' },
+      { key: 'swo_id', label: 'Service Work Order', type: 'ref', ref: 'service_work_orders', readonly: true },
+      { key: 'needed_by', label: 'Needed By', type: 'date' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed', 'Rejected'], default: 'Draft', readonly: true },
+      { key: 'lines', label: 'Materials', type: 'lines', span: 2, itemRef: true, amounts: false, hint: 'Pick the store item (or type the material); the store decides what is issued and what is purchased', columns: [
+        { key: 'description', label: 'Material', type: 'text', width: 240 },
+        { key: 'spec', label: 'Specification', type: 'text', width: 200 },
+        { key: 'qty', label: 'Qty', type: 'number', width: 80 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+        { key: 'site', label: 'Site / Hospital', type: 'text', width: 150 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 140 },
+        { key: 'issued', label: 'Issued', type: 'number', width: 70 },
+        { key: 'to_purchase', label: 'To Purchase', type: 'number', width: 80 },
+      ] },
+      { key: 'store_note', label: 'Store Decision', type: 'textarea', span: 2, readonly: true },
+      { key: 'processed_by', label: 'Processed By (Store)', type: 'text', readonly: true },
+      { key: 'requisition_id', label: 'Purchase Requisition', type: 'ref', ref: 'requisitions', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Production: raw material reaches the production stock on an MTN from the store; each entry records the finished
+  // goods made (into store stock when posted) and the raw material used from the production stock.
+  production_entries: {
+    label: 'Production (Finished Goods)', singular: 'Production Entry', group: 'Store', icon: '🏭', write: ['admin', 'manager', 'production', 'store'],
+    display: "{t}.entry_no",
+    search: ['entry_no', 'for_site', 'made_by', 'remarks'],
+    list: ['entry_no', 'date', 'shift', 'fg_item_id', 'qty', 'uom', 'for_site', 'made_by', 'unit_cost', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'entry_no', label: 'Production No', type: 'text', readonly: true, hint: 'Auto: PRD-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'shift', label: 'Shift', type: 'select', options: ['General', 'Day', 'Night'], default: 'General' },
+      { key: 'fg_item_id', label: 'Finished Good Made', type: 'ref', ref: 'items', required: true },
+      { key: 'qty', label: 'Quantity Made', type: 'number', required: true },
+      { key: 'uom', label: 'UOM', type: 'text', hint: 'From the item if blank' },
+      { key: 'for_site', label: 'For Site / Hospital', type: 'text' },
+      { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects' },
+      { key: 'bom_id', label: 'Against BOQ', type: 'ref', ref: 'boms' },
+      { key: 'made_by', label: 'Made By / Supervisor', type: 'person', default: 'me' },
+      { key: 'lines', label: 'Raw Material Used (from production stock)', type: 'lines', span: 2, itemRef: true, amounts: false,
+        hint: 'Blank = the same material per piece as the last entry of this finished good', columns: [
+          { key: 'description', label: 'Material', type: 'text', width: 260 },
+          { key: 'qty', label: 'Qty Used', type: 'number', width: 90 },
+          { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+          { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+        ] },
+      { key: 'unit_cost', label: 'Material Cost per Piece (₹)', type: 'money', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Posted'], default: 'Draft', readonly: true },
+      { key: 'posted_by', label: 'Posted By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
   // Outward (issue slip / dispatch challan) and transfers are prepared as drafts: nothing leaves the stock until someone
@@ -1077,7 +1364,8 @@ export const ENTITIES = {
     list: ['date', 'doc_kind', 'project_id', 'issued_to', 'to_location', 'item_count', 'prepared_by', 'status', 'doc_no'],
     statusField: 'status',
     fields: [
-      { key: 'doc_kind', label: 'Document', type: 'select', options: ['Issue slip', 'Dispatch challan', 'Transfer slip', 'Transfer with challan'], readonly: true },
+      { key: 'doc_kind', label: 'Document', type: 'select', options: ['Issue slip', 'Dispatch challan', 'Material Transfer Note (MTN)', 'MTN with delivery challan', 'Transfer slip', 'Transfer with challan'], readonly: true },
+      { key: 'mr_id', label: 'Material Request', type: 'ref', ref: 'material_requests', readonly: true },
       { key: 'type', label: 'Movement', type: 'select', options: ['OUTWARD', 'TRANSFER'], readonly: true },
       { key: 'date', label: 'Date', type: 'date', readonly: true },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true },
@@ -1131,7 +1419,7 @@ export const ENTITIES = {
   },
 };
 
-export const GROUPS = ['CRM', 'Approvals', 'Sales & Projects', 'Purchase', 'Store'];
+export const GROUPS = ['CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store'];
 
 export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));

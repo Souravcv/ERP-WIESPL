@@ -158,9 +158,78 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
 async function siteLabels(lines) {
   lines = lines || []; // a document saved without lines has lines: null
   const ids = new Set(lines.filter(l => l.project_id && Number(l.qty) > 0).map(l => Number(l.project_id)));
-  if (ids.size < 2) return;
+  if (!ids.size) return;
   const names = new Map((await api('/projects/options').catch(() => [])).map(o => [Number(o.id), o.label]));
-  for (const l of lines) if (l.project_id) l.site = names.get(Number(l.project_id)) || '';
+  for (const l of lines) if (!l.site && l.project_id) l.site_label = names.get(Number(l.project_id)) || '';
+}
+
+
+// ---------------------------------------------------------------- service documents
+const grid = info => h('table', h('tbody', info.filter(x => x && x[1] != null && x[1] !== '').reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '17%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c))));
+const box = (title, text) => (text ? [h('div', { style: { fontWeight: 700, marginTop: '8px' } }, title), h('div.spec', { style: { border: '1px solid #999', padding: '6px', minHeight: '40px' } }, text)] : null);
+const signRow = (...who) => h('table', { style: { marginTop: '22px' } }, h('tbody', h('tr', who.map(w => h('th', { style: { width: `${100 / who.length}%` } }, w[0]))),
+  h('tr', who.map(w => h('td', { style: { height: '56px', verticalAlign: 'bottom' } }, w[1] || '')))));
+
+function swoDoc(w, s) {
+  const lines = (w.lines || []).filter(l => l.description || l.qty);
+  return h('div.doc', page(companyHead(s, 'SERVICE WORK ORDER (SERVICE REQUISITION)'),
+    grid([['Client Name', w.hospital], ['S.W.O. No', w.swo_no], ['Work Location', w.location], ['Order Date', fmtDate(w.date)], ['Order Received From', w.order_from], ['Order Received By', w.received_by],
+      ['Complaint', w.ticket_id_label], ['Status', w.status]]),
+    h('table', { style: { marginTop: '8px' } }, h('thead', h('tr', ['Sr', 'Parts & Material Description', 'Make & Model', 'Qty', 'Remark'].map(x => h('th', x)))),
+      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td', l.make || ''), h('td.num', `${l.qty ?? ''} ${l.uom || ''}`), h('td', l.remark || ''))))),
+    box('Old Material Status', w.old_material_status), box('Additional Details', w.additional_details),
+    grid([['Material Dispatch Through', w.dispatch_through], ['Docket Details', w.docket], ['Material Request', w.mr_id_label]]),
+    signRow(['Prepared By', w.received_by], ['Work Authorized By', w.authorized_by], ['Work Complete – Signature', ''])));
+}
+
+function serviceReportDoc(r, s) {
+  const tick = (label, on) => h('span', { style: { marginRight: '14px' } }, on ? '☑ ' : '☐ ', label);
+  const fb = [['The level of courtesy & professionalism of our staff', r.fb_courtesy], ['The information provided by our staff', r.fb_information], ['The wait time for service', r.fb_wait], ['Overall service provided', r.fb_overall], ['Resolution of your concern', r.fb_resolution]];
+  const RATES = ['Very Satisfied', 'Satisfied', 'Neutral', 'Dissatisfied', 'Very Dissatisfied'];
+  const check = (r.checklist || []).filter(c => c.step);
+  const read = (r.readings || []).filter(x => Object.values(x).some(v => v !== '' && v != null));
+  const air = (r.airflow || []).filter(x => Object.values(x).some(v => v !== '' && v != null));
+  const RC = ['timing', 'ot_temp', 'rh', 'comp1', 'comp2', 'blower', 'heater_r', 'heater_y', 'heater_b', 'coil', 'suction', 'discharge', 'remark'];
+  const AC = ['ot', 'r1', 'r2', 'r3', 'r4', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'return_open', 'fresh_open', 'bypass_open'];
+  return h('div.doc',
+    page(companyHead(s, 'SERVICE REPORT'),
+      grid([['Report No', r.report_no], ['Date / Time', [fmtDate(r.date), r.time_in].filter(Boolean).join(' ')], ['Hospital Name', r.hospital], ['Complaint From', r.complaint_from],
+        ['Mr. / Ms.', r.contact_name], ['Mobile No', r.mobile], ['Email Id', r.email], ['Complaint No', r.ticket_id_label]]),
+      h('div', { style: { margin: '6px 0' } }, h('b', 'Status of call: '), ['AMC Service Visit', 'Chargeable Basis', 'Break Down Call', 'Warranty'].map(x => tick(x, r.call_type === x))),
+      grid([['AHU Capacity', r.ahu_capacity], ['AC (TR)', r.ac_tr], ['No of ODU', r.odu_count], ['PLC Sr No', r.plc_sr], ['GSM Model Sr No', r.gsm_sr]]),
+      box('Problem Observation', r.problem), box('Work done during service / Resolving issue', r.work_done),
+      grid([['End of Service Date', fmtDate(r.end_date)], ['Time', r.end_time], ['Call Attended By', r.attended_by]]),
+      h('div', { style: { fontWeight: 700, marginTop: '8px' } }, 'Customer Feedback'),
+      h('table', h('thead', h('tr', h('th', 'Particulars'), RATES.map(x => h('th', { style: { fontSize: '10px' } }, x)))),
+        h('tbody', fb.map(([q, v]) => h('tr', h('td', q), RATES.map(x => h('td', { style: { textAlign: 'center' } }, v === x ? '●' : '○')))))),
+      box('Additional Feedback / Information', r.additional_feedback),
+      signRow(['Customer / Representative – Name, Seal & Signature', r.customer_rep], ['Engineer / Technician – Name & Signature', r.attended_by])),
+    check.length ? page(companyHead(s, 'ANNEXURE I : CHECK LIST'),
+      h('table', h('thead', h('tr', ['Sr. No', 'Service Protocol Steps', 'Yes / No'].map(x => h('th', x)))), h('tbody', check.map((c, i) => h('tr', h('td', i + 1), h('td', c.step), h('td', { style: { textAlign: 'center' } }, c.done || '')))))) : null,
+    read.length || air.length ? page(companyHead(s, 'TESTING PARAMETERS / AIR FLOW AND DAMPER OPENING STATUS'),
+      grid([['Client Name', r.hospital], ['OT No', r.ot_no], ['VFD Freq (Hz)', r.vfd_hz], ['HEPA Pressure (Pa)', r.hepa_pa], ['Positive Pressure (Pa)', r.positive_pa], ['Ambient Temp (°C)', r.ambient_c], ['Date', fmtDate(r.date)]]),
+      read.length ? h('table', { style: { marginTop: '8px', fontSize: '10px' } }, h('thead', h('tr', ['Timing', 'OT °C', 'RH %', 'Comp AC1 A', 'Comp AC2 A', 'Blower A', 'Heater R', 'Heater Y', 'Heater B', 'Coil °C', 'Suction PSI', 'Discharge PSI', 'Remark'].map(x => h('th', x)))),
+        h('tbody', read.map(x => h('tr', RC.map(k => h('td', x[k] ?? '')))))) : null,
+      air.length ? h('table', { style: { marginTop: '10px', fontSize: '10px' } }, h('thead', h('tr', ['OT', 'Return R1', 'R2', 'R3', 'R4', 'Supply HEPA 1', 'HEPA 2', 'HEPA 3', 'HEPA 4', 'HEPA 5', 'HEPA 6', 'Return open %', 'Fresh open %', 'Bypass open %'].map(x => h('th', x)))),
+        h('tbody', air.map(x => h('tr', AC.map(k => h('td', x[k] ?? '')))))) : null,
+      signRow(['Prepared By – Designation – Signature', r.attended_by])) : null);
+}
+
+function rcaDoc(r, s) {
+  const row = (k, v) => h('tr', h('th', { style: { width: '28%', textAlign: 'left' } }, k), h('td', { style: { whiteSpace: 'pre-wrap' } }, v || ''));
+  return h('div.doc', page(companyHead(s, 'ROOT CAUSE ANALYSIS (RCA)'),
+    h('table', h('tbody', row('RCA No / Date', `${r.rca_no || ''}   ${fmtDate(r.date)}`), row('Hospital Name', r.hospital), row('Contact Person', r.contact_person), row('Email', r.email), row('Ph. No.', r.phone),
+      row('Date of Complaint', fmtDate(r.complaint_date)), row('Complaint Details', r.complaint_details), row('Date of Action Taken', [fmtDate(r.action_date), r.action_by].filter(Boolean).join(' – ')),
+      row('Observation before resolving the issue', r.observation), row('Investigative Team', r.team), row('Findings', r.findings), row('Identification of Root Cause', r.root_cause),
+      row('Corrective Action', r.corrective_action), row('Preventive Action', r.preventive_action), row('Sponsor Acceptance – Authorized Persons (Name & Designation)', r.authorized))),
+    signRow(['Signature', ''], ['Date', fmtDate(r.date)])));
+}
+
+// Costing sheet printed for the customer: selling prices only (cost + company % + transport), GST, terms.
+function costingDoc(cs, sell, c, s) {
+  const items = sell.map(l => ({ description: l.description, hsn: l.hsn, qty: l.qty, uom: l.uom, rate: l.rate, gst: cs.gst_rate ?? 18 }));
+  return taxDoc({ title: cs.kind === 'Service' ? 'SERVICE QUOTATION' : 'QUOTATION', no: cs.cs_no, date: cs.date, party: c || { name: cs.hospital || '' }, partyLabel: 'To:',
+    refs: [['Subject', cs.title], ['Site', cs.site], ['Validity', cs.validity]], items, place: c?.state || 'Maharashtra', notes: cs.terms || '', s });
 }
 
 // ---------------------------------------------------------------- WIESPL purchase order (format WIESPL/PUR./02/R0)
@@ -212,7 +281,7 @@ function poDoc(po, v, s) {
       h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
       h('tbody', lines.map(l => h('tr',
         td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
-        td([h('div.spec', l.spec || ''), l.site ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `Site: ${l.site}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
+        td([h('div.spec', l.spec || ''), l.site || l.site_label ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `Site: ${l.site || l.site_label}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
         td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
         td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
       h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
@@ -245,8 +314,23 @@ function poDoc(po, v, s) {
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
 }
 
+function materialRequestDoc(r, s) {
+  const lines = (r.lines || []).filter(l => l.description || l.qty);
+  const info = [['MR No', r.mr_no], ['Date', fmtDate(r.date)], ['Requested by', r.requested_by], ['Department', r.department], ['For', r.purpose], ['Site', r.site || r.project_id_label], ['Needed by', fmtDate(r.needed_by)], ['Status', r.status]].filter(x => x[1]);
+  return h('div.doc', page(companyHead(s, 'MATERIAL REQUEST (TO STORE)'),
+    h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
+    h('table', { style: { marginTop: '8px' } }, h('thead', h('tr', ['Sr', 'Material', 'Specification', 'Qty', 'UOM', 'Site', 'Issued', 'To purchase', 'Remark'].map(x => h('th', x)))),
+      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', l.site || r.site || ''),
+        h('td.num', l.issued || ''), h('td.num', l.to_purchase || ''), h('td', l.remark || ''))))),
+    r.store_note ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Store decision: '), r.store_note) : null,
+    h('table', { style: { marginTop: '24px' } }, h('tbody', h('tr', ['Requested by', 'Store', 'Received by'].map(x => h('th', { style: { width: '33%' } }, x))),
+      h('tr', h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td', { style: { verticalAlign: 'bottom' } }, plainSigner(r.processed_by || '')), h('td'))))));
+}
+
 function requisitionDoc(r, s) {
   const lines = (r.lines || []).filter(l => l.description || l.spec || l.qty);
+  const siteOf = l => l.site || l.site_label || '';
+  const showSite = lines.some(siteOf);
   const blanks = Math.max(0, 11 - lines.length);
   return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
     h('table', h('tbody',
@@ -254,9 +338,9 @@ function requisitionDoc(r, s) {
       h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontWeight: 700, color: '#1f4e9a' } }, s.company_name)),
       h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`, h('br'), `Works : ${s.works_address}`, h('br'), `Tel. : ${s.phone}`)),
       h('tr', h('td', { colspan: 2 }, h('b', 'Project Name :- '), r.project_name || r.project_id_label || ''), h('td', { colspan: 2 }, h('b', 'Req No - '), r.req_no), h('td', { colspan: 2 }, h('b', 'Date '), fmtDate(r.date))),
-      h('tr', ['Sr. No.', 'Material Description', 'Specification', 'Qty.', 'UOM', 'Remark'].map(x => h('th', x))),
-      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', [l.remark, l.site && `Site: ${l.site}`].filter(Boolean).join(' · ')))),
-      Array.from({ length: blanks }, () => h('tr', Array.from({ length: 6 }, () => h('td', { style: { height: '22px' } }, '')))),
+      h('tr', ['Sr. No.', 'Material Description', 'Specification', 'Qty.', 'UOM', showSite ? 'Site' : null, 'Remark'].filter(Boolean).map(x => h('th', x))),
+      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), showSite ? h('td', { style: { fontWeight: 600 } }, siteOf(l)) : null, h('td', l.remark || ''))),
+      Array.from({ length: blanks }, () => h('tr', Array.from({ length: showSite ? 7 : 6 }, () => h('td', { style: { height: '22px' } }, '')))),
       h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: 3 }, 'Sign of Purchase Head')),
       h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.approved_by ? sigImg(r.requested_by) : null, r.requested_by || ''), h('td', { style: { textAlign: 'center', verticalAlign: 'middle' } }, r.approved_by ? stampImg() : null),
         h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? [sigImg(r.approved_by), `${plainSigner(r.approved_by)} (${r.approved_at || ''})`] : r.status))))));
@@ -331,7 +415,7 @@ function challanDoc(c, project, s) {
     footer()));
 }
 
-const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
+const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE (MTN)', PRODUCED: 'PRODUCTION NOTE (FINISHED GOODS MADE)', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
 function stockSlipDoc(type, docNo, moves, s) {
   if (!['INWARD', 'OPENING'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s);
   const m0 = moves[0] || {};
@@ -417,6 +501,23 @@ export async function printView(root, kind, id) {
     const rows = bomRows(await api(`/bom_items?bom_id=${id}&limit=20000`));
     title = `${bom.bom_no} ${bom.client || ''}`;
     doc = bomDoc(bom, rows, s);
+  } else if (kind === 'swo') {
+    const w = await api(`/service_work_orders/${id}`);
+    title = w.swo_no; doc = swoDoc(w, s);
+  } else if (kind === 'servicereport') {
+    const r = await api(`/service_reports/${id}`);
+    title = `${r.report_no} ${r.hospital || ''}`; doc = serviceReportDoc(r, s);
+  } else if (kind === 'rca') {
+    const r = await api(`/rca_reports/${id}`);
+    title = `${r.rca_no} ${r.hospital || ''}`; doc = rcaDoc(r, s);
+  } else if (kind === 'costing') {
+    const cs = await api(`/costing_sheets/${id}`);
+    const [sell, c] = await Promise.all([api(`/costing_sheets/${id}/selling`), cs.customer_id ? api(`/customers/${cs.customer_id}`).catch(() => null) : null]);
+    title = `${cs.cs_no} ${cs.hospital || ''}`; doc = costingDoc(cs, sell, c, s);
+  } else if (kind === 'mr') {
+    const r = await api(`/material_requests/${id}`);
+    title = r.mr_no;
+    doc = materialRequestDoc(r, s);
   } else if (kind === 'requisition') {
     const r = await api(`/requisitions/${id}`);
     await siteLabels(r.lines);

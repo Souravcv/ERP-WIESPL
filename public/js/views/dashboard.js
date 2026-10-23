@@ -47,14 +47,21 @@ export async function dashboardView(root) {
   const role = state.user.role;
   const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store'],
     (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts'],
-    canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects']].filter(Boolean);
+    canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service']].filter(Boolean);
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
   let tab = sessionStorage.getItem('dash-tab');
   if (!views.some(v => v[0] === tab)) {
-    const pref = { accounts: 'accounts', store: 'store' }[role];
+    const pref = { accounts: 'accounts', store: 'store', service: 'service', engineer: 'service' }[role];
     tab = views.some(v => v[0] === pref) ? pref : views[0][0];
   }
   if (tab === 'crm') return crmDashboard(root, views);
+  if (tab === 'service') {
+    const sbox = h('div');
+    root.replaceChildren(tabsOf(views, 'service', root), sbox);
+    const { serviceView } = await import('./service.js');
+    await serviceView(sbox, { embedded: true });
+    return;
+  }
   if (tab === 'projects') {
     // Pick a project: its POs, approvals, received, bills, payments, requisitions, BOQs, store issues and sales.
     const pbox = h('div');

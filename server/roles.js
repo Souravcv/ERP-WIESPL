@@ -128,6 +128,23 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
+  // Store-led material requests, production and service (once): the store processes requests and posts production
+  // entries, new modules follow each profile's list (engineers / technical ask the store instead of raising requisitions).
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_visibility_v2'").get()) {
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      if (!ROLE_SEES[r.name]) continue;
+      const p = parse(r.perms);
+      const d = defaultPermissions(r.name);
+      p.modules ||= {};
+      for (const m of Object.keys(ENTITIES)) {
+        if (!ROLE_SEES[r.name].includes(m)) p.modules[m] = 'none';
+        else if (!p.modules[m] || p.modules[m] === 'none') p.modules[m] = d.modules[m];
+      }
+      if (r.name === 'store') p.functions = [...new Set([...(p.functions || []), 'production_post', 'notify_material_request'])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v2', '\"1\"')").run();
+  }
   // Work order → BOQ → design review → Final → store check: give the built-in roles the new functions once.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_boq_flow_v1'").get()) {
     const NEW = ['boq_review', 'boq_final', 'notify_store_check', 'notify_boq'];
