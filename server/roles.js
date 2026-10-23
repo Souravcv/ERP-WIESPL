@@ -128,6 +128,13 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
+  // Fresh start for POs and payables (once): the old imported POs are kept to look up but not counted.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'po_archive_v1'").get()) {
+    const old = "SELECT id FROM purchase_orders WHERE id <= 407 AND created_at <= '2026-10-23 23:59:59' AND status NOT IN ('Draft', 'Pending Approval')";
+    db.prepare(`UPDATE stock_moves SET po_id = NULL WHERE po_id IN (${old})`).run();
+    db.prepare(`UPDATE purchase_orders SET status = 'Archived (old)', approval_stage = NULL WHERE id IN (${old})`).run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('po_archive_v1', '\"1\"')").run();
+  }
   // Store-led material requests, production and service (once): the store processes requests and posts production
   // entries, new modules follow each profile's list (engineers / technical ask the store instead of raising requisitions).
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_visibility_v2'").get()) {

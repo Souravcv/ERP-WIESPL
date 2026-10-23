@@ -175,7 +175,7 @@ export function payables({ vendor_id, project_id } = {}) {
 export function vendorLedger(vendorId) {
   const v = getRow('vendors', vendorId);
   const ev = [];
-  for (const p of db.prepare("SELECT id, po_no, date, total, status FROM purchase_orders WHERE vendor_id = ? AND status NOT IN ('Draft', 'Rejected', 'Cancelled')").all(v.id))
+  for (const p of db.prepare("SELECT id, po_no, date, total, status FROM purchase_orders WHERE vendor_id = ? AND status NOT IN ('Draft', 'Rejected', 'Cancelled', 'Archived (old)')").all(v.id))
     ev.push({ date: p.date, kind: 'PO', ref: p.po_no, link: `#/view/purchase_orders/${p.id}`, ordered: p.total, note: p.status });
   for (const g of db.prepare(`SELECT m.date, m.doc_no, p.po_no, p.id pid, SUM(m.qty * COALESCE(m.rate, 0)) * (CASE WHEN p.subtotal > 0 THEN p.total / p.subtotal ELSE 1 END) v
     FROM stock_moves m JOIN purchase_orders p ON p.id = m.po_id WHERE m.type = 'INWARD' AND p.vendor_id = ? GROUP BY m.date, m.doc_no, p.id`).all(v.id))

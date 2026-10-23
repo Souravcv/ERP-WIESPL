@@ -93,7 +93,7 @@ function lookups() {
     vendorByGst: new Map(vendors.filter(v => v.gstin).map(v => [v.gstin.toUpperCase(), v.id])),
     vendorByName: new Map(vendors.map(v => [norm(v.name), v.id])),
     projectByNo: new Map(projects.flatMap(p => [[norm(p.project_no), p.id], [norm(p.code), p.id], [norm(p.name), p.id]]).filter(([k]) => k)),
-    poByNo: new Map(db.prepare('SELECT id, po_no FROM purchase_orders').all().map(p => [norm(p.po_no), p.id])),
+    poByNo: new Map(db.prepare("SELECT id, po_no FROM purchase_orders WHERE status <> 'Archived (old)'").all().map(p => [norm(p.po_no), p.id])),
     reqByNo: new Map(db.prepare('SELECT id, req_no FROM requisitions').all().map(p => [norm(p.req_no), p.id])),
   };
 }
@@ -661,7 +661,7 @@ export async function importPoFile(buffer, filename, user) {
 // Material received in the Smart Store workbook names its PO only as text ("453/2025-26"): link it to that PO, so
 // the PO, the project analysis and the 3-way check know what was received. Returns how many rows were linked.
 export function linkInwardPOs() {
-  const byNo = new Map(db.prepare('SELECT id, po_no FROM purchase_orders').all().map(p => [normPoNo(p.po_no), p.id]));
+  const byNo = new Map(db.prepare("SELECT id, po_no FROM purchase_orders WHERE status <> 'Archived (old)'").all().map(p => [normPoNo(p.po_no), p.id]));
   const upd = db.prepare('UPDATE stock_moves SET po_id = ? WHERE id = ?');
   let n = 0;
   for (const m of db.prepare("SELECT id, po_no FROM stock_moves WHERE type = 'INWARD' AND po_id IS NULL AND COALESCE(po_no, '') <> ''").all()) {

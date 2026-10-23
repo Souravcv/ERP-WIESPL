@@ -107,7 +107,7 @@ export async function listView(root, entity) {
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
   const q = h('input.grow', { placeholder: `Search ${ent.label.toLowerCase()}…`, type: 'search', value: params.get('q') || '' });
   const statusSel = ent.statusField
-    ? h('select', h('option', { value: '' }, 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
+    ? h('select', h('option', { value: '' }, ent.hiddenStatus ? `All (without “${ent.hiddenStatus}”)` : 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
     : null;
   if (statusSel) statusSel.value = params.get('status') || '';
   const hasDate = !!fm.date;
@@ -143,7 +143,9 @@ export async function listView(root, entity) {
   let timer;
   async function load() {
     try {
-      const rows = await api(`/${entity}?${query()}`);
+      let rows = await api(`/${entity}?${query()}`);
+      // e.g. old imported POs: only listed (and totalled) when that status is chosen
+      if (ent.hiddenStatus && !statusSel?.value) rows = rows.filter(r => r[ent.statusField] !== ent.hiddenStatus);
       for (const id of selected || []) if (!rows.some(r => r.id === id)) selected.delete(id);
       body.replaceChildren(table(entity, rows, { selected, onSelect: syncDel }));
       syncDel();

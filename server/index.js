@@ -398,11 +398,11 @@ api.get('/receipts-register', wrap(req => { arView(req); return recv.receiptsReg
 api.get('/projects/:id/analysis', wrap(req => {
   if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
   const project = getRow('projects', req.params.id);
-  const LIVE = ['Cancelled', 'Rejected'];
+  const LIVE = ['Cancelled', 'Rejected', 'Archived (old)'];
   // POs for several sites count with this project's share of their lines (by value).
   const shared = db.prepare(`SELECT DISTINCT p.id FROM purchase_orders p, json_each(p.lines) j
-    WHERE COALESCE(p.project_id, 0) <> ? AND json_extract(j.value, '$.project_id') = ?`).all(project.id, project.id).map(r => getRow('purchase_orders', r.id));
-  const pos = [...listRows('purchase_orders', { project_id: project.id, limit: 5000 }), ...shared].map(p => {
+    WHERE COALESCE(p.project_id, 0) <> ? AND p.status <> 'Archived (old)' AND json_extract(j.value, '$.project_id') = ?`).all(project.id, project.id).map(r => getRow('purchase_orders', r.id));
+  const pos = [...listRows('purchase_orders', { project_id: project.id, limit: 5000 }).filter(p => p.status !== 'Archived (old)'), ...shared].map(p => {
     // Received = material in (GRN) at the PO rate incl. GST; advance at risk = paid beyond that.
     const m = pay.poMoney(p.id);
     const val = l => (Number(l.qty) || 0) * (Number(l.rate) || 0);
@@ -691,7 +691,7 @@ api.delete('/files/:id', wrap(req => {
 // Documents locked once they enter approval; changes go through Revise / status actions.
 const LOCKED = {
   quotations: ['Pending Approval', 'Approved', 'Sent', 'Won', 'Lost', 'Superseded'],
-  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
+  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled', 'Archived (old)'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
   challans: ['Dispatched', 'Delivered', 'Cancelled'],
   // Once submitted, a payment / expense changes only through approve / reject / paid / reverse.

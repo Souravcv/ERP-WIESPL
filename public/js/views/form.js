@@ -6,7 +6,7 @@ import { newBoqDialog } from './dispatch.js';
 import { newBomDialog } from './bom.js';
 
 const LOCKED = {
-  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled'],
+  purchase_orders: ['Pending Approval', 'Approved', 'Sent', 'Partially Received', 'Received', 'Closed', 'Cancelled', 'Archived (old)'],
   requisitions: ['Submitted', 'Approved', 'Converted to PO', 'Closed'],
   challans: ['Dispatched', 'Delivered', 'Cancelled'],
   vendor_payments: ['Pending Approval', 'Approved', 'Paid', 'Reversed'],
@@ -632,6 +632,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'purchase_orders': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/po/${id}`, target: '_blank' }, '🖨 Print PO'));
+      if (st === 'Archived (old)') { A.push(h('span.muted', 'Old PO, kept to look up: not counted in payables, analysis or receipts')); break; }
       if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval'));
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
       if (can('stock_moves') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('a.btn.good', { href: `#/stock-entry?type=INWARD&po=${id}` }, '📦 Receive Goods (GRN)'));

@@ -176,7 +176,7 @@ export function stockSummary(q = {}) {
 export function poLines(q = {}) {
   const pos = db.prepare(`SELECT p.*, v.name vendor, COALESCE(NULLIF(pr.project_no,''), pr.code) || ' ' || pr.name project, bm.bom_no bom_no
     FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id LEFT JOIN projects pr ON pr.id = p.project_id LEFT JOIN boms bm ON bm.id = p.bom_id
-    WHERE p.status <> 'Cancelled' ORDER BY p.date DESC, p.id DESC`).all();
+    WHERE p.status NOT IN ('Cancelled', 'Archived (old)') ORDER BY p.date DESC, p.id DESC`).all();
   const s = String(q.q || '').toLowerCase().trim();
   const rows = [];
   for (const p of pos) {
@@ -281,7 +281,7 @@ export function accountsDashboard() {
   const t = today();
   const from = fyStart(fyOf(t));
   const pos = db.prepare(`SELECT p.id, p.po_no, p.date, p.total, p.status, p.approval_stage, p.payment_schedule, v.name vendor
-    FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id WHERE p.status NOT IN ('Cancelled', 'Rejected', 'Draft')`).all();
+    FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id WHERE p.status NOT IN ('Cancelled', 'Rejected', 'Draft', 'Archived (old)')`).all();
   const dues = [];
   for (const p of pos) {
     let sch = [];
