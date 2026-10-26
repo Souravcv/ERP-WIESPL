@@ -957,6 +957,14 @@ export async function recordView(root, entity, id) {
       locked ? h('span.muted', '🔒 locked') : null,
       h('div.actions',
         isNew ? [] : actionsFor(entity, r, () => recordView(root, entity, id), { save: writable ? save : null }),
+        // A new work location: fill its position from the phone standing at the site, then save.
+        isNew && entity === 'work_locations' && writable ? h('button.btn', { title: 'Stand at the centre of the site and press this', onclick: busy(async () => {
+          if (!window.isSecureContext || !navigator.geolocation) throw new Error('Location works only on the https address of the CRM (open it on the phone through the https link)');
+          const p = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(x => res(x.coords), e => rej(new Error(e.code === 1 ? 'Location is blocked: allow location for this site in the browser settings' : 'No GPS fix: step outside and try again')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }));
+          inputs.lat.el.value = p.latitude.toFixed(6); inputs.lng.el.value = p.longitude.toFixed(6);
+          if (inputs.maps_link) inputs.maps_link.el.value = '';
+          toast(`Position filled (±${Math.round(p.accuracy)} m): enter the name and save`);
+        }) }, '📍 Use my location here') : null,
         writable ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save') : null,
         !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
