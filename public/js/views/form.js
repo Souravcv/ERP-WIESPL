@@ -17,7 +17,7 @@ const LOCKED = {
   sales_orders: ['Pending Approval', 'Approved', 'In Execution', 'Completed', 'Cancelled'],
 };
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
-const KEEP = { payments: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
+const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
   vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status) };
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
@@ -452,6 +452,36 @@ function actionsFor(entity, row, reload, ctx = {}) {
     }
     case 'boq_items':
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
+      break;
+    case 'attendance': {
+      A.push(h('button.btn', { onclick: go(async () => {
+        const pings = await api(`/hr/attendance/${id}/pings`);
+        const d = m => (m == null ? '' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+        await modal(`Location checks – ${row.employee_id_label || ''}, ${fmtDate(row.date)}`, pings.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Time', 'Kind', 'Distance', 'GPS ±', 'Inside', 'Map', 'Photo', 'Flags'].map(x => h('th', x)))),
+          h('tbody', pings.map(p => h('tr', h('td.nowrap', String(p.at).slice(11, 16)), h('td', p.kind), h('td.num', d(p.distance_m)), h('td.num', p.accuracy_m != null ? `${p.accuracy_m} m` : ''),
+            h('td', { style: { color: p.inside === 'No' ? 'var(--bad)' : 'var(--good)' } }, p.inside || ''), h('td', h('a', { href: `https://www.google.com/maps?q=${p.lat},${p.lng}`, target: '_blank' }, 'map')),
+            h('td', p.photo_id ? h('a', { href: `/api/files/${p.photo_id}?inline=1`, target: '_blank' }, h('img', { src: `/api/files/${p.photo_id}?inline=1`, style: { height: '48px', borderRadius: '6px' } })) : ''),
+            h('td', { style: { fontSize: '11px', color: 'var(--warn)' } }, p.flags || '')))))) : h('p', 'No location checks'), [{ label: 'Close', value: true }], { wide: true });
+      }) }, '📍 Location checks & photos'));
+      if (row.review === 'To review' && hasFunction(state.user.role, 'hr_manage')) {
+        A.push(h('button.btn.primary', { onclick: go(async () => { const { reviewButtons } = await import('./hrview.js'); reviewButtons(row, reload).click(); }) }, '🔎 Review this day'));
+      }
+      break;
+    }
+    case 'work_locations':
+      if (row.lat != null && row.lng != null) A.push(h('a.btn', { href: `https://www.google.com/maps?q=${row.lat},${row.lng}`, target: '_blank' }, '🗺 Open in Maps'));
+      if (can('work_locations')) A.push(h('button.btn', { title: 'Stand at the centre of the site and press this', onclick: go(async () => {
+        if (!window.isSecureContext || !navigator.geolocation) throw new Error('Location works only on the https address of the CRM (on a phone)');
+        const p = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(x => res(x.coords), e => rej(new Error(e.message || 'Location not available')), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }));
+        if (!(await confirmBox(`Set ${row.name} to your position now (±${Math.round(p.accuracy)} m)?`, 'Set location'))) return;
+        await api(`/work_locations/${id}`, { method: 'PUT', body: { lat: Number(p.latitude.toFixed(6)), lng: Number(p.longitude.toFixed(6)), maps_link: null } }); toast('Location set'); reload();
+      }) }, '📍 Use my location here'));
+      if (can('site_assignments')) A.push(h('button.btn', { onclick: () => newRecord('site_assignments', { location_id: id, project_id: row.project_id || undefined }) }, '🗓️ Assign people'));
+      break;
+    case 'employees':
+      A.push(h('a.btn', { href: `#/list/attendance?employee_id=${id}` }, '🕘 Attendance'));
+      if (can('site_assignments')) A.push(h('button.btn', { onclick: () => newRecord('site_assignments', { employee_id: id }) }, '🗓️ Assign to a site'));
+      if (can('leave_requests')) A.push(h('button.btn', { onclick: () => newRecord('leave_requests', { employee_id: id }) }, '🌴 Leave'));
       break;
     case 'service_tickets': {
       const pre = { ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined };

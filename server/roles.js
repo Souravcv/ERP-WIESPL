@@ -128,6 +128,12 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
+  // HR and attendance (once): the GM approves leave and reviews attendance too.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_hr_v1'").get()) {
+    const r = db.prepare("SELECT perms FROM roles WHERE name = 'manager'").get();
+    if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'hr_manage', 'leave_approve'])]; db.prepare("UPDATE roles SET perms = ? WHERE name = 'manager'").run(JSON.stringify(p)); }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_hr_v1', '\"1\"')").run();
+  }
   // Fresh start for POs and payables (once): the old imported POs are kept to look up but not counted.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'po_archive_v1'").get()) {
     const old = "SELECT id FROM purchase_orders WHERE id <= 407 AND created_at <= '2026-10-23 23:59:59' AND status NOT IN ('Draft', 'Pending Approval')";

@@ -1,0 +1,17 @@
+{
+  "name": "WIESPL CRM & Attendance",
+  "short_name": "WIESPL",
+  "start_url": "/#/attend",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1f4e9a",
+  "icons": [
+    {
+      "src": "/logo.jpeg",
+      "sizes": "any",
+      "type": "image/jpeg",
+      "purpose": "any"
+    }
+  ]
+}

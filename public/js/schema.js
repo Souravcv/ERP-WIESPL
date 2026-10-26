@@ -3,7 +3,7 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr'];
 
 const ALL = ROLES;
 const CRM = ['admin', 'manager', 'sales'];
@@ -12,6 +12,7 @@ const PURCHASE = ['admin', 'manager', 'purchase', 'purchase_head', 'accounts', '
 const STORE = ['admin', 'manager', 'store', 'purchase', 'purchase_head', 'accounts'];
 const ENG = ['admin', 'manager', 'engineer', 'sales', 'technical'];
 const SERVICE = ['admin', 'manager', 'service', 'engineer'];
+const HR_ROLES = ['admin', 'manager', 'hr'];
 
 // GSTIN state codes: the first two digits of a GSTIN give the supplier's state.
 export const GST_STATE_CODES = {
@@ -74,6 +75,7 @@ export const ROLE_INFO = {
   purchase_head: { label: 'Purchase Head', description: 'Approves material requisitions, checks POs; purchase and store' },
   technical: { label: 'Technical Manager', description: 'Projects, BOQs and drawings' },
   production: { label: 'Production Supervisor', description: 'Material requests to the store, production stock, finished goods made per day' },
+  hr: { label: 'HR Manager', description: 'Employees, work locations, site assignments, attendance review, leave, holidays' },
   service: { label: 'Service Coordinator', description: 'Complaints, AMC / warranty register, service work orders, service reports, RCA, service quotations' },
 };
 
@@ -86,12 +88,13 @@ export const ROLE_SEES = {
   accounts: ['customers', 'contacts', 'quotations', 'approvals', 'sales_orders', 'projects', 'challans', 'invoices', 'payments', 'credit_notes', 'vendors', 'requisitions',
     'purchase_orders', 'vendor_bills', 'debit_notes', 'vendor_payments', 'expenses', 'items', 'stock_moves', 'amc_contracts', 'costing_sheets'],
   store: ['approvals', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'stock_drafts', 'material_requests', 'production_entries', 'service_work_orders'],
-  engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'challans', ...SERVICE_VIEW, 'material_requests', 'items', 'stock_moves', 'stock_drafts'],
+  engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'challans', ...SERVICE_VIEW, 'material_requests', 'items', 'stock_moves', 'stock_drafts', 'work_locations', 'site_assignments'],
   purchase: ['approvals', 'projects', ...BOQ_VIEW, 'vendors', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests'],
   purchase_head: ['approvals', 'projects', ...BOQ_VIEW, 'challans', 'vendors', 'requisitions', 'purchase_orders', 'debit_notes', 'items', 'stock_moves', 'stock_drafts', 'material_requests', 'production_entries'],
   technical: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'requisitions', 'purchase_orders', 'items', 'material_requests', ...SERVICE_VIEW],
   production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
-  service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices'],
+  service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
+  hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects'],
 };
 export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
 
@@ -107,6 +110,8 @@ export const FUNCTIONS = {
   stock_opening: 'Create 1 April opening stock for all items',
   stock_post: 'Post draft issue slips / dispatch challans / transfers (reduces stock) and process material requests',
   production_post: 'Post production entries (finished goods into stock)',
+  hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
+  leave_approve: 'Approve leave requests',
   allow_negative: 'Issue more than the available stock',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
@@ -137,6 +142,7 @@ export const DEFAULT_FUNCTIONS = {
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
   production: ['production_post'],
+  hr: ['hr_manage', 'leave_approve'],
   service: ['import'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
@@ -157,6 +163,7 @@ export const APPROVAL_FLOWS = {
   Payment: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
   Expense: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
   'Credit Note': [{ stage: 'GM', fn: 'pay_final' }],
+  Leave: [{ stage: 'Approval', fn: 'leave_approve' }],
 };
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
@@ -374,7 +381,7 @@ export const ENTITIES = {
     list: ['requested_at', 'doc_type', 'doc_ref', 'stage', 'title', 'amount', 'requested_by', 'status', 'decided_by'],
     statusField: 'status',
     fields: [
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Discount', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
       { key: 'doc_ref', label: 'Document Ref', type: 'text', readonly: true },
@@ -1003,6 +1010,152 @@ export const ENTITIES = {
     ],
   },
 
+
+  // ---------------------------------------------------------------- HR and attendance
+  // An employee is linked to a CRM login (username); field staff clock in on their phone at a work location with GPS + selfie.
+  employees: {
+    label: 'Employees', singular: 'Employee', group: 'HR', icon: '🧑‍💼', write: HR_ROLES,
+    display: "COALESCE({t}.emp_code || ' ', '') || {t}.name",
+    search: ['emp_code', 'name', 'login', 'department', 'designation', 'mobile'],
+    list: ['emp_code', 'name', 'department', 'designation', 'mobile', 'field_staff', 'default_location_id', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'emp_code', label: 'Employee Code', type: 'text', readonly: true, hint: 'Auto: EMP-001' },
+      { key: 'name', label: 'Name', type: 'text', required: true },
+      { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'The username this person signs in with: their phone attendance is booked to this employee' },
+      { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
+      { key: 'designation', label: 'Designation', type: 'text' },
+      { key: 'mobile', label: 'Mobile', type: 'tel' },
+      { key: 'email', label: 'Email', type: 'email' },
+      { key: 'joining_date', label: 'Joining Date', type: 'date' },
+      { key: 'reporting_to', label: 'Reports To', type: 'person' },
+      { key: 'field_staff', label: 'Field / Site Staff', type: 'yn', default: 'No', hint: 'Yes = selfie at clock-in / out and a presence check every few hours' },
+      { key: 'default_location_id', label: 'Usual Work Location', type: 'ref', ref: 'work_locations', hint: 'e.g. Office or Works; sites come from Site Assignments' },
+      { key: 'shift_start', label: 'Shift Start (HH:MM)', type: 'text', default: '09:30' },
+      { key: 'shift_end', label: 'Shift End (HH:MM)', type: 'text', default: '18:00' },
+      { key: 'weekly_off', label: 'Weekly Off', type: 'select', options: ['Sunday', 'Saturday', 'Saturday + Sunday', 'None'], default: 'Sunday' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Left'], default: 'Active' },
+      { key: 'leaving_date', label: 'Leaving Date', type: 'date' },
+      { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+    ],
+  },
+  // A geofence: centre point + radius. Office / works are open to everyone; client sites to the people assigned there.
+  work_locations: {
+    label: 'Work Locations (Geofences)', singular: 'Work Location', group: 'HR', icon: '📍', write: HR_ROLES.concat('service', 'engineer'),
+    display: "{t}.name",
+    search: ['name', 'address', 'kind'],
+    list: ['name', 'kind', 'project_id', 'lat', 'lng', 'radius_m', 'active'],
+    fields: [
+      { key: 'name', label: 'Name', type: 'text', required: true, hint: 'e.g. WIESPL Works Tathawade, Jehangir Hospital Pune' },
+      { key: 'kind', label: 'Type', type: 'select', options: ['Client site', 'Office', 'Factory / works', 'Warehouse', 'Other'], default: 'Client site' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
+      { key: 'address', label: 'Address', type: 'textarea', span: 2 },
+      { key: 'maps_link', label: 'Google Maps Link or "lat, lng"', type: 'text', span: 2, hint: 'Paste the link of the pin (or stand at the site and press 📍 Use my location)' },
+      { key: 'lat', label: 'Latitude', type: 'number' },
+      { key: 'lng', label: 'Longitude', type: 'number' },
+      { key: 'radius_m', label: 'Radius (metres)', type: 'number', default: 200, hint: '100–500: larger for big sites and weak GPS' },
+      { key: 'active', label: 'Active', type: 'yn', default: 'Yes' },
+    ],
+  },
+  site_assignments: {
+    label: 'Site Assignments', singular: 'Site Assignment', group: 'HR', icon: '🗓️', write: HR_ROLES.concat('service', 'engineer', 'technical'),
+    display: "{t}.id",
+    search: ['purpose'],
+    list: ['employee_id', 'location_id', 'from_date', 'to_date', 'project_id', 'purpose', 'assigned_by'],
+    fields: [
+      { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees', required: true },
+      { key: 'location_id', label: 'Site', type: 'ref', ref: 'work_locations', required: true },
+      { key: 'from_date', label: 'From', type: 'date', default: 'today', required: true },
+      { key: 'to_date', label: 'To', type: 'date', hint: 'Blank = until changed' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets' },
+      { key: 'purpose', label: 'Work', type: 'text' },
+      { key: 'assigned_by', label: 'Assigned By', type: 'person', default: 'me' },
+    ],
+  },
+  // One row per employee per day; the server fills it from the phone (clock-in, presence checks, clock-out).
+  attendance: {
+    label: 'Attendance Register', singular: 'Attendance', group: 'HR', icon: '🕘', write: HR_ROLES,
+    display: "{t}.date",
+    search: ['flags', 'note', 'remarks'],
+    list: ['date', 'employee_id', 'location_id', 'mode', 'check_in', 'check_out', 'hours', 'checks_inside', 'checks', 'status', 'review'],
+    statusField: 'status',
+    fields: [
+      { key: 'date', label: 'Date', type: 'date', required: true },
+      { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees', required: true },
+      { key: 'location_id', label: 'Work Location', type: 'ref', ref: 'work_locations', readonly: true },
+      { key: 'mode', label: 'Mode', type: 'select', options: ['Site / office', 'Travel / outstation'], readonly: true },
+      { key: 'check_in', label: 'Clock In', type: 'text', readonly: true },
+      { key: 'in_distance_m', label: 'Distance at Clock In (m)', type: 'number', readonly: true },
+      { key: 'check_out', label: 'Clock Out', type: 'text', readonly: true },
+      { key: 'out_distance_m', label: 'Distance at Clock Out (m)', type: 'number', readonly: true },
+      { key: 'hours', label: 'Hours', type: 'number', readonly: true },
+      { key: 'checks', label: 'Location Checks', type: 'number', readonly: true },
+      { key: 'checks_inside', label: 'Checks Inside', type: 'number', readonly: true },
+      { key: 'photo_checks', label: 'Photo Checks', type: 'number', readonly: true },
+      { key: 'last_check', label: 'Last Check', type: 'text', readonly: true },
+      { key: 'in_ip', label: 'Network at Clock In', type: 'text', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Working', 'Present', 'Half Day', 'Absent', 'On Leave', 'Holiday', 'Week Off'], readonly: true },
+      { key: 'flags', label: 'Flags', type: 'textarea', span: 2, readonly: true },
+      { key: 'review', label: 'HR Review', type: 'select', options: ['', 'To review', 'Approved', 'Rejected'], readonly: true },
+      { key: 'reviewed_by', label: 'Reviewed By', type: 'text', readonly: true },
+      { key: 'note', label: 'Employee Note', type: 'text', readonly: true },
+      { key: 'remarks', label: 'HR Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  attendance_pings: {
+    label: 'Attendance Location Checks', singular: 'Location Check', group: 'Hidden', icon: '📌', write: HR_ROLES,
+    display: "{t}.at",
+    search: ['flags'],
+    list: ['at', 'employee_id', 'kind', 'distance_m', 'accuracy_m', 'inside', 'flags'],
+    fields: [
+      { key: 'attendance_id', label: 'Attendance', type: 'ref', ref: 'attendance' },
+      { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees' },
+      { key: 'at', label: 'Time', type: 'text' },
+      { key: 'kind', label: 'Kind', type: 'select', options: ['In', 'Auto', 'Photo check', 'Out'] },
+      { key: 'lat', label: 'Latitude', type: 'number' },
+      { key: 'lng', label: 'Longitude', type: 'number' },
+      { key: 'accuracy_m', label: 'GPS Accuracy (m)', type: 'number' },
+      { key: 'distance_m', label: 'Distance from Site (m)', type: 'number' },
+      { key: 'inside', label: 'Inside the Fence', type: 'yn' },
+      { key: 'ip', label: 'Network (IP)', type: 'text' },
+      { key: 'photo_id', label: 'Photo', type: 'number' },
+      { key: 'flags', label: 'Flags', type: 'text' },
+    ],
+  },
+  leave_requests: {
+    label: 'Leave Requests', singular: 'Leave Request', group: 'HR', icon: '🌴', write: HR_ROLES,
+    display: "{t}.leave_no",
+    search: ['leave_no', 'reason'],
+    list: ['leave_no', 'employee_id', 'type', 'from_date', 'to_date', 'days', 'status', 'approved_by'],
+    statusField: 'status',
+    fields: [
+      { key: 'leave_no', label: 'Leave No', type: 'text', readonly: true, hint: 'Auto: LV-001/2026-27' },
+      { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees', required: true },
+      { key: 'type', label: 'Leave Type', type: 'select', options: ['Casual', 'Sick', 'Earned', 'Comp-off', 'Unpaid', 'On duty (outside)'], default: 'Casual' },
+      { key: 'from_date', label: 'From', type: 'date', required: true },
+      { key: 'to_date', label: 'To', type: 'date', required: true },
+      { key: 'half_day', label: 'Half Day', type: 'yn', default: 'No' },
+      { key: 'days', label: 'Days', type: 'number', readonly: true },
+      { key: 'reason', label: 'Reason', type: 'textarea', span: 2, required: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+    ],
+  },
+  holidays: {
+    label: 'Holidays', singular: 'Holiday', group: 'HR', icon: '🎉', write: HR_ROLES,
+    display: "{t}.name",
+    search: ['name'],
+    list: ['date', 'name', 'optional'],
+    fields: [
+      { key: 'date', label: 'Date', type: 'date', required: true },
+      { key: 'name', label: 'Holiday', type: 'text', required: true },
+      { key: 'optional', label: 'Optional Holiday', type: 'yn', default: 'No' },
+    ],
+  },
+
   // ---------------------------------------------------------------- Purchase
   vendors: {
     label: 'Vendors', singular: 'Vendor', group: 'Purchase', icon: '🏭', write: PURCHASE,
@@ -1420,7 +1573,7 @@ export const ENTITIES = {
   },
 };
 
-export const GROUPS = ['CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store'];
+export const GROUPS = ['CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'HR'];
 
 export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));

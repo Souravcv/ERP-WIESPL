@@ -116,6 +116,8 @@ const SETTINGS_FORM = [
   ['Company', [['company_name', 'Company name'], ['company_short', 'Short name'], ['tagline', 'Tagline'], ['reg_address', 'Registered address', 'ta'], ['works_address', 'Works address', 'ta'],
     ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['cin', 'CIN'], ['gstin', 'GSTIN'], ['state', 'State (for CGST/SGST vs IGST)'], ['bank_details', 'Bank details (printed on invoices)', 'ta']]],
   ['Numbering & approvals', [['quote_prefix', 'Document prefix (WIESPL/…)'], ['require_quote_approval', 'Quotations need manager approval', 'yn'], ['require_po_approval', 'Purchase orders need manager approval', 'yn']]],
+  ['Attendance', [['hr_full_day_hours', 'Hours for a full day (default 8)'], ['hr_half_day_hours', 'Hours for a half day (default 4)'], ['hr_grace_minutes', 'Late after shift start + minutes (default 15)'],
+    ['hr_check_every_hours', 'Field staff: a photo presence check every … hours (default 3)'], ['hr_auto_ping_minutes', 'Automatic location check every … minutes while the app is open (default 30)'], ['hr_max_accuracy_m', 'Reject a GPS fix rougher than … metres (default 150)']]],
   ['Costing', [['sales_margin_pct', 'Company % added on cost – sales costing sheets (default 20)'], ['service_margin_pct', 'Company % added on cost – service costing sheets (default 30)']]],
   ['Payments', [['payment_approval_limit', 'Accounts may approve payments up to (₹); above this the GM approves too'], ['expense_po_limit', 'Expense vouchers without a PO allowed up to (₹) (salary, rent, utilities, fees: any amount)'],
     ['bill_tolerance_pct', 'Bills may exceed the value received by up to (%) before payment is blocked']]],

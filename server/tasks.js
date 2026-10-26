@@ -97,6 +97,12 @@ export function myTasks(user) {
       .map(d => ({ title: `Post ${d.doc_kind.toLowerCase()} – ${d.item_count} item(s)${d.project || d.issued_to || d.to_location ? ' for ' + (d.project || d.issued_to || d.to_location) : ''}`, sub: `draft #${d.id} by ${d.prepared_by || ''} · ${fmt(d.date)}`, link: `#/view/stock_drafts/${d.id}` })));
   }
 
+  // Attendance days HR has to look at.
+  if (hasFunction(role, 'hr_manage')) {
+    group('att', '🕘', 'Attendance to review', db.prepare("SELECT a.id, a.date, a.flags, a.mode, e.name FROM attendance a JOIN employees e ON e.id = a.employee_id WHERE a.review = 'To review' ORDER BY a.date DESC LIMIT 40").all()
+      .map(a => ({ title: `${a.name} – ${fmt(a.date)}${a.mode === 'Travel / outstation' ? ' (travel)' : ''}`, sub: String(a.flags || '').split('\n').slice(0, 2).join(' · '), link: `#/view/attendance/${a.id}` })));
+  }
+
   // Approvals this person may give
   const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id").all()
     .filter(a => canApprove(a.doc_type, a.stage, user));

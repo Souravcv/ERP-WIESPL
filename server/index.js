@@ -28,6 +28,7 @@ import * as bankreco from './bankreco.js';
 import * as recv from './receivables.js';
 import * as sf from './storeflow.js';
 import * as svc from './service.js';
+import * as hr from './hr.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -176,6 +177,7 @@ const DOC_SERIES = [
   { key: 'service_report', label: 'Service Report', table: 'service_reports', col: 'report_no', fmt: (n, fy) => `SR-${n}/20${fy}` },
   { key: 'rca', label: 'Root Cause Analysis', table: 'rca_reports', col: 'rca_no', fmt: (n, fy) => `RCA-${n}/20${fy}` },
   { key: 'costing', label: 'Costing Sheet', table: 'costing_sheets', col: 'cs_no', fmt: (n, fy) => `CS-${n}/20${fy}` },
+  { key: 'leave', label: 'Leave Request', table: 'leave_requests', col: 'leave_no', fmt: (n, fy) => `LV-${n}/20${fy}` },
   { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
   { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'so', label: 'Sales Order', table: 'sales_orders', col: 'so_no', fmt: (n, fy) => `${pfx()}/SO/${fy}/${n}` },
@@ -498,6 +500,19 @@ const prodView = req => { if (!canView('production_entries', req.user.role)) thr
 api.get('/production/stock', wrap(req => { prodView(req); return sf.productionStock(); }));
 api.get('/production/daily', wrap(req => { prodView(req); return sf.dailyOutput(req.query); }));
 
+// ---------------------------------------------------------------- attendance (phone) and HR
+const clientIp = req => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null;
+api.get('/hr/me', wrap(req => hr.myDay(req.user)));
+api.post('/hr/clock-in', wrap(req => hr.clockIn(req.user, req.body, clientIp(req))));
+api.post('/hr/check', wrap(req => hr.check(req.user, req.body, clientIp(req))));
+api.post('/hr/clock-out', wrap(req => hr.clockOut(req.user, req.body, clientIp(req))));
+api.post('/hr/leave', wrap(req => hr.applyLeave(req.user, req.body)));
+const hrView = req => { if (!canView('attendance', req.user.role)) throw new HttpError(403, 'No access to attendance'); };
+api.get('/hr/today', wrap(req => { hrView(req); return hr.todayBoard(req.query.date || undefined); }));
+api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.query.month); }));
+api.get('/hr/attendance/:id/pings', wrap(req => { hrView(req); return hr.pingsOf(req.params.id); }));
+api.post('/attendance/:id/review', wrap(req => hr.review(req.params.id, req.body, req.user)));
+
 // ---------------------------------------------------------------- service and costing sheets
 api.post('/service_work_orders/:id/to-store', wrap(req => svc.swoToStore(req.params.id, req.user)));
 api.post('/amc_contracts/:id/proforma', wrap(req => svc.amcPI(req.params.id, req.user)));
@@ -706,6 +721,7 @@ const LOCKED = {
   stock_drafts: ['Posted', 'Cancelled'],
   material_requests: ['Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed'],
   production_entries: ['Posted'],
+  leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
@@ -765,6 +781,7 @@ api.delete('/:entity/:id', wrap(req => {
   if (!row) throw new HttpError(404, 'Record not found');
   if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
+  if ((entity === 'attendance' && row.check_in) || entity === 'attendance_pings') throw new HttpError(409, 'Attendance with a clock-in is evidence: it cannot be deleted; HR reviews and corrects the day instead');
   if (entity === 'production_entries' && row.status === 'Posted') throw new HttpError(409, 'A posted production entry cannot be deleted');
   if (entity === 'material_requests' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} material request cannot be deleted`);
   if (entity === 'payments') throw new HttpError(409, 'A receipt cannot be deleted; the GM can reverse it with a reason (e.g. cheque bounced)');
@@ -793,6 +810,8 @@ app.use((err, req, res, next) => {
 // Daily store check of Final BOQs (new shortages → Draft requisition, order-by reminders); checked every 30 minutes.
 setTimeout(() => flow.dailyTick(), 60 * 1000);
 setInterval(() => flow.dailyTick(), 30 * 60 * 1000);
+// Attendance days left without a clock-out are closed and flagged for HR.
+setInterval(() => { try { hr.closeOpenDays(); } catch (e) { console.error('attendance close', e.message); } }, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);

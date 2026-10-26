@@ -3,6 +3,7 @@ import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
 import { prefillProduction } from './storeflow.js';
+import { parseLatLng, prepLeave, markLeave } from './hr.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -243,6 +244,25 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     }
+    case 'employees':
+      if (!existing && !row.emp_code) {
+        const max = db.prepare("SELECT MAX(CAST(substr(emp_code, 5) AS INTEGER)) m FROM employees WHERE emp_code LIKE 'EMP-%'").get().m || 0;
+        row.emp_code = `EMP-${String(max + 1).padStart(3, '0')}`;
+      }
+      if ('login' in row) row.login = String(row.login || '').trim() || null;
+      if (row.login && db.prepare('SELECT 1 FROM employees WHERE lower(login) = lower(?) AND id <> ?').get(row.login, existing?.id ?? 0)) throw Object.assign(new Error(`Login ${row.login} is already linked to another employee`), { status: 409 });
+      break;
+    case 'work_locations':
+      if (row.maps_link) {
+        const ll = parseLatLng(row.maps_link);
+        if (!ll) throw Object.assign(new Error('Could not read a position from that link: open the pin in Google Maps and copy the link that shows @lat,lng, or type "18.6201, 73.7447"'), { status: 400 });
+        [row.lat, row.lng] = ll;
+      }
+      break;
+    case 'leave_requests':
+      if (!existing && !row.leave_no) row.leave_no = docNo('leave', date, (n, fy) => `LV-${n}/20${fy}`);
+      prepLeave(row, existing);
+      break;
     case 'material_requests':
       if (!existing && !row.mr_no) row.mr_no = docNo('material_request', date, (n, fy) => `MR-${n}/20${fy}`);
       break;
@@ -581,6 +601,7 @@ export function afterSave(name, id, user, deleted) {
       }
     }
   }
+  if (name === 'leave_requests' && !deleted) markLeave(id, user);
   if (name === 'credit_notes') {
     const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);
     if (cn?.invoice_id) refreshReceivables({ invoiceId: cn.invoice_id });

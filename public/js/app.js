@@ -15,6 +15,8 @@ import { tasksView, taskCount } from './views/tasks.js';
 import { projectAnalysisView } from './views/projectanalysis.js';
 
 const $ = id => document.getElementById(id);
+// Installable on phones (needs the https address); the worker keeps no offline copies.
+if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWorker.register('sw.js').catch(() => {});
 
 // Screens that are not a single module list, shown at the top of their menu group.
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
@@ -23,6 +25,7 @@ const EXTRA_LINKS = {
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   'Sales & Projects': [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
+  HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
@@ -38,7 +41,7 @@ let tasksOpen = 0;
 function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), h('a', { href: '#/attend' }, '🕘 My attendance'));
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
@@ -97,6 +100,8 @@ async function route() {
       case 'tasks': await tasksView(view); refreshPending(); break;
       case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'payables': { const { payablesView } = await import('./views/payables.js'); await payablesView(view, a || 'due', b); break; }
+      case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
+      case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }
       case 'service': { const { serviceView } = await import('./views/service.js'); await serviceView(view); break; }
       case 'production': { const { productionView } = await import('./views/production.js'); await productionView(view, a || 'daily'); break; }
       case 'receivables': { const { receivablesView } = await import('./views/receivables.js'); await receivablesView(view, a || 'ageing', b); break; }

@@ -14,6 +14,7 @@ const DOCS = {
   Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
     title: r => `Pay ${r.vendor_id_label || ''} – PO ${r.po_id_label || ''}${r.off_terms === 'Yes' ? ' – OUTSIDE PO TERMS' : ''}` },
   Expense: { entity: 'expenses', ref: 'voucher_no', amount: 'amount', noLines: true, title: r => `${r.category}: ${r.payee} – ${String(r.description || '').slice(0, 60)}` },
+  Leave: { entity: 'leave_requests', ref: 'leave_no', amount: null, noLines: true, title: r => `${r.type} leave – ${r.employee_id_label || ''} – ${r.days} day(s) from ${r.from_date}` },
   'Credit Note': { entity: 'credit_notes', ref: 'cn_no', amount: 'total', noLines: true, title: r => `Credit note to ${r.customer_id_label || ''} on ${r.invoice_id_label || ''} – ${r.reason}` },
 };
 // Payments / expenses: the GM step only above the approval limit or outside the PO terms.
@@ -21,7 +22,7 @@ const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders'];
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests'];
 
 export function canApprove(docType, stage, user) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
