@@ -96,6 +96,8 @@ export const ROLE_SEES = {
   service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
   hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects'],
 };
+// Everyone works with the task scheduler (the server shows each person only their own tasks).
+for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
 
 // Special actions a role may be allowed, beyond module access.
@@ -112,6 +114,7 @@ export const FUNCTIONS = {
   production_post: 'Post production entries (finished goods into stock)',
   hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
   leave_approve: 'Approve leave requests',
+  task_assign: 'Assign tasks to other people (and see everyone\'s tasks)',
   allow_negative: 'Issue more than the available stock',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
@@ -134,16 +137,16 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
-  purchase_head: ['approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
-  technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical'],
+  purchase_head: ['task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
   store: ['stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
   production: ['production_post'],
-  hr: ['hr_manage', 'leave_approve'],
-  service: ['import'],
+  hr: ['hr_manage', 'leave_approve', 'task_assign'],
+  service: ['import', 'task_assign'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -1011,6 +1014,42 @@ export const ENTITIES = {
   },
 
 
+  // ---------------------------------------------------------------- Task scheduler
+  // A task for oneself, or given to someone by a person allowed to assign; due date, priority, checklist, optional
+  // repeat (the next one is made when this one is done). Each person sees the tasks given to them or by them.
+  work_tasks: {
+    label: 'Task Scheduler', singular: 'Task', group: 'Tasks', icon: '🗂️', write: ALL,
+    display: "COALESCE({t}.task_no || ' ', '') || {t}.title",
+    search: ['task_no', 'title', 'description', 'assigned_to', 'assigned_by', 'progress_note'],
+    list: ['task_no', 'due_date', 'title', 'assigned_to', 'assigned_by', 'priority', 'category', 'status', 'overdue'],
+    statusField: 'status',
+    fields: [
+      { key: 'task_no', label: 'Task No', type: 'text', readonly: true, hint: 'Auto: TSK-001/2026-27' },
+      { key: 'title', label: 'Task', type: 'text', required: true, span: 2 },
+      { key: 'description', label: 'Details', type: 'textarea', span: 2 },
+      { key: 'assigned_to', label: 'Assigned To', type: 'person', default: 'me', required: true, hint: 'Yourself, or anyone if you may assign tasks' },
+      { key: 'assigned_by', label: 'Assigned By', type: 'text', readonly: true },
+      { key: 'priority', label: 'Priority', type: 'select', options: ['Normal', 'High', 'Urgent', 'Low'], default: 'Normal' },
+      { key: 'category', label: 'Category', type: 'select', options: ['General', 'Site work', 'Service', 'Purchase', 'Store', 'Production', 'Accounts', 'Sales follow-up', 'Design / R&D', 'Office'], default: 'General' },
+      { key: 'start_date', label: 'Start', type: 'date', default: 'today' },
+      { key: 'due_date', label: 'Due Date', type: 'date', default: 'today', required: true },
+      { key: 'due_time', label: 'Due Time (HH:MM)', type: 'text' },
+      { key: 'repeat', label: 'Repeat', type: 'select', options: ['No repeat', 'Daily', 'Weekly', 'Monthly'], default: 'No repeat', hint: 'The next task is made when this one is marked Done' },
+      { key: 'repeat_until', label: 'Repeat Until', type: 'date' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'customer_id', label: 'Customer', type: 'ref', ref: 'customers' },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets' },
+      { key: 'location_id', label: 'Site', type: 'ref', ref: 'work_locations' },
+      { key: 'checklist', label: 'Checklist', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        { key: 'item', label: 'Step', type: 'text', width: 460 }, { key: 'done', label: 'Done', type: 'select', options: ['', 'Done'], width: 90 }] },
+      { key: 'status', label: 'Status', type: 'select', options: ['To do', 'In progress', 'Waiting', 'Done', 'Cancelled'], default: 'To do' },
+      { key: 'progress_note', label: 'Update / Result', type: 'textarea', span: 2 },
+      { key: 'completed_at', label: 'Completed At', type: 'text', readonly: true },
+      { key: 'completed_by', label: 'Completed By', type: 'text', readonly: true },
+      { key: 'parent_id', label: 'Repeats', type: 'number', hidden: true },
+      { key: 'overdue', label: 'Overdue', type: 'yn', computed: "CASE WHEN {t}.status NOT IN ('Done', 'Cancelled') AND {t}.due_date < date('now', 'localtime') THEN 'Yes' ELSE '' END" },
+    ],
+  },
   // ---------------------------------------------------------------- HR and attendance
   // An employee is linked to a CRM login (username); field staff clock in on their phone at a work location with GPS + selfie.
   employees: {
@@ -1573,7 +1612,7 @@ export const ENTITIES = {
   },
 };
 
-export const GROUPS = ['CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'HR'];
+export const GROUPS = ['Tasks', 'CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'HR'];
 
 export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));

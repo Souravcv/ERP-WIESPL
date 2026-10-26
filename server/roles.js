@@ -128,6 +128,14 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
+  // Task scheduler (once): heads may assign tasks to others.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
+    for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'task_assign'])]; db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name); }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_tasks_v1', '\"1\"')").run();
+  }
   // HR and attendance (once): the GM approves leave and reviews attendance too.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_hr_v1'").get()) {
     const r = db.prepare("SELECT perms FROM roles WHERE name = 'manager'").get();

@@ -453,6 +453,14 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'boq_items':
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📑 Open BOQ'));
       break;
+    case 'work_tasks': {
+      const set = st => go(async () => { await api(`/work_tasks/${id}`, { method: 'PUT', body: { status: st } }); toast(`Task ${st.toLowerCase()}`); reload(); });
+      if (row.status === 'To do' || row.status === 'Waiting') A.push(h('button.btn', { onclick: set('In progress') }, '▶ Start'));
+      if (!['Done', 'Cancelled'].includes(row.status)) A.push(h('button.btn.good', { onclick: set('Done') }, '✔ Done'));
+      if (row.status === 'Done') A.push(h('button.btn', { onclick: set('In progress') }, '↺ Reopen'));
+      A.push(h('a.btn', { href: '#/taskboard' }, '🗂️ Task board'));
+      break;
+    }
     case 'attendance': {
       A.push(h('button.btn', { onclick: go(async () => {
         const pings = await api(`/hr/attendance/${id}/pings`);

@@ -29,6 +29,7 @@ import * as recv from './receivables.js';
 import * as sf from './storeflow.js';
 import * as svc from './service.js';
 import * as hr from './hr.js';
+import * as wt from './worktasks.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -177,6 +178,7 @@ const DOC_SERIES = [
   { key: 'service_report', label: 'Service Report', table: 'service_reports', col: 'report_no', fmt: (n, fy) => `SR-${n}/20${fy}` },
   { key: 'rca', label: 'Root Cause Analysis', table: 'rca_reports', col: 'rca_no', fmt: (n, fy) => `RCA-${n}/20${fy}` },
   { key: 'costing', label: 'Costing Sheet', table: 'costing_sheets', col: 'cs_no', fmt: (n, fy) => `CS-${n}/20${fy}` },
+  { key: 'task', label: 'Task', table: 'work_tasks', col: 'task_no', fmt: (n, fy) => `TSK-${n}/20${fy}` },
   { key: 'leave', label: 'Leave Request', table: 'leave_requests', col: 'leave_no', fmt: (n, fy) => `LV-${n}/20${fy}` },
   { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
   { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
@@ -725,8 +727,17 @@ const LOCKED = {
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
-api.get('/:entity', wrap(req => { viewable(req); return listRows(req.params.entity, req.query); }));
-api.get('/:entity/:id', wrap(req => { viewable(req); return getRow(req.params.entity, req.params.id); }));
+api.get('/:entity', wrap(req => {
+  viewable(req);
+  const rows = listRows(req.params.entity, req.query);
+  return req.params.entity === 'work_tasks' ? wt.visibleTasks(rows, req.user) : rows; // each person: tasks given to or by them
+}));
+api.get('/:entity/:id', wrap(req => {
+  viewable(req);
+  const row = getRow(req.params.entity, req.params.id);
+  if (req.params.entity === 'work_tasks' && !wt.mayView(row, req.user)) throw new HttpError(403, 'This task is not yours');
+  return row;
+}));
 api.post('/:entity', wrap(req => {
   const ent = entityOr404(req.params.entity);
   if (!canWrite(req.params.entity, req.user.role) || ent.noCreate) throw new HttpError(403, 'You do not have permission to create this');
@@ -741,6 +752,7 @@ api.put('/:entity/:id', wrap(req => {
   const { entity, id } = req.params;
   entityOr404(entity);
   if (!canWrite(entity, req.user.role)) throw new HttpError(403, 'You do not have permission to edit this');
+  if (entity === 'work_tasks') wt.guardUpdate(getRow('work_tasks', id), req.body, req.user);
   if (LOCKED[entity]) {
     const st = db.prepare(`SELECT status FROM ${entity} WHERE id = ?`).get(Number(id))?.status;
     if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked.${entity === 'quotations' ? ' Use Revise to make changes.' : ''}`);

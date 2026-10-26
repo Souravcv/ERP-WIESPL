@@ -2,6 +2,7 @@
 // Final, changes asked of them, requisitions to check, approvals, material to order, follow-ups, work orders without a BOQ.
 import { db } from './db.js';
 import { listRows } from './crud.js';
+import { taskGroups } from './worktasks.js';
 import { canWrite, canView, hasFunction } from '../public/js/schema.js';
 import { canApprove } from './workflows.js';
 import { reviewsOf, storeOverview } from './boqflow.js';
@@ -14,6 +15,8 @@ export function myTasks(user) {
   const role = user.role, t = today(), soon = addDays(t, 7);
   const groups = [];
   const group = (key, icon, title, items) => { if (items.length) groups.push({ key, icon, title, items }); };
+  // Task scheduler first: what is given to me, and what I gave that is late.
+  for (const [k, icon, title, items] of taskGroups(user, t, soon)) group(k, icon, title, items);
 
   // BOQ design review / Final / changes asked
   if (canView('boms', role)) {
