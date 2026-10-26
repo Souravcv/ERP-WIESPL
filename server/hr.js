@@ -143,10 +143,21 @@ export function evaluate(attId) {
   // Less than a half day counts as absent; the flag sends it to HR, who can correct it.
   const status = working ? 'Working' : hours >= R.fullDay ? 'Present' : hours >= R.halfDay ? 'Half Day' : 'Absent';
   if (a.check_in && hours < R.halfDay && !working) flags.add(`short day (${hours} h)`);
+  // Minutes away: from each check outside the fence to the next check (or the end of the day).
+  let away = 0;
+  const end = a.check_out || (a.date < today() ? pings.at(-1)?.at : now());
+  pings.forEach((p, i) => {
+    if (p.inside !== 'No') return;
+    const to = pings[i + 1]?.at || end;
+    if (to) away += Math.max(0, (Date.parse(String(to).replace(' ', 'T')) - Date.parse(String(p.at).replace(' ', 'T'))) / 60e3);
+  });
+  away = Math.round(away);
+  for (const x of [...flags]) if (/^away from the site/.test(x)) flags.delete(x);
+  if (away >= 15) flags.add(`away from the site about ${away} min`);
   const c = counts(a.id);
   const list = [...flags];
   const review = a.review === 'Approved' || a.review === 'Rejected' ? a.review : list.includes(MOCK) || ((list.length || a.mode === 'Travel / outstation') && !working) ? 'To review' : '';
-  return updateRow('attendance', a.id, { hours, status, flags: list.join('\n') || null, review, checks: c.checks || 0, checks_inside: c.inside_n || 0, photo_checks: c.photos || 0, last_check: c.last ? hhmm(c.last) : null }, { name: 'system' }, { system: true });
+  return updateRow('attendance', a.id, { hours, status, flags: list.join('\n') || null, review, away_minutes: away || null, checks: c.checks || 0, checks_inside: c.inside_n || 0, photo_checks: c.photos || 0, last_check: c.last ? hhmm(c.last) : null }, { name: 'system' }, { system: true });
 }
 
 // ---------------------------------------------------------------- the phone
@@ -172,7 +183,7 @@ export function clockIn(user, body = {}, ip) {
     const photoId = savePhoto(att.id, 'Clock in', body.photo, user);
     addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId);
     audit(user.name, 'attendance', att.id, 'clock in', f ? `${f.loc.name} ${f.distance} m` : 'travel');
-    return { attendance: evaluate(att.id), site: f?.loc.name || null, distance: f?.distance ?? null };
+    return { attendance: forPhone(evaluate(att.id)), site: f?.loc.name || null };
   });
 }
 
@@ -193,11 +204,33 @@ export function check(user, body = {}, ip) {
   const f = loc ? fence(loc, p) : null;
   const kind = body.photo ? 'Photo check' : body.reason === 'geofence-exit' ? 'Geofence exit' : 'Auto';
   return tx(() => {
+    const prev = db.prepare('SELECT inside FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
     const photoId = savePhoto(att.id, 'Presence check', body.photo, user);
-    const flags = addPing(att, emp, kind, p, f, ip, photoId);
-    const out = evaluate(att.id);
-    return { inside: f ? f.inside : null, distance: f?.distance ?? null, site: loc?.name || null, flags, attendance: out };
+    addPing(att, emp, kind, p, f, ip, photoId);
+    evaluate(att.id);
+    if (f) awayAlert(getRow('attendance', att.id), emp, loc, f, prev?.inside === 'No', user);
+    // The phone is told only that the check was recorded: whether it was inside the site is for HR.
+    return { recorded: true, at: now().slice(11, 16) };
   });
+}
+
+// Someone left the site: alert HR and their reporting manager once they are clearly away (two checks outside in a
+// row, or more than 1 km), at most once an hour; tell them again when the person is back at the site.
+function awayAlert(att, emp, loc, f, prevOutside, user) {
+  const link = `#/view/attendance/${att.id}`;
+  const to = { fn: 'hr_manage', userNames: emp.reporting_to ? [emp.reporting_to] : [] };
+  const d = f.distance >= 1000 ? `${(f.distance / 1000).toFixed(1)} km` : `${f.distance} m`;
+  if (!f.inside) {
+    const clear = prevOutside || f.distance > 1000;
+    const recent = att.alert_at && Date.parse(now().replace(' ', 'T')) - Date.parse(String(att.alert_at).replace(' ', 'T')) < 60 * 60e3;
+    if (!clear || recent) return;
+    notify({ ...to, kind: 'attendance', title: `⚠ ${emp.name} is away from ${loc.name} (${d})`, body: `${att.away_since ? 'since ' + hhmm(att.away_since) + ' · ' : ''}checked at ${now().slice(11, 16)}`, link }, { name: 'Attendance' });
+    updateRow('attendance', att.id, { alert_at: now(), away_since: att.away_since || now() }, user, { system: true });
+  } else if (att.away_since) {
+    const mins = Math.round((Date.parse(now().replace(' ', 'T')) - Date.parse(String(att.away_since).replace(' ', 'T'))) / 60e3);
+    notify({ ...to, kind: 'attendance', title: `${emp.name} is back at ${loc.name}`, body: `away about ${mins} min`, link }, { name: 'Attendance' });
+    updateRow('attendance', att.id, { away_since: null }, user, { system: true });
+  }
 }
 
 export function clockOut(user, body = {}, ip) {
@@ -212,9 +245,13 @@ export function clockOut(user, body = {}, ip) {
     addPing(att, emp, 'Out', p, f, ip, photoId, f && !f.inside ? ['clocked out outside the site'] : []);
     updateRow('attendance', att.id, { check_out: now(), out_distance_m: f?.distance ?? null }, user, { system: true });
     audit(user.name, 'attendance', att.id, 'clock out', f ? `${f.distance} m` : '');
-    return { attendance: evaluate(att.id) };
+    return { attendance: forPhone(evaluate(att.id)) };
   });
 }
+
+// The employee's own copy of a day: no distances, site-check results or HR notes.
+const HR_ONLY = ['flags', 'in_distance_m', 'out_distance_m', 'checks_inside', 'away_minutes', 'away_since', 'alert_at', 'in_ip', 'remarks'];
+const forPhone = att => att && Object.fromEntries(Object.entries(att).filter(([k]) => !HR_ONLY.includes(k)));
 
 // What the phone shows: today, where the person may clock in, their month, their leave.
 export function myDay(user) {
@@ -225,7 +262,7 @@ export function myDay(user) {
   const month = db.prepare("SELECT date, status, check_in, check_out, hours, review FROM attendance WHERE employee_id = ? AND date >= ? ORDER BY date DESC").all(emp.id, t.slice(0, 8) + '01');
   const leaves = db.prepare('SELECT id, leave_no, type, from_date, to_date, days, status FROM leave_requests WHERE employee_id = ? ORDER BY id DESC LIMIT 10').all(emp.id);
   return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, shift_start: emp.shift_start, shift_end: emp.shift_end },
-    today: t, attendance: att, sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
+    today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
     rules: rules(), month, leaves, holiday: db.prepare('SELECT name FROM holidays WHERE date = ?').get(t)?.name || null, weekly_off: isWeeklyOff(emp, t) };
 }
 

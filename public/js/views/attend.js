@@ -73,8 +73,8 @@ export async function attendView(root) {
     lastAuto.at = Date.now();
     try {
       const r = await api('/hr/check', { method: 'POST', body: await locate() });
-      status.textContent = `Location checked ${new Date().toTimeString().slice(0, 5)}: ${r.inside === false ? `OUTSIDE ${r.site} (${dist(r.distance)})` : r.site ? `at ${r.site} (${dist(r.distance)})` : 'recorded'}`;
-      status.style.color = r.inside === false ? 'var(--bad)' : 'var(--good)';
+      status.textContent = `Location recorded at ${r.at || new Date().toTimeString().slice(0, 5)}`;
+      status.style.color = 'var(--good)';
     } catch (e) { status.textContent = `Location check failed: ${e.message}`; status.style.color = 'var(--warn)'; }
   }
   // In the app the background service does this (every R.pingMinutes and on leaving the site), screen on or off.
@@ -120,17 +120,17 @@ export async function attendView(root) {
     h('div', { style: { margin: '14px 0', padding: '12px', borderRadius: '10px', background: 'var(--bg)' } },
       !a?.check_in ? h('div', { style: { fontSize: '18px', fontWeight: 600 } }, a?.status === 'On Leave' ? `On leave today${a.note ? ' – ' + a.note : ''}` : 'Not clocked in yet')
         : h('div', h('div', { style: { fontSize: '18px', fontWeight: 600 } }, working ? `Working since ${hm(a.check_in)}` : `Clocked out at ${hm(a.check_out)} · ${a.hours} h`),
-          h('div.muted', `${a.location_id_label || a.mode}${a.in_distance_m != null ? ` · ${dist(a.in_distance_m)} from the centre at clock-in` : ''} · ${a.checks || 0} location checks, ${a.photo_checks || 0} photo checks`),
-          a.flags && !working ? h('div', { style: { color: 'var(--warn)', whiteSpace: 'pre-wrap', marginTop: '6px' } }, a.flags) : null),
+          h('div.muted', `${a.location_id_label || a.mode} · ${a.checks || 0} location checks, ${a.photo_checks || 0} photo checks`),
+          a.review === 'To review' && !working ? h('div.muted', { style: { marginTop: '6px' } }, 'HR is checking this day') : null),
       nextPhoto ? h('div', { style: { marginTop: '6px', fontWeight: 600 } }, nextPhoto) : null, status),
     !a?.check_in && a?.status !== 'On Leave' ? h('div.grid', { style: { gap: '10px' } },
       h('label', 'Where', mode), h('label', 'Note', note),
       h('button.btn.primary', { style: { fontSize: '18px', padding: '14px' }, onclick: busy(async () => {
-        try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value }); toast(r.site ? `Clocked in at ${r.site} (${dist(r.distance)})` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
+        try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value }); toast(r.site ? `Clocked in at ${r.site}` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock in (selfie + location)' : '📍 Clock in')) : null,
     working ? h('div.grid', { style: { gap: '10px' } },
       needPhoto ? h('button.btn.good', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
-        try { const r = await send('/hr/check', {}, true); toast(r.inside === false ? `Outside ${r.site}: ${dist(r.distance)} away` : 'Presence check saved'); reload(); } catch (e) { fail(e); }
+        try { const r = await send('/hr/check', {}, true); toast('Presence check saved'); reload(); } catch (e) { fail(e); }
       }) }, '📸 Presence check (photo)') : null,
       h('button.btn', { onclick: busy(async () => { await autoCheck(true); }) }, '📍 Check my location now'),
       bg,
