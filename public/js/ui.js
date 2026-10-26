@@ -1,4 +1,5 @@
 import { inr } from './calc.js';
+import { hasFunction } from './schema.js';
 
 export const state = { user: null, settings: {}, people: [] };
 
@@ -179,6 +180,18 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
       break;
     }
     case 'person': {
+      // A drop-down of everyone (e.g. a task's Assigned To); without the right in f.pickRight only yourself.
+      if (f.pick) {
+        const me = state.user?.name;
+        const all = f.pickRight && !hasFunction(state.user?.role, f.pickRight) ? state.people.filter(p => p.name === me) : state.people;
+        const list = [...all];
+        if (me && !list.some(p => p.name === me)) list.unshift({ name: me });
+        if (value && !list.some(p => p.name === value)) list.push({ name: value });
+        el = h('select', { ...common, disabled: !!ro }, list.map(p => h('option', { value: p.name }, p.name + (p.name === me ? ' (me)' : p.no_login ? ' (no CRM login)' : ''))));
+        el.value = value || me || '';
+        get = () => el.value;
+        break;
+      }
       const id = 'dl-' + ++dlCount;
       // CRM users plus the names used in the registers (e.g. Saurabh, Pratiksha, Ashwin/Jai)
       const names = [...new Set([...state.people.map(p => p.name), ...(f.suggest || [])])];

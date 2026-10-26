@@ -1027,7 +1027,7 @@ export const ENTITIES = {
       { key: 'task_no', label: 'Task No', type: 'text', readonly: true, hint: 'Auto: TSK-001/2026-27' },
       { key: 'title', label: 'Task', type: 'text', required: true, span: 2 },
       { key: 'description', label: 'Details', type: 'textarea', span: 2 },
-      { key: 'assigned_to', label: 'Assigned To', type: 'person', default: 'me', required: true, hint: 'Yourself, or anyone if you may assign tasks' },
+      { key: 'assigned_to', label: 'Assigned To', type: 'person', pick: true, pickRight: 'task_assign', default: 'me', required: true, hint: 'Yourself, or anyone if you may assign tasks' },
       { key: 'assigned_by', label: 'Assigned By', type: 'text', readonly: true },
       { key: 'priority', label: 'Priority', type: 'select', options: ['Normal', 'High', 'Urgent', 'Low'], default: 'Normal' },
       { key: 'category', label: 'Category', type: 'select', options: ['General', 'Site work', 'Service', 'Purchase', 'Store', 'Production', 'Accounts', 'Sales follow-up', 'Design / R&D', 'Office'], default: 'General' },

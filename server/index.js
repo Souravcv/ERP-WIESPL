@@ -105,7 +105,13 @@ api.get('/web-leads', wrap(req => { if (!canView('enquiries', req.user.role)) th
 
 // ---------------------------------------------------------------- users & settings (admin)
 api.get('/users', wrap(() => db.prepare('SELECT * FROM users ORDER BY active DESC, name').all().map(publicUser)));
-api.get('/people', wrap(() => db.prepare('SELECT name, role FROM users WHERE active = 1 ORDER BY name').all()));
+// Everyone who can be named on a record: CRM users, then employees (HR) who have no CRM login.
+api.get('/people', wrap(() => {
+  const users = db.prepare('SELECT name, role FROM users WHERE active = 1 ORDER BY name').all();
+  const known = new Set(users.map(u => u.name.trim().toLowerCase()));
+  const emps = db.prepare("SELECT name FROM employees WHERE COALESCE(status, 'Active') = 'Active' ORDER BY name").all().filter(e => !known.has(String(e.name).trim().toLowerCase())).map(e => ({ name: e.name, role: null, no_login: true }));
+  return [...users, ...emps];
+}));
 api.post('/users', requireRole(), wrap(req => {
   const { username, name, role, email, phone, password } = req.body || {};
   if (!username || !name || !roles.roleExists(role)) throw new HttpError(400, 'Username, name and a valid role are required');
