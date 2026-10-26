@@ -1,12 +1,13 @@
 // Geofenced attendance and HR. The phone sends its GPS position (and a selfie) at clock-in, at presence checks during
 // the day and at clock-out; the server measures the distance to the work location (Haversine), decides inside / outside
 // the fence and flags what HR should look at: late, outside the fence, too few checks, impossible jumps, a changed network,
-// no clock-out. Leave requests go through approval and mark the days On Leave.
+// a fake-GPS app (reported by the Android app), no clock-out. Leave requests go through approval and mark the days On Leave.
 import { db, tx, audit, getSettings } from './db.js';
 import { getRow, insertRow, updateRow, listRows, HttpError } from './crud.js';
 import { hasFunction } from '../public/js/schema.js';
 import { saveAttachment } from './roles.js';
 import { submitForApproval } from './workflows.js';
+import { notify } from './notify.js';
 
 const now = () => new Date().toLocaleString('sv-SE').slice(0, 19);       // local 'YYYY-MM-DD HH:MM:SS'
 const today = () => now().slice(0, 10);
@@ -68,12 +69,15 @@ function position(body) {
   if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0)) throw new HttpError(400, 'No GPS position: allow location for this site in the phone, switch on GPS and try again');
   const max = rules().maxAccuracy;
   if (Number.isFinite(accuracy) && accuracy > max) throw new HttpError(400, `GPS is too rough (±${Math.round(accuracy)} m, needs ±${max} m or better): step outside or near a window, wait a few seconds and try again`);
-  return { lat, lng, accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null };
+  // mock: the Android app saw Location.isMock() (a fake-GPS app is feeding the position)
+  return { lat, lng, accuracy: Number.isFinite(accuracy) ? Math.round(accuracy) : null, mock: body.mock === true };
 }
+const MOCK = 'fake GPS app detected';
 
 // Signs of a faked position: an impossibly perfect fix, a jump faster than a vehicle, the network changing mid-day.
 function spoofFlags(p, prev, ip, inIp) {
   const f = [];
+  if (p.mock) f.push(MOCK);
   if (p.accuracy != null && p.accuracy < 2) f.push('GPS accuracy suspiciously perfect');
   if (prev) {
     const km = haversine(prev.lat, prev.lng, p.lat, p.lng) / 1000;
@@ -97,6 +101,8 @@ function savePhoto(attId, kind, dataUrl, user) {
 function addPing(att, emp, kind, p, f, ip, photoId, extraFlags = []) {
   const prev = db.prepare('SELECT lat, lng, at FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
   const flags = [...extraFlags, ...spoofFlags(p, prev, ip, att.in_ip), ...(f && !f.inside ? [`outside the fence (${f.distance} m)`] : [])];
+  // A faked position goes to HR at once (the first time in the day), not only when the day is closed.
+  if (p.mock && !String(att.flags || '').includes(MOCK)) notify({ fn: 'hr_manage', kind: 'attendance', title: `Fake GPS app detected: ${emp.name}`, body: `${kind} at ${now().slice(11, 16)} · the day is sent to HR review`, link: `#/view/attendance/${att.id}` }, { name: emp.name });
   insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind, lat: p.lat, lng: p.lng, accuracy_m: p.accuracy, distance_m: f ? f.distance : null,
     inside: f ? (f.inside ? 'Yes' : 'No') : null, ip: ip || null, photo_id: photoId, flags: flags.join('; ') || null }, { name: emp.name }, { system: true });
   return flags;
@@ -139,7 +145,7 @@ export function evaluate(attId) {
   if (a.check_in && hours < R.halfDay && !working) flags.add(`short day (${hours} h)`);
   const c = counts(a.id);
   const list = [...flags];
-  const review = a.review === 'Approved' || a.review === 'Rejected' ? a.review : (list.length || a.mode === 'Travel / outstation') && !working ? 'To review' : '';
+  const review = a.review === 'Approved' || a.review === 'Rejected' ? a.review : list.includes(MOCK) || ((list.length || a.mode === 'Travel / outstation') && !working) ? 'To review' : '';
   return updateRow('attendance', a.id, { hours, status, flags: list.join('\n') || null, review, checks: c.checks || 0, checks_inside: c.inside_n || 0, photo_checks: c.photos || 0, last_check: c.last ? hhmm(c.last) : null }, { name: 'system' }, { system: true });
 }
 
@@ -177,14 +183,15 @@ function openDay(emp) {
 }
 const siteOf = att => (att.location_id ? db.prepare('SELECT id, name, lat, lng, radius_m FROM work_locations WHERE id = ?').get(att.location_id) : null);
 
-// A presence check: automatic (every few minutes while the app is open) or with a photo (every few hours).
+// A presence check: automatic (every few minutes while the page is open, every 30 min from the Android app even when the
+// phone is locked, and at once when the app sees the phone leave the site radius) or with a photo (every few hours).
 export function check(user, body = {}, ip) {
   const emp = employeeOf(user);
   const att = openDay(emp);
   const p = position(body);
   const loc = siteOf(att);
   const f = loc ? fence(loc, p) : null;
-  const kind = body.photo ? 'Photo check' : 'Auto';
+  const kind = body.photo ? 'Photo check' : body.reason === 'geofence-exit' ? 'Geofence exit' : 'Auto';
   return tx(() => {
     const photoId = savePhoto(att.id, 'Presence check', body.photo, user);
     const flags = addPing(att, emp, kind, p, f, ip, photoId);

@@ -1,0 +1,24 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">WIESPL Attendance</string>
+    <string name="title_activity_main">WIESPL Attendance</string>
+    <string name="package_name">com.wiespl.attendance</string>
+    <string name="custom_url_scheme">com.wiespl.attendance</string>
+
+    <!-- Privacy notice shown at first start (MainActivity). Raise NOTICE_VERSION there when this text changes. -->
+    <string name="privacy_title">Privacy notice – location for attendance</string>
+    <string name="privacy_text"><![CDATA[
+<p>This app records your attendance for <b>Western India Electromedical Systems Pvt. Ltd. (WIESPL)</b>.</p>
+<p><b>What is collected</b><br>
+• Your GPS location (and its accuracy) when you clock in and out, when you press a check, and <b>every 30 minutes while you are clocked in</b> – also when the phone is locked or the app is closed – and at once when you leave your work site.<br>
+• A selfie at clock in / out and at photo checks, if your role needs it.<br>
+• Whether a fake-GPS (mock location) app is in use, and the network address the check came from.</p>
+<p><b>When</b><br>
+Only between your clock-in and your clock-out. While location is shared, a notification is always shown. Nothing is recorded outside your working day.</p>
+<p><b>Who sees it and where it is kept</b><br>
+WIESPL HR and your managers, in the WIESPL CRM on the company\'s own server. It is used for attendance, site visits and pay only, and is not sold or shared with others.</p>
+<p>Questions or corrections: contact WIESPL HR.</p>
+]]></string>
+    <string name="privacy_agree">I understand</string>
+    <string name="privacy_close">Close app</string>
+</resources>

@@ -70,6 +70,7 @@ All data is in `data/wiespl.db` (plus `-wal` / `-shm` files while running). Stop
 - `public/js/calc.js`: Basis of Design and BOQ / GST math, shared by browser and server.
 - `server/hooks.js`: numbering and totals. `server/workflows.js`: approvals, revise, convert, GRN, invoicing.
 - `server/seed.js`: default catalog, USP, terms and scope from the WIESPL quotation format.
+- `android-app/`: Android app for site technicians (Capacitor): the attendance page plus background location checks while clocked in, also with the phone locked, and fake-GPS detection. Build and install steps in [android-app/README.md](android-app/README.md).
 
 ## Office mini PC as the server (crm.wiespl.com)
 

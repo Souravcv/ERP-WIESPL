@@ -1152,7 +1152,7 @@ export const ENTITIES = {
       { key: 'attendance_id', label: 'Attendance', type: 'ref', ref: 'attendance' },
       { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees' },
       { key: 'at', label: 'Time', type: 'text' },
-      { key: 'kind', label: 'Kind', type: 'select', options: ['In', 'Auto', 'Photo check', 'Out'] },
+      { key: 'kind', label: 'Kind', type: 'select', options: ['In', 'Auto', 'Geofence exit', 'Photo check', 'Out'] },
       { key: 'lat', label: 'Latitude', type: 'number' },
       { key: 'lng', label: 'Longitude', type: 'number' },
       { key: 'accuracy_m', label: 'GPS Accuracy (m)', type: 'number' },

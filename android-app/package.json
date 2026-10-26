@@ -1,0 +1,17 @@
+{
+  "name": "wiespl-attendance-app",
+  "version": "1.0.0",
+  "description": "Android app for WIESPL attendance: the CRM in a WebView plus a background location service while clocked in",
+  "private": true,
+  "scripts": {
+    "sync": "cap sync android",
+    "open": "cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/core": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

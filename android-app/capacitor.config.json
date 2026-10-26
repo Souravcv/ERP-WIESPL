@@ -1,0 +1,14 @@
+{
+  "appId": "com.wiespl.attendance",
+  "appName": "WIESPL Attendance",
+  "webDir": "www",
+  "server": {
+    "url": "https://rut-flattop-appear.ngrok-free.dev/#/attend",
+    "cleartext": false,
+    "errorPath": "offline.html"
+  },
+  "android": {
+    "appendUserAgent": "WIESPL-Attendance-App/1.0",
+    "allowMixedContent": false
+  }
+}

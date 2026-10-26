@@ -6,8 +6,13 @@ let timer = null, wakeLock = null;
 const stop = () => { clearInterval(timer); timer = null; try { wakeLock?.release(); } catch { /* none */ } wakeLock = null; };
 window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/attend')) stop(); });
 
+// Inside the WIESPL Android app (android-app/): GPS with the fake-GPS flag, and a background service that sends the
+// location checks while clocked in, also with the phone locked. null in a normal browser.
+const app = window.Capacitor?.isNativePlatform?.() ? (method, options = {}) => window.Capacitor.nativePromise('AttendanceTracker', method, options) : null;
+
 // One GPS fix, as precise as the phone can give within 20 s.
 function locate() {
+  if (app) return app('getPosition').catch(e => { throw new Error(e?.message || String(e)); });
   return new Promise((resolve, reject) => {
     if (!window.isSecureContext) return reject(new Error('GPS works only on the secure (https) address of the CRM: open it on the phone through the https link'));
     if (!navigator.geolocation) return reject(new Error('This browser cannot give a location'));
@@ -72,7 +77,19 @@ export async function attendView(root) {
       status.style.color = r.inside === false ? 'var(--bad)' : 'var(--good)';
     } catch (e) { status.textContent = `Location check failed: ${e.message}`; status.style.color = 'var(--warn)'; }
   }
-  if (working) {
+  // In the app the background service does this (every R.pingMinutes and on leaving the site), screen on or off.
+  const bg = h('div');
+  if (app) {
+    const loc = working && me.sites.find(s => s.id === a.location_id);
+    (working ? app('start', { intervalMinutes: R.pingMinutes, site: loc ? { name: loc.name, lat: loc.lat, lng: loc.lng, radius: loc.radius_m || 200 } : undefined }) : app('stop'))
+      .then(r => {
+        if (!working) return;
+        status.textContent = `Location checks run in the background every ${R.pingMinutes} min, also with the phone locked`;
+        status.style.color = 'var(--good)';
+        if (r?.background === false) bg.replaceChildren(h('button.btn', { onclick: () => app('allowAlways') }, '⚙️ Set location to “Allow all the time” (recommended)'));
+      })
+      .catch(e => { if (working) { status.textContent = `Background location checks are off: ${e?.message || e}`; status.style.color = 'var(--bad)'; } });
+  } else if (working) {
     timer = setInterval(() => autoCheck(), 60e3);
     // one listener at a time (this screen is redrawn after each action)
     document.removeEventListener('visibilitychange', window.__attVis || (() => {}));
@@ -116,15 +133,18 @@ export async function attendView(root) {
         try { const r = await send('/hr/check', {}, true); toast(r.inside === false ? `Outside ${r.site}: ${dist(r.distance)} away` : 'Presence check saved'); reload(); } catch (e) { fail(e); }
       }) }, '📸 Presence check (photo)') : null,
       h('button.btn', { onclick: busy(async () => { await autoCheck(true); }) }, '📍 Check my location now'),
-      h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: async e => {
+      bg,
+      app ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: async e => {
         if (e.target.checked) { try { wakeLock = await navigator.wakeLock.request('screen'); toast('Screen stays on: location is checked every ' + R.pingMinutes + ' min'); } catch { toast('This phone cannot keep the screen on', true); e.target.checked = false; } }
         else { try { await wakeLock?.release(); } catch { /* none */ } wakeLock = null; }
       } }), 'Keep screen on at site (location checks keep running)'),
       h('button.btn.danger', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
         if (!confirm('Clock out now?')) return;
-        try { const r = await send('/hr/clock-out'); toast(`Clocked out: ${r.attendance.hours} h, ${r.attendance.status}`); stop(); reload(); } catch (e) { fail(e); }
+        try { const r = await send('/hr/clock-out'); toast(`Clocked out: ${r.attendance.hours} h, ${r.attendance.status}`); stop(); await app?.('stop'); reload(); } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock out (selfie + location)' : '📍 Clock out')) : null,
-    h('p.muted', { style: { fontSize: '12px', marginTop: '10px' } }, `Your location is taken only when you clock in / out, press a check, or while this screen is open during your working day (every ${R.pingMinutes} min). ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h. ` : ''}Add this page to the home screen to open it like an app.`));
+    h('p.muted', { style: { fontSize: '12px', marginTop: '10px' } }, app
+      ? `Your location is taken when you clock in / out, press a check, and from clock-in to clock-out every ${R.pingMinutes} min and when you leave the site, also with the phone locked (a notification shows while it is shared). ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h.` : ''}`
+      : `Your location is taken only when you clock in / out, press a check, or while this screen is open during your working day (every ${R.pingMinutes} min). ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h. ` : ''}Add this page to the home screen to open it like an app.`));
 
   const sites = h('div.card', h('h2', '📍 Where you can clock in today'), me.sites.length ? h('table.data', h('tbody', me.sites.map(s => h('tr', h('td', s.name, h('div.muted', { style: { fontSize: '11px' } }, `${s.kind} · within ${s.radius_m || 200} m`)), h('td', h('a', { href: maps(s.lat, s.lng), target: '_blank' }, 'Map')))))) : h('p.muted', 'No site is set for you today: ask HR / the service coordinator to assign your site.'));
 
@@ -142,5 +162,5 @@ export async function attendView(root) {
     h('tbody', me.month.map(d => h('tr', h('td.nowrap', fmtDate(d.date)), h('td', d.status, d.review === 'To review' ? h('span.muted', ' (HR checking)') : null), h('td', hm(d.check_in)), h('td', hm(d.check_out)), h('td.num', d.hours || ''))))) : h('p.muted', 'Nothing yet this month'));
 
   root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, sites, leave, month);
-  if (working) autoCheck();
+  if (working && !app) autoCheck();
 }
