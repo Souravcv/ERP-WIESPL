@@ -100,6 +100,11 @@ export function decide(approvalId, decision, comments, user) {
       patch.approval_stage = next.stage;
     } else {
       patch.status = 'Approved';
+      // A revised PO with material already in: back to partly received (or closed when everything is in).
+      if (d.entity === 'purchase_orders') {
+        const lines = (getRow(d.entity, ap.doc_id).lines || []).filter(l => Number(l.qty) > 0);
+        if (lines.some(l => Number(l.received) > 0)) patch.status = lines.every(l => Number(l.received) >= Number(l.qty) - 1e-9) ? 'Closed' : 'Partially Received';
+      }
       if (STAGED.includes(d.entity)) patch.approval_stage = null;
       if (d.entity !== 'purchase_orders' && !d.noLines) patch.approved_by = user.name;
       if (d.entity === 'quotations' || d.entity === 'requisitions') patch.approved_at = stamp();
@@ -207,4 +212,18 @@ export function poCommercial(id, body, user) {
     'freight_charges', 'packing_charges', 'installation_charges', 'transport_charges', 'other_charges', 'other_charges_label', 'charges_gst']) if (body?.[k] !== undefined) patch[k] = body[k];
   if (Array.isArray(body?.payment_schedule)) patch.payment_schedule = body.payment_schedule.filter(p => p.due_date || p.amount || p.percent || p.description || p.trigger === 'After inward (GRN)');
   return updateRow('purchase_orders', id, patch, user, { system: true });
+}
+
+// An approved / sent / partly received PO changes only through Revise: back to Draft as the next revision, then the
+// approvals again. Material already received stays on its lines; after approval the PO is "Partially Received" again.
+export function revisePO(id, user) {
+  const po = getRow('purchase_orders', id);
+  if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, `Only an approved, sent or partly received PO is revised (this one is ${po.status})`);
+  return tx(() => {
+    db.prepare("UPDATE approvals SET status = 'Rejected', comments = COALESCE(comments, 'Superseded by revision') WHERE doc_type = 'Purchase Order' AND doc_id = ? AND status = 'Pending'").run(Number(id));
+    const out = updateRow('purchase_orders', po.id, { status: 'Draft', revision: (Number(po.revision) || 0) + 1, approval_stage: null, approved_by: null,
+      purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null }, user, { system: true });
+    audit(user.name, 'purchase_orders', po.id, `revised to Rev. ${out.revision}`, `was ${po.status}, total ${po.total}`);
+    return out;
+  });
 }

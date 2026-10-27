@@ -541,6 +541,14 @@ api.post('/service/import/complaints', need('service_tickets'), express.raw({ ty
 api.post('/service/import/amc', need('amc_contracts'), express.raw({ type: () => true, limit: '20mb' }), wrap(req => svc.importAmc(req.body, req.user)));
 
 // ---------------------------------------------------------------- draft issue slips / dispatch challans / transfers
+const storeView = req => { if (!canView('stock_moves', req.user.role)) throw new HttpError(403, 'No access to stock movements'); };
+api.get('/stock/docs', wrap(req => { storeView(req); return stock.stockDocs(req.query); }));
+api.get('/stock/doc', wrap(req => { storeView(req); return stock.stockDoc(req.query); }));
+api.put('/stock/grn', need('stock_moves'), wrap(req => {
+  if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Only the store (people allowed to post stock) can change a GRN');
+  return stock.editGrn({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user);
+}));
+api.post('/purchase_orders/:id/revise', need('purchase_orders'), wrap(req => wf.revisePO(req.params.id, req.user)));
 api.post('/stock/drafts', need('stock_moves'), wrap(req => insertRow('stock_drafts', { ...draftRow(req.body), status: 'Draft', prepared_by: req.user.name }, req.user, { system: true })));
 api.put('/stock/drafts/:id', need('stock_moves'), wrap(req => {
   const d = getRow('stock_drafts', req.params.id);

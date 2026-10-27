@@ -328,7 +328,7 @@ export async function stockEntryView(root) {
   }
   root.replaceChildren(
     h('div.page-head', h('h1', draft ? `🔁 Stock Entry – draft #${draft.id}` : '🔁 Stock Entry'), h('div.actions', h('a.btn', { href: '#/list/stock_drafts?status=Draft' }, '📝 Drafts'),
-      h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn', { href: '#/list/stock_moves' }, 'All movements'),
+      h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn', { href: '#/stock-movements' }, '🗂️ All movements'),
       canWrite('stock_moves', state.user.role) ? h('a.btn', { href: '#/import?kind=items', title: 'Upload the WIESPL Smart Store workbook (items, opening stock and all inward / outward / transfer / return / scrap entries), or a stock movements sheet' }, '📥 Import Excel') : null,
       canWrite('stock_moves', state.user.role) ? saveBtn : null)),
     h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap. Issue slips, dispatch challans and transfers are saved as a draft and reduce the stock only when the store posts them. Numbers like 001/2026-27 are given per type and restart every April (Settings → Document numbers to continue your own series).'),

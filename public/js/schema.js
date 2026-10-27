@@ -1338,6 +1338,7 @@ export const ENTITIES = {
     related: [['vendor_bills', 'po_id'], ['vendor_payments', 'po_id'], ['debit_notes', 'po_id']],
     fields: [
       { key: 'po_no', label: 'PO No', type: 'text', readonly: true, hint: 'Auto: 008/2026-27, restarts every April' },
+      { key: 'revision', label: 'Revision', type: 'number', readonly: true, hint: 'Rev. 1, 2 … each time an approved PO is revised' },
       { key: 'date', label: 'PO Date', type: 'date', default: 'today', required: true },
       { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', required: true },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
@@ -1670,6 +1671,7 @@ export const ENTITIES = {
       { key: 'invoice_date', label: 'Invoice Date', type: 'date', showIf: { type: ['INWARD'] } },
       { key: 'po_id', label: 'Against PO', type: 'ref', ref: 'purchase_orders', showIf: { type: ['INWARD'] } },
       { key: 'po_no', label: 'PO No (text)', type: 'text', showIf: { type: ['INWARD'] } },
+      { key: 'po_line', label: 'PO Line', type: 'number', hidden: true },
       { key: 'hsn', label: 'HSN Code', type: 'text', showIf: { type: ['INWARD'] } },
       { key: 'gst_rate', label: 'GST %', type: 'number', showIf: { type: ['INWARD'] } },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', showIf: { type: ['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'] } },

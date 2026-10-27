@@ -680,6 +680,11 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
       if (can('stock_moves') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('a.btn.good', { href: `#/stock-entry?type=INWARD&po=${id}` }, '📦 Receive Goods (GRN)'));
       if (can(entity) && st === 'Partially Received') A.push(h('button.btn', { onclick: status('Closed', 'Close this PO even though some quantity is still pending?') }, 'Short-close'));
+      if (can(entity) && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('button.btn', { title: 'Change quantities, rates, terms or add items: back to Draft as the next revision, then the approvals again', onclick: go(async () => {
+        const rec = (row.lines || []).some(l => Number(l.received) > 0);
+        if (!(await confirmBox(`Revise PO ${row.po_no}? It goes back to Draft as Rev. ${(Number(row.revision) || 0) + 1}; after your changes, submit it for approval again.${rec ? ' Material already received stays on its lines (those lines cannot be removed or reduced below what came in); after approval the PO is Partially Received again.' : ''}`))) return;
+        await post(`/purchase_orders/${id}/revise`); toast('Back to Draft for the revision'); reload();
+      }) }, '↩ Revise PO'));
       if (can(entity) && st === 'Rejected') A.push(h('button.btn', { onclick: status('Draft') }, 'Back to Draft'));
       if (can(entity) && ['Draft', 'Approved', 'Sent', 'Rejected'].includes(st)) A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this PO?') }, 'Cancel PO'));
       // Money on this PO: vendor bill, payment request (advance per terms / against a bill), debit note.

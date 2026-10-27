@@ -8,6 +8,7 @@ import { printView } from './views/print.js';
 import { signatureDialog } from './signs.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
+import { stockMovementsView, grnEditView } from './views/stockdocs.js';
 import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
 import { storeCheckView } from './views/storecheck.js';
@@ -26,7 +27,7 @@ const EXTRA_LINKS = {
   'Sales & Projects': [['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -93,6 +94,8 @@ async function route() {
       case 'import': await importView(view); break;
       case 'stock-entry': await stockEntryView(view); break;
       case 'stock-summary': await stockSummaryView(view); break;
+      case 'stock-movements': await stockMovementsView(view); break;
+      case 'grn-edit': await grnEditView(view); break;
       case 'po-tracker': await poTrackerView(view); break;
       case 'boq': await boqView(view, a); break;
       case 'bom': await bomView(view, a); break;

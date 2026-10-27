@@ -84,7 +84,7 @@ export function stockEntry(body, user) {
         ...header, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: Number(l.qty),
         rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
         remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
-        hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: lineProject ? Number(lineProject) : null,
+        hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: lineProject ? Number(lineProject) : null, po_line: idx >= 0 ? idx : null,
       }, user, { system: true });
       created.push(row.id);
       if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
@@ -325,4 +325,124 @@ export function accountsDashboard() {
       collected_by_month: pastMonths.map(m => ({ month: m, value: round2(coll.find(c => c.mo === m)?.v || 0) })),
     },
   };
+}
+
+// ---------------------------------------------------------------- movements as documents
+// One row per slip: all the items of one GRN / issue slip / transfer together (same type, number and date).
+const DOC_KEY = "COALESCE(NULLIF(m.doc_no, ''), '#' || m.id)";
+export function stockDocs(q = {}) {
+  const where = ['1 = 1'], args = [];
+  if (q.type) { where.push('m.type = ?'); args.push(q.type); }
+  if (q.from) { where.push('m.date >= ?'); args.push(q.from); }
+  if (q.to) { where.push('m.date <= ?'); args.push(q.to); }
+  if (q.po === 'without') where.push("m.type = 'INWARD' AND m.po_id IS NULL");
+  if (q.po === 'with') where.push('m.po_id IS NOT NULL');
+  if (q.q) {
+    where.push(`(m.doc_no LIKE ? OR m.supplier LIKE ? OR m.invoice_no LIKE ? OR m.po_no LIKE ? OR m.issued_to LIKE ? OR m.to_location LIKE ? OR v.name LIKE ? OR p.name LIKE ? OR i.name LIKE ? OR i.code LIKE ?)`);
+    args.push(...Array(10).fill(`%${q.q}%`));
+  }
+  const rows = db.prepare(`SELECT m.type, ${DOC_KEY} doc_key, MAX(NULLIF(m.doc_no, '')) doc_no, m.date, COUNT(*) items, ROUND(SUM(m.qty), 3) qty,
+      ROUND(SUM(COALESCE(m.qty, 0) * COALESCE(m.rate, 0)), 2) value, MAX(v.name) vendor, MAX(m.supplier) supplier, MAX(m.invoice_no) invoice_no,
+      GROUP_CONCAT(DISTINCT m.po_no) po_no, COUNT(m.po_id) with_po, MAX(p.name) project, COUNT(DISTINCT m.project_id) projects, MAX(m.issued_to) issued_to,
+      MAX(m.to_location) to_location, MAX(m.created_by) created_by, MIN(m.id) first_id
+    FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id
+    WHERE ${where.join(' AND ')} GROUP BY m.type, doc_key, m.date ORDER BY m.date DESC, first_id DESC LIMIT ?`).all(...args, Math.min(Number(q.limit) || 300, 2000));
+  const counts = Object.fromEntries(db.prepare("SELECT type, COUNT(DISTINCT type || COALESCE(NULLIF(doc_no, ''), '#' || id) || date) n FROM stock_moves GROUP BY type").all().map(r => [r.type, r.n]));
+  return { rows, counts };
+}
+
+// The lines of one slip; doc_key is the number, or '#id' for a single entry without a number.
+function docMoves(type, docKey, date) {
+  const byId = /^#(\d+)$/.exec(docKey || '');
+  const rows = byId ? db.prepare('SELECT id FROM stock_moves WHERE id = ? AND type = ?').all(Number(byId[1]), type)
+    : db.prepare('SELECT id FROM stock_moves WHERE type = ? AND doc_no = ? AND date = ? ORDER BY id').all(type, docKey, date);
+  return rows.map(r => getRow('stock_moves', r.id));
+}
+export function stockDoc(q) {
+  const moves = docMoves(q.type, q.doc, q.date);
+  if (!moves.length) throw new HttpError(404, 'No such slip');
+  const poIds = [...new Set(moves.map(m => m.po_id).filter(Boolean))];
+  const pos = poIds.map(id => getRow('purchase_orders', id));
+  return { type: q.type, doc_no: moves[0].doc_no, date: moves[0].date, moves, pos };
+}
+
+// PO line a received item belongs to: the line saved on the GRN, else the first line of that item (pending first).
+function lineOf(po, itemId, saved, wantPending = true) {
+  if (Number.isInteger(saved) && po.lines[saved]) return saved;
+  const same = x => x.item_id && Number(x.item_id) === Number(itemId);
+  let i = wantPending ? po.lines.findIndex(x => same(x) && (Number(x.received) || 0) < (Number(x.qty) || 0)) : po.lines.findIndex(x => same(x) && (Number(x.received) || 0) > 0);
+  if (i < 0) i = po.lines.findIndex(same);
+  return i;
+}
+const PO_OPEN = ['Approved', 'Sent', 'Partially Received', 'Closed', 'Received'];
+const fullyIn = po => po.lines.filter(x => Number(x.qty) > 0).every(x => (Number(x.received) || 0) >= Number(x.qty) - 1e-9);
+const anyIn = po => po.lines.some(x => (Number(x.received) || 0) > 0);
+
+// Edit a GRN: supplier / invoice details, quantities and prices, and which PO (and PO line) each item came against.
+// The received quantities move from the old PO lines to the new ones, so the PO tracker stays right.
+export function editGrn(body, user) {
+  const moves = docMoves('INWARD', body.doc, body.date);
+  if (!moves.length) throw new HttpError(404, 'No such GRN');
+  const lines = new Map((body.lines || []).map(l => [Number(l.id), l]));
+  for (const id of lines.keys()) if (!moves.some(m => m.id === id)) throw new HttpError(400, 'A line does not belong to this GRN');
+  const newPoId = body.po_id ? Number(body.po_id) : null;
+  return tx(() => {
+    const pos = new Map();
+    const poOf = id => pos.get(id) || pos.set(id, getRow('purchase_orders', id)).get(id);
+    const was = new Map();
+    // 1. Take the old receipt off its PO lines.
+    for (const m of moves) {
+      if (!m.po_id) continue;
+      const po = poOf(m.po_id);
+      if (!was.has(po.id)) was.set(po.id, fullyIn(po));
+      const i = lineOf(po, m.item_id, m.po_line, false);
+      if (i >= 0) po.lines[i].received = round2(Math.max(0, (Number(po.lines[i].received) || 0) - Number(m.qty)));
+    }
+    let newPo = null;
+    if (newPoId) {
+      newPo = poOf(newPoId);
+      if (!was.has(newPo.id)) was.set(newPo.id, fullyIn(newPo));
+      if (!PO_OPEN.includes(newPo.status) && newPo.status !== 'Archived (old)') throw new HttpError(400, `PO ${newPo.po_no} is ${newPo.status}; attach an approved PO`);
+    }
+    // 2. Stock check: a smaller quantity must not take the stock below zero.
+    if (!body.allowNegative) {
+      const short = [];
+      for (const m of moves) {
+        const l = lines.get(m.id);
+        const less = l && l.qty !== undefined ? Number(m.qty) - Number(l.qty) : 0;
+        if (less > 1e-9 && stockOf(m.item_id) - less < -1e-9) short.push(`${m.item_id_label}: in stock ${round2(stockOf(m.item_id))}, reducing the GRN by ${round2(less)}`);
+      }
+      if (short.length) throw Object.assign(new HttpError(409, `Not enough stock:\n${short.join('\n')}`), { code: 'SHORT_STOCK' });
+    }
+    // 3. Save each line and put its quantity on the new PO line.
+    const head = {};
+    for (const k of ['vendor_id', 'supplier', 'invoice_no', 'invoice_date', 'date']) if (body[k] !== undefined) head[k] = body[k] === '' ? null : body[k];
+    if (!head.date) delete head.date;
+    for (const m of moves) {
+      const l = lines.get(m.id) || {};
+      const qty = l.qty !== undefined && l.qty !== '' ? Number(l.qty) : Number(m.qty);
+      if (!(qty > 0)) throw new HttpError(400, `Enter a quantity for ${m.item_id_label}`);
+      const rate = l.rate !== undefined && l.rate !== '' && l.rate != null ? Number(l.rate) : m.rate;
+      let poLine = null;
+      if (newPo) {
+        poLine = lineOf(newPo, m.item_id, Number.isInteger(l.po_line) ? l.po_line : null);
+        if (poLine >= 0) newPo.lines[poLine].received = round2((Number(newPo.lines[poLine].received) || 0) + qty);
+        else poLine = null;
+      }
+      const project = m.project_id || (poLine != null && newPo.lines[poLine].project_id) || newPo?.project_id || null;
+      updateRow('stock_moves', m.id, { ...head, qty, rate, po_id: newPo?.id || null, po_no: newPo ? newPo.po_no : (newPoId === null && body.po_no !== undefined ? body.po_no || null : m.po_no),
+        po_line: poLine, vendor_id: head.vendor_id ?? m.vendor_id ?? newPo?.vendor_id ?? null, project_id: project }, user, { system: true });
+    }
+    // 4. PO status follows what has come in (an old archived PO keeps its status).
+    for (const po of pos.values()) {
+      const patch = { lines: po.lines };
+      if (['Approved', 'Sent', 'Partially Received'].includes(po.status) || (po.status === 'Closed' && was.get(po.id))) {
+        patch.status = fullyIn(po) ? 'Closed' : anyIn(po) ? 'Partially Received' : (po.status === 'Sent' ? 'Sent' : 'Approved');
+      }
+      updateRow('purchase_orders', po.id, patch, user, { system: true });
+      if (newPo && po.id === newPo.id) poInwardDues(po.id, moves[0].date);
+    }
+    audit(user.name, 'stock_moves', moves[0].id, `GRN ${moves[0].doc_no} edited`, newPo ? `against PO ${newPo.po_no}` : 'no PO');
+    return stockDoc({ type: 'INWARD', doc: body.doc, date: head.date || body.date });
+  });
 }

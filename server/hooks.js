@@ -138,6 +138,21 @@ export function beforeSave(name, row, existing, user) {
         const p = db.prepare('SELECT project_no, code, name FROM projects WHERE id = ?').get(projectId);
         if (p) row.project_note = [p.project_no || p.code, p.name].filter(Boolean).join(' - ');
       }
+      // Revising a PO with material received: those lines stay where they are and cannot go below what came in.
+      if (existing && existing.status === 'Draft' && 'lines' in row) {
+        const oldL = parse(existing.lines, []), newL = parse(row.lines, []);
+        oldL.forEach((o, i) => {
+          const rec = Number(o.received) || 0;
+          if (!rec) return;
+          const n = newL[i];
+          const name = o.description || o.spec || `line ${i + 1}`;
+          const bad = msg => Object.assign(new Error(`${String(name).split('\n')[0]}: ${rec} already received, ${msg}`), { status: 400 });
+          if (!n || (o.item_id && Number(n.item_id) !== Number(o.item_id))) throw bad('so this line cannot be removed or moved. Add new lines below the existing ones.');
+          if (Number(n.qty) < rec - 1e-9) throw bad('the quantity cannot be less than that');
+          if (Number(n.received || 0) !== rec) { n.received = rec; }
+        });
+        row.lines = typeof row.lines === 'string' ? JSON.stringify(newL) : newL;
+      }
       // Totals: items + freight / packing / installation / transport / other charges (taxable), GST by rate.
       const po = { ...(existing || {}), ...row, lines: parse(row.lines ?? existing?.lines, []) };
       const vendor = vendorId && db.prepare('SELECT state, contact_person, phone FROM vendors WHERE id = ?').get(vendorId);

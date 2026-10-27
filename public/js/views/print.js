@@ -263,7 +263,7 @@ function poDoc(po, v, s) {
   return h('div.doc', h('div.page', { style: { fontSize: '11.5px' } },
     companyHead(s),
     h('table', h('tbody',
-      h('tr', h('th', { style: { width: '13%' } }, 'P.O. No.'), td(h('b', po.po_no)), h('th', { rowspan: 2, style: { fontSize: '16px', textAlign: 'center' } }, 'PURCHASE ORDER'), h('th', 'GST No.'), td(s.gstin)),
+      h('tr', h('th', { style: { width: '13%' } }, 'P.O. No.'), td([h('b', po.po_no), po.revision ? ` Rev. ${po.revision}` : '']), h('th', { rowspan: 2, style: { fontSize: '16px', textAlign: 'center' } }, 'PURCHASE ORDER'), h('th', 'GST No.'), td(s.gstin)),
       h('tr', h('th', 'P.O. Date'), td(fmtDate(po.date).replaceAll('/', '.')), h('th', 'PAN No.'), td(s.pan)))),
     h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
       td([h('b', 'To'), h('br'), h('b', v.name), h('br'), ...multiline(v.address || ''), [v.city, v.state, v.pincode].filter(Boolean).length ? [h('br'), [v.city, v.state, v.pincode].filter(Boolean).join(', ')] : null,
@@ -423,7 +423,7 @@ function stockSlipDoc(type, docNo, moves, s) {
   const info = [
     ['No', docNo], ['Date', fmtDate(m0.date)],
     type === 'INWARD' && ['Supplier', m0.vendor_id_label || m0.supplier], type === 'INWARD' && ['Invoice', [m0.invoice_no, fmtDate(m0.invoice_date)].filter(Boolean).join(' dt. ')],
-    type === 'INWARD' && ['PO No', m0.po_no || m0.po_id_label], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
+    type === 'INWARD' && ['PO No', [...new Set(moves.map(m => m.po_no || m.po_id_label).filter(Boolean))].join(', ') || 'not linked'], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
     type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
     ['Reason', m0.reason], ['Purpose', m0.purpose]].filter(x => x && x[1]);
   return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
@@ -431,7 +431,7 @@ function stockSlipDoc(type, docNo, moves, s) {
     h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
     h('table', { style: { marginTop: '8px' } },
       h('thead', h('tr', ['Sr', 'Item Code', 'Item Name', 'Qty', 'UOM', 'Rate', 'Value', 'Remark'].map((x, i) => h('th' + ([3, 5, 6].includes(i) ? '.num' : ''), x)))),
-      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]), h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · ')),
+      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]), h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · '), type === 'INWARD' && m.po_no ? ` (PO ${m.po_no})` : ''),
         h('td.num', m.qty), h('td', m.uom || ''), h('td.num', inr(m.rate)), h('td.num', inr(m.value)), h('td', m.remarks || '')))),
       h('tfoot', h('tr', h('td', { colspan: 6 }, 'Total'), h('td.num', inr(total)), h('td')))),
     h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
