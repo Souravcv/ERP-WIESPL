@@ -38,7 +38,9 @@ export async function stockMovementsView(root) {
         h('table.data', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', priced ? 'Rate' : null, priced ? 'Value' : null, r.type === 'INWARD' ? 'PO' : 'Project', 'Remark'].filter(x => x !== null).map((x, i) => h('th' + (['Qty', 'Rate', 'Value'].includes(x) ? '.num' : ''), x)))),
           h('tbody', d.moves.map((m, i) => h('tr', h('td.muted', i + 1), h('td', h('a', { href: `#/view/items/${m.item_id}` }, m.item_id_label)), h('td.num', m.qty), h('td', m.uom || ''),
             priced ? h('td.num', inr(m.rate)) : null, priced ? h('td.num', inr(m.value)) : null,
-            h('td', r.type === 'INWARD' ? (m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : m.project_id_label || ''), h('td', m.remarks || ''))))),
+            h('td', r.type === 'INWARD' ? (m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : m.project_id_label || ''), h('td', m.remarks || '')))),
+          h('tfoot', h('tr', h('td'), h('td', h('b', `Total (${d.moves.length} item${d.moves.length === 1 ? '' : 's'})`)), h('td.num', h('b', round2(d.moves.reduce((a, m) => a + (Number(m.qty) || 0), 0)))), h('td'),
+            priced ? h('td') : null, priced ? h('td.num', h('b', inr(d.moves.reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null, h('td'), h('td')))),
         h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
           h('a.btn.small', { href: printUrl(r), target: '_blank' }, '🖨 Print'),
           r.type === 'INWARD' && mayEdit ? h('a.btn.small.primary', { href: editUrl(r) }, r.with_po ? '✏ Edit GRN / change PO' : '📎 Attach PO / edit GRN') : null)));
@@ -57,21 +59,24 @@ export async function stockMovementsView(root) {
       for (const r of rows) {
         const key = `${r.type}|${r.doc_key}|${r.date}`;
         const exp = open.has(key);
-        const cell = h('td', { colspan: 9 });
+        const cell = h('td', { colspan: 10 });
         body.push(h('tr.clickable', { onclick: () => { exp ? open.delete(key) : open.add(key); load(); } },
           h('td', exp ? '▾' : '▸'), h('td.nowrap', fmtDate(r.date)), h('td.nowrap', h('b', r.doc_no || '—')),
           !type ? h('td.nowrap', MOVE_TYPES[r.type]?.label || r.type) : null,
           h('td.clip', { title: party(r) }, party(r)),
           type === 'INWARD' || !type ? h('td.nowrap', r.type !== 'INWARD' ? '' : r.with_po ? r.po_no : h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null,
-          h('td.num', `${r.items} item${r.items === 1 ? '' : 's'}`), priced ? h('td.num', PRICED.includes(r.type) ? inr(r.value) : '') : null, h('td.muted', r.created_by || '')));
+          h('td.num', `${r.items} item${r.items === 1 ? '' : 's'}`), h('td.num', round2(r.qty)), priced ? h('td.num', PRICED.includes(r.type) ? inr(r.value) : '') : null, h('td.muted', r.created_by || '')));
         if (exp) { body.push(h('tr', cell)); lines(r, cell); }
       }
       out.replaceChildren(
         h('p.muted', `${rows.length}${rows.length >= 300 ? '+' : ''} slips${noPo && (type === 'INWARD' || !type) ? ` · ${noPo} GRN(s) without a PO: open one and use “Attach PO”` : ''}. Click a slip to see its items.`),
         rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
           h('thead', h('tr', h('th'), h('th', 'Date'), h('th', 'No'), !type ? h('th', 'Type') : null, h('th', type === 'INWARD' ? 'Supplier · invoice' : 'Project / to'),
-            type === 'INWARD' || !type ? h('th', 'PO') : null, h('th.num', 'Items'), priced ? h('th.num', 'Value') : null, h('th', 'By'))),
-          h('tbody', body)))) : h('div.empty', 'No slips match'));
+            type === 'INWARD' || !type ? h('th', 'PO') : null, h('th.num', 'Items'), h('th.num', 'Total Qty'), priced ? h('th.num', 'Value') : null, h('th', 'By'))),
+          h('tbody', body),
+          h('tfoot', h('tr', h('td'), h('td', { colspan: !type ? 3 : 2 }, h('b', `Total of ${rows.length} slip${rows.length === 1 ? '' : 's'}`)), h('td'), type === 'INWARD' || !type ? h('td') : null,
+            h('td.num', h('b', `${rows.reduce((a, r) => a + r.items, 0)} items`)), h('td.num', h('b', round2(rows.reduce((a, r) => a + (Number(r.qty) || 0), 0)))),
+            priced ? h('td.num', h('b', money(rows.filter(r => PRICED.includes(r.type)).reduce((a, r) => a + (Number(r.value) || 0), 0)))) : null, h('td')))))) : h('div.empty', 'No slips match'));
     } catch (e) { fail(e); }
   }
   let timer;
