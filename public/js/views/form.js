@@ -1,5 +1,5 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS } from '../schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
@@ -605,6 +605,30 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (row.status === 'Posted' && row.doc_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.type}?doc=${encodeURIComponent(row.doc_no)}`, target: '_blank' }, '🖨 Issue / transfer slip'));
       if (row.challan_id) A.push(h('a.btn', { href: `#/view/challans/${row.challan_id}` }, '🚚 Challan'));
       break;
+    case 'dispatch_plans': {
+      const st = row.status, open = !['Dispatched', 'Delivered', 'Cancelled'].includes(st);
+      if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📂 Work order (master)'));
+      if (row.project_id) A.push(h('a.btn', { href: `#/planner/${row.project_id}` }, '📅 Project Gantt'));
+      if (can(entity) && open) A.push(h('button.btn', { title: 'Add the work-order material still to send', onclick: go(async () => {
+        const dept = h('select', ['All departments', ...WO_DEPARTMENTS, '(not assigned)'].map(x => h('option', x)));
+        if (!(await modal('Fill from the work order', h('div.grid', h('p', 'Adds every work-order line still pending (with its pending quantity) to this plan. Remove what is not going on this dispatch.'), h('label', 'Department', dept)),
+          [{ label: 'Cancel', value: false }, { label: 'Add pending material', cls: 'primary', value: true }]))) return;
+        const r = await post(`/dispatch_plans/${id}/fill`, { department: dept.value === 'All departments' ? '' : dept.value });
+        toast(`${r.added} line(s) added`); reload();
+      }) }, '📥 Fill from work order'));
+      if (can(entity) && st === 'Planned') A.push(h('button.btn', { onclick: status('Material ready') }, '✔ Material ready'));
+      if (can(entity) && open) A.push(h('button.btn.good', { onclick: go(async () => {
+        const ch = (await api(`/challans?project_id=${row.project_id}`)).filter(c => c.status !== 'Cancelled').map(c => ({ id: c.id, label: `${c.challan_no} · ${fmtDate(c.date)} · ${c.status}` }));
+        let pick = null;
+        const { itemPicker } = await import('./form.js');
+        if (!(await modal('Dispatched', h('div.grid', h('p', 'Which delivery challan did this material go on? (Make the challan from the work order or the stock entry first.)'),
+          h('label', 'Delivery challan', itemPicker(ch, null, { onPick: x => { pick = x; } }))), [{ label: 'Cancel', value: false }, { label: 'Mark dispatched', cls: 'good', value: true }]))) return;
+        await api(`/dispatch_plans/${id}`, { method: 'PUT', body: { status: 'Dispatched', challan_id: pick } }); toast('Dispatched: the Gantt milestone is done'); reload();
+      }) }, '🚚 Mark dispatched'));
+      if (can(entity) && open) A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this dispatch plan? Its milestone is taken off the Gantt.') }, 'Cancel plan'));
+      if (row.late === 'Yes') A.push(h('b', { style: { color: 'var(--bad)' } }, '⚠ planned date passed'));
+      break;
+    }
     case 'challans': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/challan/${id}`, target: '_blank' }, '🖨 Print Challan'));
@@ -675,6 +699,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'purchase_orders': {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/po/${id}`, target: '_blank' }, '🖨 Print PO'));
+      if (row.requisition_id) A.push(h('a.btn', { href: `#/view/requisitions/${row.requisition_id}`, title: 'Open the requisition this PO was made from' }, `📝 Requisition ${row.requisition_id_label || ''}`));
       if (st === 'Archived (old)') { A.push(h('span.muted', 'Old PO, kept to look up: not counted in payables, analysis or receipts')); break; }
       if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval'));
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));

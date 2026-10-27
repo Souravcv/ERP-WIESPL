@@ -32,6 +32,7 @@ import * as svc from './service.js';
 import * as hr from './hr.js';
 import * as wt from './worktasks.js';
 import * as planner from './schedule.js';
+import * as planning from './planning.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -409,6 +410,8 @@ api.get('/receivables/ageing', wrap(req => { arView(req); return recv.ageing(req
 api.get('/customer-statement/:id', wrap(req => { arView(req); return recv.customerStatement(req.params.id, req.query); }));
 api.get('/receipts-register', wrap(req => { arView(req); return recv.receiptsRegister(req.query); }));
 // Project Planner (Gantt): the schedule worked out, saved from the grid, started from a template, baselined.
+api.post('/dispatch_plans/:id/fill', need('dispatch_plans'), wrap(req => planning.fillPlan(req.params.id, req.body, req.user)));
+api.post('/boqs/:id/departments', wrap(req => planning.setDepartments(req.params.id, req.body, req.user)));
 api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
 api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));
 api.post('/projects/:id/schedule/template', wrap(req => planner.applyTemplate(req.params.id, req.body, req.user)));
@@ -670,6 +673,7 @@ api.get('/sales_orders/:id/billing', wrap(req => { if (!canView('invoices', req.
 // Status moves that are allowed outside the edit form, per document state.
 const TRANSITIONS = {
   quotations: { Approved: ['Sent', 'Lost'], Sent: ['Won', 'Lost'], Rejected: ['Draft'], Lost: ['Draft'] },
+  dispatch_plans: { Planned: ['Material ready', 'Cancelled'], 'Material ready': ['Planned', 'Cancelled'] },
   purchase_orders: { Draft: ['Cancelled'], Approved: ['Sent', 'Cancelled'], Sent: ['Cancelled'], Rejected: ['Draft', 'Cancelled'], 'Partially Received': ['Closed'] },
   requisitions: { Draft: ['Closed'], Rejected: ['Draft', 'Closed'], Approved: ['Closed'], 'Converted to PO': ['Closed'] },
   challans: { Draft: ['Cancelled'] },

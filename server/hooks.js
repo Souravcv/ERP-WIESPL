@@ -6,6 +6,7 @@ import { prefillProduction } from './storeflow.js';
 import { parseLatLng, prepLeave, markLeave } from './hr.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
 import { applyBaseline } from './schedule.js';
+import { afterDispatchPlan, challanToPlan } from './planning.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -122,6 +123,11 @@ export function beforeSave(name, row, existing, user) {
     }
     case 'sales_orders':
       if (!existing && !row.so_no) row.so_no = docNo('so', date, (n, fy) => `${prefix()}/SO/${fy}/${n}`);
+      break;
+    case 'dispatch_plans':
+      if (!existing && !row.plan_no) row.plan_no = docNo('dispatch_plan', date, (n, fy) => `DP-${n}/20${fy}`);
+      if (!existing && !row.planned_by) row.planned_by = user?.name || null;
+      if (row.status === 'Dispatched' && existing?.status !== 'Dispatched' && !(row.dispatched_on ?? existing?.dispatched_on)) row.dispatched_on = new Date().toLocaleString('sv-SE').slice(0, 10);
       break;
     case 'projects':
       if (!existing && !row.code) row.code = docNo('project', row.start_date || date, (n, fy) => `PRJ/${fy}/${n}`);
@@ -624,6 +630,8 @@ export function afterSave(name, id, user, deleted) {
   if (name === 'leave_requests' && !deleted) markLeave(id, user);
   if (name === 'work_tasks' && !deleted) afterSaveTask(id, user);
   if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
+  if (name === 'dispatch_plans' && !deleted) afterDispatchPlan(id, user);
+  if (name === 'challans' && !deleted) challanToPlan(id);
   if (name === 'credit_notes') {
     const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);
     if (cn?.invoice_id) refreshReceivables({ invoiceId: cn.invoice_id });

@@ -1,7 +1,7 @@
 // Work order window: upload the client's work order, see each section's material, what is sent and what is pending,
 // and dispatch (the delivery challan is created automatically).
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, reservedRetry } from '../ui.js';
-import { canWrite } from '../schema.js';
+import { canWrite, WO_DEPARTMENTS, ROLE_DEPARTMENT } from '../schema.js';
 import { itemPicker, attachments } from './form.js';
 
 const firstLine = s => String(s || '').split('\n')[0];
@@ -83,6 +83,27 @@ export async function boqView(root, boqId) {
   let tab = sessionStorage.getItem(`boq-tab-${boqId}`);
   if (tab !== 'All' && !sections.includes(tab)) tab = sections.length > 1 ? 'All' : sections[0] || 'All';
   const filter = h('select', { style: { width: 'auto' } }, ['All material', 'Pending', 'Sent / in transit', 'Delivered ✓', 'Qty TBD'].map(t => h('option', t)));
+  // Master copy for everyone; the department filter shows one department's part (yours by default, once lines are assigned).
+  const deptSel = h('select', { style: { width: 'auto' } }, ['All departments', ...WO_DEPARTMENTS, '(not assigned)'].map(t => h('option', t)));
+  const mine = ROLE_DEPARTMENT[state.user.role];
+  deptSel.value = sessionStorage.getItem(`boq-dept-${boqId}`) || (mine && rows.some(r => r.department === mine) ? mine : 'All departments');
+  deptSel.onchange = () => { sessionStorage.setItem(`boq-dept-${boqId}`, deptSel.value); draw(); };
+  const deptOf = r => r.department || '(not assigned)';
+  async function setDept(ids, department) {
+    await api(`/boqs/${boqId}/departments`, { method: 'POST', body: { ids, department } });
+    for (const r of rows) if (ids.includes(r.id)) r.department = department || null;
+    toast(`${ids.length} line(s) → ${department || 'not assigned'}`); draw(); drawDepts();
+  }
+  const deptBox = h('div');
+  function drawDepts() {
+    const it = rows.filter(r => r.kind !== 'Heading');
+    const counts = ['(not assigned)', ...WO_DEPARTMENTS].map(d => [d, it.filter(r => deptOf(r) === d)]).filter(([, l]) => l.length);
+    deptBox.replaceChildren(it.length ? h('div.card', { style: { padding: '10px 14px' } },
+      h('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap', alignItems: 'center' } }, h('b', 'Departments:'),
+        counts.map(([d, l]) => h('a', { href: 'javascript:void 0', style: { color: d === '(not assigned)' ? 'var(--warn)' : '' }, onclick: () => { deptSel.value = d; deptSel.onchange(); } },
+          `${d} ${l.length} (${l.filter(r => !['Dispatched', 'Delivered'].includes(r.delivery_status)).length} pending)`))),
+      h('div.muted', { style: { fontSize: '12px', marginTop: '4px' } }, 'Master copy: every department sees the same work order. At the start, give each line (or a whole section) to its department; each department then opens it filtered to its part.')) : '');
+  }
   const search = h('input.grow', { type: 'search', placeholder: 'Search material, Sr. no …' });
   const picks = new Map(); // boq line id → { qty, item_id }
   const pickCount = h('b', '0');
@@ -109,8 +130,10 @@ export async function boqView(root, boqId) {
   function draw() {
     const q = search.value.toLowerCase().trim();
     const f = filter.value;
+    const dep = deptSel.value;
     const keep = r => {
-      if (!isItem(r)) return !q && f === 'All material';
+      if (!isItem(r)) return !q && f === 'All material' && dep === 'All departments';
+      if (dep !== 'All departments' && deptOf(r) !== dep) return false;
       if (q && !`${r.sr_no} ${r.heading} ${r.description}`.toLowerCase().includes(q)) return false;
       if (f === 'Pending') return !['Dispatched', 'Delivered'].includes(r.delivery_status);
       if (f === 'Sent / in transit') return ['Dispatched', 'Partly Dispatched'].includes(r.delivery_status);
@@ -128,14 +151,16 @@ export async function boqView(root, boqId) {
       return h('div.card.flush', { style: { marginBottom: '16px' } },
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 16px', flexWrap: 'wrap' } },
           h('h2', { style: { margin: 0 } }, sec), secRows[0]?.wo_no ? h('span.muted', `WO ${secRows[0].wo_no}`) : null,
+          canEdit ? h('select', { style: { width: 'auto', fontSize: '12px' }, title: 'Give every line of this section (as filtered) to a department', onchange: e => { const v = e.target.value; e.target.value = ''; if (v) setDept(shown.filter(isItem).map(r => r.id), v === '(none)' ? null : v).catch(fail); } },
+            h('option', { value: '' }, 'Section → department…'), [...WO_DEPARTMENTS, '(none)'].map(d => h('option', d))) : null,
           h('span', { style: { marginLeft: 'auto' } }, `${st.sent} of ${st.lines} sent · ${st.delivered} delivered ✓ · ${st.pending} pending`),
           h('div', { style: { width: '160px', height: '8px', background: 'var(--neutral-bg)', borderRadius: '4px', overflow: 'hidden' }, title: `${pct}% sent` },
             h('div', { style: { width: pct + '%', height: '100%', background: 'var(--good)' } }))),
         h('div.table-wrap', h('table.data',
-          h('thead', h('tr', canSend ? h('th') : null, h('th'), h('th', 'Sr'), h('th', 'Material'), h('th', 'UOM'), h('th.num', 'WO Qty'), h('th.num', 'Sent'), h('th.num', 'Delivered'), h('th.num', 'Pending'), h('th', 'Status'),
+          h('thead', h('tr', canSend ? h('th') : null, h('th'), h('th', 'Sr'), h('th', 'Material'), h('th', 'Dept'), h('th', 'UOM'), h('th.num', 'WO Qty'), h('th.num', 'Sent'), h('th.num', 'Delivered'), h('th.num', 'Pending'), h('th', 'Status'),
             canSend ? h('th.num', 'Send now') : null)),
           h('tbody', shown.map(r => {
-            if (!isItem(r)) return h('tr', h('td', { colspan: canSend ? 11 : 9, style: { background: 'var(--surface-2)', fontWeight: 600 } }, `${r.sr_no ? r.sr_no + '  ' : ''}${firstLine(r.description)}`));
+            if (!isItem(r)) return h('tr', h('td', { colspan: canSend ? 12 : 10, style: { background: 'var(--surface-2)', fontWeight: 600 } }, `${r.sr_no ? r.sr_no + '  ' : ''}${firstLine(r.description)}`));
             const done = ['Dispatched', 'Delivered'].includes(r.delivery_status);
             const sendable = !done && (r.qty == null || r.pending > 0);
             const pick = picks.get(r.id);
@@ -159,6 +184,8 @@ export async function boqView(root, boqId) {
                 r.description.includes('\n') ? h('details', h('summary.muted', { style: { fontSize: '11px' } }, 'full specification'), h('div', { style: { fontSize: '12px', whiteSpace: 'pre-wrap' } }, r.description)) : null,
                 r.area_qty ? h('div.muted', { style: { fontSize: '11px' } }, r.area_qty) : null,
                 r.item_id_label ? h('div.muted', { style: { fontSize: '11px' } }, `📦 store item: ${r.item_id_label}`) : null),
+              h('td', canEdit ? h('select', { style: { width: 'auto', fontSize: '12px' }, onchange: e => setDept([r.id], e.target.value || null).catch(fail) },
+                ['', ...WO_DEPARTMENTS].map(d => h('option', { value: d, selected: (r.department || '') === d }, d || '—'))) : h('span.muted', r.department || '—')),
               h('td', r.uom || ''), h('td.num', r.qty ?? h('span.muted', 'TBD')), h('td.num', r.dispatched || ''), h('td.num', r.delivered || ''),
               h('td.num', { style: { fontWeight: 600, color: r.pending > 0 ? 'var(--warn)' : '' } }, r.pending ?? ''), h('td', badge(r.delivery_status)),
               canSend ? h('td.num', sendable ? qtyIn : '') : null);
@@ -227,6 +254,7 @@ export async function boqView(root, boqId) {
         canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
         canEdit ? h('a.btn', { href: `#/edit/boq_items/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '+ Line') : null,
         canEdit ? h('a.btn', { href: `#/edit/boqs/${boqId}?details=1` }, '✏️ Details') : null,
+        canWrite('dispatch_plans', state.user.role) ? h('a.btn', { href: `#/edit/dispatch_plans/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '🚛 + Dispatch plan') : null,
         canWrite('boms', state.user.role) && rows.length ? h('button.btn.primary', { onclick: () => generateBomDialog(boqId).catch(fail), title: 'BOQ from the Standard Material Lists × work-order quantities' }, '⚙️ Generate BOQ') : null,
         canWrite('boms', state.user.role) ? h('button.btn', { onclick: () => import('./bom.js').then(m => m.newBomDialog({ work_order_id: Number(boqId), project_id: boq.project_id })).catch(fail) }, '📑 + BOQ (Excel / by hand)') : null,
         canSend && rows.length ? h('button.btn', { onclick: () => dispatchSelected().catch(fail) }, '🚚 Dispatch selected (', pickCount, ')') : null)),
@@ -239,8 +267,9 @@ export async function boqView(root, boqId) {
       h('div.kpi', h('div.label', 'Partly sent'), h('div.value', all.partly)),
       h('div.kpi', h('div.label', 'Pending'), h('div.value', all.pending), h('div.sub', `${rows.filter(r => isItem(r) && r.qty == null).length} with qty TBD`)),
       h('div.kpi', h('div.label', 'Challans'), h('div.value', challans.length))) : h('div.card', h('p', 'No material yet. Use “Add work order file” to import the work order Excel, or add lines by hand.')),
+    rows.length ? deptBox : null,
     rows.length ? tabs : null,
-    rows.length ? h('div.toolbar', search, filter, canSend ? h('span.muted', 'Tick what you are sending (qty defaults to pending) → “Dispatch selected”. The challan is made for you.') : null) : null,
+    rows.length ? h('div.toolbar', search, deptSel, filter, canSend ? h('span.muted', 'Tick what you are sending (qty defaults to pending) → “Dispatch selected”. The challan is made for you.') : null) : null,
     out,
     challans.length ? h('div.card', h('h2', '🚚 Challans of this BOQ'), h('table.data', h('thead', h('tr', ['Challan', 'Date', 'Vehicle', 'Items', 'Status', 'Delivered', 'Received by', ''].map(x => h('th', x)))),
       h('tbody', challans.map(c => h('tr',
@@ -248,5 +277,6 @@ export async function boqView(root, boqId) {
         h('td', fmtDate(c.delivered_date)), h('td', c.received_by || ''), h('td', h('a.btn.small', { href: `#/print/challan/${c.id}`, target: '_blank' }, '🖨 Print'))))))) : null,
     attachments('boqs', Number(boqId), canEdit));
   drawTabs();
+  drawDepts();
   draw();
 }

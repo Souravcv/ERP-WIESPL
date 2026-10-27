@@ -128,6 +128,19 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_visibility_v1', '\"1\"')").run();
   }
+  // Planning department (once): dispatch plans for the store / design / site / purchase; every department sees the
+  // master work order.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_planning_v1'").get()) {
+    const lvl = { manager: 'full', store: 'edit', technical: 'edit', engineer: 'view', purchase: 'view', purchase_head: 'view', production: 'view' };
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const p = parse(r.perms);
+      p.modules ||= {};
+      if (lvl[r.name] && (!p.modules.dispatch_plans || p.modules.dispatch_plans === 'none')) p.modules.dispatch_plans = lvl[r.name];
+      if (['sales', 'accounts', 'production', 'service'].includes(r.name)) for (const m of ['boqs', 'boq_items']) if (!p.modules[m] || p.modules[m] === 'none') p.modules[m] = 'view';
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_planning_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

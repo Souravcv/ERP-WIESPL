@@ -3,7 +3,11 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning'];
+// Departments a work order line belongs to (the work order is one master copy; each department sees its part).
+export const WO_DEPARTMENTS = ['Design', 'Purchase', 'Production', 'Store', 'Logistics', 'Site / Installation', 'Electrical', 'Service'];
+// The department each built-in profile works for (its default view of a work order).
+export const ROLE_DEPARTMENT = { technical: 'Design', purchase: 'Purchase', purchase_head: 'Purchase', production: 'Production', store: 'Store', planning: 'Logistics', engineer: 'Site / Installation', service: 'Service' };
 
 const ALL = ROLES;
 const CRM = ['admin', 'manager', 'sales'];
@@ -76,6 +80,7 @@ export const ROLE_INFO = {
   technical: { label: 'Technical Manager', description: 'Projects, BOQs and drawings' },
   production: { label: 'Production Supervisor', description: 'Material requests to the store, production stock, finished goods made per day' },
   hr: { label: 'HR Manager', description: 'Employees, work locations, site assignments, attendance review, leave, holidays' },
+  planning: { label: 'Planning (Logistics)', description: 'Dispatch plans per project (what goes to site when), project schedules; sees projects, work orders, POs and stock' },
   service: { label: 'Service Coordinator', description: 'Complaints, AMC / warranty register, service work orders, service reports, RCA, service quotations' },
 };
 
@@ -95,7 +100,11 @@ export const ROLE_SEES = {
   production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
   service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
   hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects'],
+  planning: ['approvals', 'projects', 'dispatch_plans', ...BOQ_VIEW, 'challans', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests', 'production_entries'],
 };
+// Every department sees the master work order; the store, site, design and purchase see the dispatch plans.
+for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].push('boqs', 'boq_items');
+for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 // Whoever sees projects sees their schedule (Project Planner).
@@ -150,6 +159,7 @@ export const DEFAULT_FUNCTIONS = {
   production: ['production_post'],
   hr: ['hr_manage', 'leave_approve', 'task_assign'],
   service: ['import', 'task_assign'],
+  planning: ['task_assign', 'notify_work_order', 'notify_po'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -505,7 +515,7 @@ export const ENTITIES = {
   // Project Planner: one row per phase / activity / milestone of a project's schedule (Gantt). Dates are worked out by
   // the planner from durations and "after" links (Mon–Sat, holidays off); the baseline dates come from the approved baseline.
   schedule_activities: {
-    label: 'Project Schedule Activities', singular: 'Activity', icon: '📅', write: ENG,
+    label: 'Project Schedule Activities', singular: 'Activity', icon: '📅', write: ENG.concat('planning'),
     display: "{t}.sr || '. ' || {t}.name",
     search: ['name', 'responsible', 'remark', 'dept'],
     list: ['project_id', 'sr', 'name', 'party', 'plan_start', 'plan_finish', 'progress', 'status'],
@@ -590,7 +600,7 @@ export const ENTITIES = {
     label: 'Work Order Lines', singular: 'Work Order Line', group: 'Hidden', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "COALESCE({t}.sr_no || ' ', '') || substr(COALESCE({t}.heading || ' › ', '') || {t}.description, 1, 90)",
     search: ['section', 'wo_no', 'sr_no', 'heading', 'description', 'remarks'],
-    list: ['section', 'sr_no', 'description', 'uom', 'qty', 'dispatched', 'delivered', 'pending', 'delivery_status'],
+    list: ['section', 'sr_no', 'description', 'department', 'uom', 'qty', 'dispatched', 'delivered', 'pending', 'delivery_status'],
     statusField: 'kind',
     fields: [
       { key: 'boq_id', label: 'Work Order', type: 'ref', ref: 'boqs', required: true },
@@ -607,6 +617,7 @@ export const ENTITIES = {
       { key: 'item_id', label: 'Store item (for stock)', type: 'ref', ref: 'items', hint: 'Link to deduct store stock when dispatched' },
       { key: 'product_id', label: 'Catalog product', type: 'ref', ref: 'products', readonly: true },
       { key: 'material_list_id', label: 'Standard material list', type: 'ref', ref: 'material_lists', hint: 'Used by “Generate BOQ”: its components × this line’s qty' },
+      { key: 'department', label: 'Department', type: 'select', options: ['', ...WO_DEPARTMENTS], hint: 'Which department handles this line (set at the start)' },
       { key: 'dispatched', label: 'Dispatched', type: 'number', computed: BOQ_SENT("'Dispatched','Delivered'") },
       { key: 'delivered', label: 'Delivered (site confirmed)', type: 'number', computed: BOQ_SENT("'Delivered'") },
       { key: 'pending', label: 'Pending', type: 'number', computed: `CASE WHEN {t}.qty IS NULL THEN NULL ELSE MAX({t}.qty - ${BOQ_SENT("'Dispatched','Delivered'")}, 0) END` },
@@ -617,6 +628,39 @@ export const ENTITIES = {
         WHEN ${BOQ_SENT("'Dispatched','Delivered'")} > 0 THEN 'Partly Dispatched' ELSE 'Pending' END` },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
       { key: 'sort', label: 'Order', type: 'number', hidden: true },
+    ],
+  },
+  // Planning: what goes to a project site when (dispatch / logistics plan); each plan is a milestone on the project Gantt.
+  dispatch_plans: {
+    label: 'Dispatch Plans', singular: 'Dispatch Plan', group: 'Sales & Projects', icon: '🚛', write: ['admin', 'manager', 'planning', 'store', 'technical'],
+    display: "{t}.plan_no || ' · ' || COALESCE({t}.title, '')",
+    search: ['plan_no', 'title', 'vehicle', 'transporter', 'remarks'],
+    list: ['plan_no', 'planned_date', 'project_id', 'boq_id', 'title', 'ready_by', 'vehicle', 'status', 'late', 'challan_id'],
+    statusField: 'status',
+    fields: [
+      { key: 'plan_no', label: 'Plan No', type: 'text', readonly: true, hint: 'Auto: DP-001/2026-27' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true },
+      { key: 'boq_id', label: 'Work Order', type: 'ref', ref: 'boqs', hint: 'Blank = all open work orders of the project' },
+      { key: 'title', label: 'What goes', type: 'text', span: 2, hint: 'e.g. Lot 1 – plenum, risers, ducting for OT 1 & 2' },
+      { key: 'planned_date', label: 'Planned Dispatch Date', type: 'date', required: true },
+      { key: 'ready_by', label: 'Material Ready in Store By', type: 'date', hint: 'Production / purchase must have it in the store by this date' },
+      { key: 'site_ready', label: 'Site Ready (front available)', type: 'select', options: ['', 'Yes', 'No', 'Partly'] },
+      { key: 'vehicle', label: 'Vehicle (type / no)', type: 'text', suggest: ['Tempo 407', 'Eicher 14 ft', 'Eicher 19 ft', 'Truck 22 ft', 'Container 32 ft', 'Pick-up'] },
+      { key: 'transporter', label: 'Transporter', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Planned', 'Material ready', 'Dispatched', 'Delivered', 'Cancelled'], default: 'Planned' },
+      { key: 'late', label: 'Late', type: 'text', computed: "CASE WHEN {t}.status IN ('Planned', 'Material ready') AND {t}.planned_date < date('now', 'localtime') THEN 'Yes' ELSE '' END" },
+      { key: 'challan_id', label: 'Delivery Challan', type: 'ref', ref: 'challans' },
+      { key: 'dispatched_on', label: 'Dispatched On', type: 'date', readonly: true },
+      { key: 'lines', label: 'Material', type: 'lines', span: 2, amounts: false, columns: [
+        { key: 'description', label: 'Material', type: 'textarea', width: 340 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+        { key: 'qty', label: 'Qty', type: 'number', width: 80 },
+        { key: 'department', label: 'Department', type: 'select', options: ['', ...WO_DEPARTMENTS], width: 140 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+      ] },
+      { key: 'planned_by', label: 'Planned By', type: 'text', readonly: true },
+      { key: 'activity_id', label: 'Gantt Milestone', type: 'number', hidden: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
   // Standard material list ("recipe") per product the design department keeps: the components for ONE unit of a
