@@ -214,6 +214,25 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .doc .sign .space.signed { height: auto; min-height: 50px; display: flex; align-items: center; gap: 12px; padding: 4px 0; }
 .doc .sign .space.signed img { margin: 0; }
 .doc .signame { font-size: 11px; }
+/* 🧊 CAD drawing in 3D */
+.p3-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; }
+@media (max-width: 900px) { .p3-wrap { grid-template-columns: 1fr; } }
+.p3-stage { position: relative; height: calc(100vh - 150px); min-height: 420px; border-radius: 12px; overflow: hidden; background: #eef2f7; border: 1px solid var(--border, #dbe2ee); }
+.p3-stage canvas { display: block; width: 100%; height: 100%; }
+.p3-status { position: absolute; inset: 0; display: grid; place-items: center; color: #4b5a70; font-weight: 600; padding: 20px; text-align: center; }
+.p3-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.p3-label { position: absolute; left: 0; top: 0; background: rgba(255, 255, 255, .88); color: #15202f; border: 1px solid #c9d4e6; border-radius: 6px; padding: 2px 6px; font-size: 11px; line-height: 1.25; text-align: center; white-space: nowrap; box-shadow: 0 1px 4px rgba(0, 0, 0, .12); }
+.p3-label b { display: block; font-size: 11px; }
+.p3-label span { color: #4b5a70; font-size: 10px; }
+.p3-side { max-height: calc(100vh - 150px); overflow: auto; }
+.p3-box { background: var(--surface, #fff); border: 1px solid var(--border, #dbe2ee); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.p3-box > b { display: block; margin-bottom: 6px; }
+.p3-box select { width: 100%; margin-top: 6px; }
+.p3-check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.p3-layers { width: 100%; font-size: 12px; border-collapse: collapse; }
+.p3-layers td { padding: 3px 4px; border-bottom: 1px solid var(--border, #eef1f6); vertical-align: middle; }
+.p3-layers select { margin: 0; font-size: 12px; padding: 2px; }
+.p3-lname { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media print {
   body > *:not(.print-root) { display: none !important; }
   .print-root { display: block !important; }

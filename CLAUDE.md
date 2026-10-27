@@ -16,6 +16,11 @@ memory do not move between computers).
 - Client enquiry form: `public/enquire.html` + `js/enquire.js` (wizard), 3D OT in `js/ot3d.js` (three.js r128 from jsDelivr),
   tap-a-part side panel `js/partpanel.js` + `js/parts.js`, explainer videos on the 3D `js/explainers.js` (English + Hindi), NABH norms `js/nabh.js`.
 - Detailed requirement form (second form, per enquiry link): `public/brief.html` + `js/brief.js` + `js/brief-fields.js` (fields shared with the server).
+- CAD drawing in 3D: any DWG / DXF attachment has a 🧊 3D button → `#/plan3d/<file id>` (`js/views/plan3d.js`). The DWG is read in the browser by
+  `js/plan-worker.js` with `@mlightcad/libredwg-web` (GPL-3.0, WebAssembly, served from `/vendor/libredwg`), turned into lines per layer by
+  `js/plan-extract.js`, and the result is cached at `data/uploads/plans/<id>.json` (`/api/files/:id/plan`). Layer roles (wall / glass / door …)
+  are guessed from the layer name and can be changed in the viewer (remembered in the browser).
+- Company stamp and signatures: `server/signatures.js`, `js/signs.js`; printed only where an approval exists (`js/views/print.js`).
 
 ## Decisions already made (do not undo without asking)
 - MD's direction (13 Oct 2026): the enquiry is a **techno-commercial document** — site structure (slab height, beams, periphery beams, North,

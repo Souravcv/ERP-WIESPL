@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
-import { db, migrate, getSettings, setSettings, audit, RESTORE_FILE } from './db.js';
+import { db, migrate, getSettings, setSettings, audit, RESTORE_FILE, DATA_DIR } from './db.js';
 import * as stock from './stock.js';
 import * as importer from './importer.js';
 import * as dispatch from './dispatch.js';
@@ -61,6 +61,8 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.static(path.join(__dirname, '..', 'public'), { index: 'index.html' }));
+// DWG reader (libredwg-web, WebAssembly) for the 3D plan viewer; runs in the browser
+app.use('/vendor/libredwg', express.static(path.join(__dirname, '..', 'node_modules', '@mlightcad', 'libredwg-web'), { maxAge: '7d' }));
 
 const api = express.Router();
 const wrap = fn => async (req, res, next) => {
@@ -703,6 +705,25 @@ api.get('/files/:id', wrap((req, res) => {
   res.setHeader('Content-Type', inline ? a.mime : 'application/octet-stream');
   res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
   res.sendFile(a.full);
+}));
+// 3D plan of a CAD drawing: the browser reads the DWG once and saves the result here, so it opens instantly next time
+const planCache = id => path.join(DATA_DIR, 'uploads', 'plans', `${Number(id)}.json`);
+const cadFile = id => { const a = roles.attachmentFile(id); if (!/\.(dwg|dxf)$/i.test(a.filename)) throw new HttpError(400, 'Only DWG / DXF drawings can be shown in 3D'); return a; };
+api.get('/files/:id/plan', wrap((req, res) => {
+  const a = cadFile(req.params.id);
+  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  const f = planCache(a.id);
+  if (!fs.existsSync(f)) throw new HttpError(404, 'Not converted yet');
+  res.type('application/json').sendFile(f);
+}));
+api.put('/files/:id/plan', express.json({ limit: '60mb' }), wrap(req => {
+  const a = cadFile(req.params.id);
+  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  const p = req.body;
+  if (!p || p.version !== 1 || typeof p.layers !== 'object' || !Array.isArray(p.texts)) throw new HttpError(400, 'Not a plan');
+  fs.mkdirSync(path.dirname(planCache(a.id)), { recursive: true });
+  fs.writeFileSync(planCache(a.id), JSON.stringify(p));
+  return { ok: true };
 }));
 api.delete('/files/:id', wrap(req => {
   const a = roles.attachmentFile(req.params.id);

@@ -107,6 +107,7 @@ async function route() {
       case 'production': { const { productionView } = await import('./views/production.js'); await productionView(view, a || 'daily'); break; }
       case 'receivables': { const { receivablesView } = await import('./views/receivables.js'); await receivablesView(view, a || 'ageing', b); break; }
       case 'bank-reco': { const { bankRecoView } = await import('./views/bankreco.js'); await bankRecoView(view); break; }
+      case 'plan3d': { const { plan3dView } = await import('./views/plan3d.js'); await plan3dView(view, a); break; }
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));
     }

@@ -1028,7 +1028,7 @@ export function attachments(entity, recordId, writable) {
       h('td', '📎 ', PREVIEWABLE.test(a.filename) ? h('a', { href: `/api/files/${a.id}?inline=1`, target: '_blank' }, a.filename) : h('a', { href: `/api/files/${a.id}` }, a.filename),
         a.note ? h('div.muted', a.note) : null),
       h('td.num.muted', fileSize(a.size)), h('td.muted.nowrap', `${a.uploaded_by || ''} · ${fmtDate(a.at)}`),
-      h('td.nowrap', h('a.btn.small', { href: `/api/files/${a.id}` }, '⬇ Download'),
+      h('td.nowrap', /\.(dwg|dxf)$/i.test(a.filename) ? h('a.btn.small.primary', { href: `#/plan3d/${a.id}?n=${encodeURIComponent(a.filename)}`, title: 'Show this CAD drawing in 3D' }, '🧊 3D') : null, h('a.btn.small', { href: `/api/files/${a.id}` }, '⬇ Download'),
         writable ? h('button.icon-btn.del', { title: 'Remove file', onclick: async () => {
           if (!(await confirmBox(`Remove ${a.filename}?`, 'Remove'))) return;
           try { await api(`/files/${a.id}`, { method: 'DELETE' }); load(); } catch (e) { fail(e); }
