@@ -19,6 +19,16 @@ function loadThree() {
   return three;
 }
 
+// real full screen where the browser allows it, otherwise fill the window (e.g. iPhone Safari)
+function toggleFull(el) {
+  if (document.fullscreenElement) return document.exitFullscreen();
+  if (el.classList.contains('p3-full')) { el.classList.remove('p3-full'); el.onfullscreen?.(); return; }
+  const fallback = () => { if (document.fullscreenElement !== el && !el.classList.contains('p3-full')) { el.classList.add('p3-full'); el.onfullscreen?.(); } };
+  if (!el.requestFullscreen) return fallback();
+  el.requestFullscreen().catch(fallback);
+  setTimeout(fallback, 500); // some embedded browsers neither grant nor refuse
+}
+
 function readInWorker(buf, dxf, onStep) {
   return new Promise((ok, bad) => {
     const w = new Worker('/js/plan-worker.js', { type: 'module' });
@@ -38,9 +48,18 @@ export async function plan3dView(root, fileId) {
   const status = h('div.p3-status', 'Opening…');
   const stage = h('div.p3-stage', status);
   const side = h('aside.p3-side');
+  const wrap = h('div.p3-wrap', stage, side);
+  // full screen: the 3D and its side panel fill the screen (Esc or the button again to leave)
+  const fsBtn = h('button.btn', { type: 'button', title: 'Full screen (Esc to leave)', onclick: () => toggleFull(wrap) }, '⛶ Full screen');
+  const fsCorner = h('button.p3-fs', { type: 'button', title: 'Full screen (Esc to leave)', 'aria-label': 'Full screen', onclick: () => toggleFull(wrap) }, '⛶');
+  stage.append(fsCorner);
+  const onFs = () => { const on = document.fullscreenElement === wrap || wrap.classList.contains('p3-full'); fsBtn.textContent = on ? '✕ Exit full screen' : '⛶ Full screen'; fsCorner.textContent = on ? '✕' : '⛶'; };
+  document.addEventListener('fullscreenchange', onFs); wrap.onfullscreen = onFs;
+  const onKey = e => { if (!wrap.isConnected) return document.removeEventListener('keydown', onKey); if (e.key === 'Escape' && wrap.classList.contains('p3-full')) toggleFull(wrap); };
+  document.addEventListener('keydown', onKey);
   root.replaceChildren(
-    h('div.page-head', h('h1', `🧊 ${name}`), h('div.actions', h('button.btn', { onclick: () => history.back() }, '‹ Back'), h('a.btn', { href: `/api/files/${id}` }, '⬇ Download drawing'))),
-    h('div.p3-wrap', stage, side));
+    h('div.page-head', h('h1', `🧊 ${name}`), h('div.actions', h('button.btn', { onclick: () => history.back() }, '‹ Back'), fsBtn, h('a.btn', { href: `/api/files/${id}` }, '⬇ Download drawing'))),
+    wrap);
 
   let plan;
   try {
@@ -70,7 +89,7 @@ function build(stage, side, plan) {
   const small = Math.min(stage.clientWidth, stage.clientHeight) < 500 || /Mobi|Android/i.test(navigator.userAgent);
   let areaIdx = 0, wallH = 3, furnH = 0.6, showLabels = true, current = null;
 
-  stage.replaceChildren();
+  stage.replaceChildren(...stage.querySelectorAll('.p3-fs'));
   const renderer = new T.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
   renderer.setPixelRatio(Math.min(small ? 1.75 : 2, window.devicePixelRatio || 1));
   renderer.outputEncoding = T.sRGBEncoding;

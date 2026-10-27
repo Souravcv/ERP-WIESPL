@@ -220,6 +220,14 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .p3-stage { position: relative; height: calc(100vh - 150px); min-height: 420px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border, #dbe2ee);
   background: radial-gradient(ellipse at 50% 18%, #ffffff 0%, #eef2f7 42%, #d5dce6 100%); box-shadow: inset 0 0 60px rgba(40, 60, 90, .08); }
 .p3-stage canvas { display: block; width: 100%; height: 100%; }
+.p3-fs { position: absolute; top: 10px; right: 10px; z-index: 3; width: 38px; height: 38px; border-radius: 10px; border: 1px solid rgba(160, 175, 195, .6); background: rgba(255, 255, 255, .92); color: #15202f; font-size: 18px; cursor: pointer; box-shadow: 0 4px 12px rgba(20, 35, 60, .15); }
+.p3-fs:hover { background: #fff; }
+/* full screen: 3D + side panel fill the screen */
+.p3-wrap:fullscreen, .p3-wrap.p3-full { background: var(--bg, #0f1722); padding: 10px; gap: 10px; }
+.p3-wrap.p3-full { position: fixed; inset: 0; z-index: 1000; }
+.p3-wrap:fullscreen .p3-stage, .p3-wrap.p3-full .p3-stage { height: calc(100vh - 20px); }
+.p3-wrap:fullscreen .p3-side, .p3-wrap.p3-full .p3-side { max-height: calc(100vh - 20px); }
+@media (max-width: 900px) { .p3-wrap:fullscreen, .p3-wrap.p3-full { grid-template-columns: 1fr; overflow: auto; } .p3-wrap:fullscreen .p3-stage, .p3-wrap.p3-full .p3-stage { height: 75vh; } }
 .p3-status { position: absolute; inset: 0; display: grid; place-items: center; color: #4b5a70; font-weight: 600; padding: 20px; text-align: center; }
 .p3-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .p3-label { position: absolute; left: 0; top: 0; background: rgba(255, 255, 255, .93); color: #15202f; border: 1px solid rgba(160, 175, 195, .55); border-left: 3px solid #7b8798; border-radius: 7px; padding: 3px 8px; font: 600 11px/1.25 system-ui, 'Segoe UI', sans-serif; letter-spacing: .01em; text-align: center; white-space: nowrap; box-shadow: 0 4px 14px rgba(20, 35, 60, .14); backdrop-filter: blur(4px); }
