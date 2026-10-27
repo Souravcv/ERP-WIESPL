@@ -638,7 +638,12 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can(entity) && st === 'Draft') A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this challan?') }, 'Cancel'));
       break;
     }
+    case 'schedule_baselines':
+    case 'schedule_activities':
+      A.push(h('a.btn.primary', { href: `#/planner/${row.project_id}` }, '📅 Open the planner'));
+      break;
     case 'projects':
+      if (canView('schedule_activities', state.user.role)) A.push(h('a.btn.primary', { href: `#/planner/${id}` }, '📅 Planner (Gantt)'));
       A.push(h('a.btn', { href: `#/project-analysis/${id}` }, '📈 Purchase analysis'));
       if (can('boqs')) A.push(h('button.btn.primary', { onclick: go(() => newBoqDialog({ project_id: id })) }, '📂 New Work Order (upload)'));
       if (can('boms')) A.push(h('button.btn', { onclick: go(() => newBomDialog({ project_id: id })) }, '📑 New BOQ (bill of material)'));

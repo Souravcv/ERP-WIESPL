@@ -31,6 +31,7 @@ import * as sf from './storeflow.js';
 import * as svc from './service.js';
 import * as hr from './hr.js';
 import * as wt from './worktasks.js';
+import * as planner from './schedule.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -407,6 +408,11 @@ const arView = req => { if (!canView('invoices', req.user.role)) throw new HttpE
 api.get('/receivables/ageing', wrap(req => { arView(req); return recv.ageing(req.query); }));
 api.get('/customer-statement/:id', wrap(req => { arView(req); return recv.customerStatement(req.params.id, req.query); }));
 api.get('/receipts-register', wrap(req => { arView(req); return recv.receiptsRegister(req.query); }));
+// Project Planner (Gantt): the schedule worked out, saved from the grid, started from a template, baselined.
+api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
+api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));
+api.post('/projects/:id/schedule/template', wrap(req => planner.applyTemplate(req.params.id, req.body, req.user)));
+api.post('/projects/:id/schedule/baseline', wrap(req => planner.requestBaseline(req.params.id, req.body, req.user)));
 // Everything about one project's purchasing: POs (approval, received, billed, paid), vendors, requisitions, BOQs, store, sales.
 api.get('/projects/:id/analysis', wrap(req => {
   if (!canView('projects', req.user.role) || !canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
@@ -786,6 +792,7 @@ const LOCKED = {
   material_requests: ['Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed'],
   production_entries: ['Posted'],
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
+  schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));

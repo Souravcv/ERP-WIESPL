@@ -264,8 +264,86 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
   @page { size: A4; margin: 12mm; }
   @page wide { size: A4 landscape; margin: 10mm; }
   .doc .page.landscape { page: wide; }
+  @page gantt { size: A3 landscape; margin: 8mm; }
+  .doc .page.gantt { page: gantt; }
 }
 @media screen {
   .print-root .doc { max-width: 1100px; margin: 16px auto; box-shadow: 0 2px 12px rgba(0,0,0,.15); }
   .print-root { min-height: 100vh; background: #e5e7eb; }
 }
+
+/* ---------------------------------------------------------------- Project Planner (Gantt) */
+.kpis.tight { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.kpis.tight .kpi { padding: 8px 10px; }
+.gantt-wrap { overflow: auto; max-height: calc(100vh - 290px); min-height: 300px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table.gantt { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+table.gantt th, table.gantt td { border-bottom: 1px solid var(--grid); padding: 0 4px; height: 27px; white-space: nowrap; background: var(--surface); }
+table.gantt thead th { position: sticky; top: 0; z-index: 3; background: var(--surface-2); color: var(--text-2); text-align: left; height: 38px; border-bottom: 1px solid var(--border); }
+table.gantt .sticky { position: sticky; z-index: 2; }
+table.gantt thead th.sticky { z-index: 4; }
+table.gantt .c-sr { left: 0; width: 34px; min-width: 34px; text-align: right; }
+table.gantt .c-name { left: 34px; width: 270px; min-width: 270px; max-width: 270px; overflow: hidden; text-overflow: ellipsis; }
+table.gantt .c-party { left: 304px; width: 76px; min-width: 76px; }
+table.gantt .c-days { left: 380px; width: 44px; min-width: 44px; text-align: right; }
+table.gantt .c-after { left: 424px; width: 66px; min-width: 66px; }
+table.gantt .c-start { left: 490px; width: 56px; min-width: 56px; }
+table.gantt .c-finish { left: 546px; width: 56px; min-width: 56px; }
+table.gantt .c-pct { left: 602px; width: 44px; min-width: 44px; text-align: right; border-right: 1px solid var(--border); }
+table.gantt td.c-finish.bad { color: var(--bad); font-weight: 600; }
+table.gantt td.c-time, table.gantt th.c-time { padding: 0; }
+table.gantt input, table.gantt select { padding: 2px 4px; border-color: transparent; background: transparent; font-size: 12px; height: 24px; }
+table.gantt input:hover, table.gantt select:hover { border-color: var(--border); }
+table.gantt td.c-name input { width: calc(100% - 4px); }
+table.gantt .who { color: var(--muted); font-size: 11px; margin-left: 4px; }
+table.gantt tr.phase td { background: var(--surface-2); font-weight: 600; }
+table.gantt tr.done td:not(.c-time) { color: var(--muted); }
+table.gantt .fold { border: 0; background: none; cursor: pointer; color: var(--text-2); padding: 0 4px 0 0; font-size: 12px; }
+.gt { position: relative; height: 27px; }
+.gh-row { position: relative; height: 19px; }
+.gh-cell { position: absolute; top: 0; height: 19px; line-height: 19px; font-size: 11px; padding-left: 3px; border-left: 1px solid var(--border); overflow: hidden; color: var(--text-2); font-weight: 600; }
+.gh-row.ticks .gh-cell { font-weight: 400; color: var(--muted); }
+.gh-cell.sun { background: var(--neutral-bg); }
+.gb, .gb-base, .gb-phase, .gb-ms, .gb-label, .g-today { position: absolute; }
+.gb { top: 6px; height: 13px; border-radius: 3px; background: var(--bar); overflow: hidden; box-sizing: border-box; }
+.gb .gb-prog { height: 100%; background: rgba(0,0,0,.35); }
+.gb.p-Client { background: #d97706; } .gb.p-Vendor { background: #7c3aed; } .gb.p-PMC, .gb.p-Other { background: #64748b; }
+.gb.late { background: #dc2626; }
+.gb.crit { box-shadow: inset 0 0 0 2px #7f1d1d; }
+.gb.done { opacity: .55; }
+.gb-base { top: 21px; height: 4px; border-radius: 2px; background: #94a3b8; }
+.gb-phase { top: 9px; height: 7px; background: var(--text); border-radius: 1px; }
+.gb-ms { top: 3px; font-size: 15px; line-height: 18px; color: var(--text); } .gb-ms.late { color: #dc2626; }
+.gb-label { top: 6px; font-size: 11px; color: var(--bad); font-weight: 600; }
+.g-today { top: 0; bottom: 0; width: 0; border-left: 2px solid #dc2626; opacity: .7; }
+.party { font-size: 11px; padding: 1px 6px; border-radius: 8px; color: #fff; background: var(--bar); }
+.party.p-Client { background: #d97706; } .party.p-Vendor { background: #7c3aed; } .party.p-PMC, .party.p-Other { background: #64748b; }
+.gantt-legend { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; font-size: 12px; margin-top: 8px; }
+.gantt-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.gantt-legend .lg > span:first-child { position: static; display: inline-block; width: 22px; }
+.gantt-legend .gb { height: 10px; } .gantt-legend .gb-base { height: 4px; }
+/* printed bar chart */
+.doc .page.gantt { padding: 6mm; font-size: 9px; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.gp-head { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 6px; }
+.gp-head .gp-title { flex: 1; min-width: 150mm; text-align: center; }
+.gp-info { width: 120mm; } .gp-legend { width: 34mm; }
+.print-root .doc:has(.page.gantt) { max-width: none; width: 420mm; }
+.gp-info, .gp-legend { border-collapse: collapse; font-size: 9px; }
+.gp-info th, .gp-info td, .gp-legend td { border: 1px solid #888; padding: 1px 5px; text-align: left; }
+.gp-info th { background: #eef2f7; }
+.gp-legend .sw { display: inline-block; width: 18px; height: 8px; }
+table.gp { width: 100%; border-collapse: collapse; table-layout: fixed; }
+table.gp th, table.gp td { border: 1px solid #999; padding: 1px 2px; vertical-align: middle; }
+table.gp th { background: #12284d; color: #fff; font-weight: 600; text-align: center; }
+table.gp th.wk { font-size: 7px; font-weight: 400; padding: 1px 0; }
+table.gp td.c { text-align: center; } table.gp td.late { color: #b42318; font-weight: 700; }
+table.gp tr.phase td { background: #e8edf5; }
+table.gp td.w { padding: 0; height: 13px; position: relative; }
+table.gp .wb { position: absolute; left: 0; right: 0; top: 1px; height: 2px; background: #94a3b8; }
+table.gp .wf { position: absolute; left: 0; right: 0; top: 4px; bottom: 2px; }
+table.gp td.rm { font-size: 8px; white-space: normal; }
+.wf.p-WIESPL, .gp-legend .sw.p-WIESPL { background: #2563c9; } .wf.p-Client, .gp-legend .sw.p-Client { background: #f59e0b; }
+.wf.p-Vendor, .wf.p-PMC, .wf.p-Other, .gp-legend .sw.p-Vendor { background: #7c3aed; } .gp-legend .sw.base { background: #94a3b8; height: 3px; }
+.wf.late { background: #dc2626 !important; } .wf.phase { background: #1b2433; top: 5px; bottom: 5px; }
+.wf.ms { background: none !important; } .wf.ms::after { content: '◆'; position: absolute; left: 0; right: 0; top: -3px; text-align: center; font-size: 9px; color: #1b2433; }
+.gp-sign { display: flex; gap: 30px; margin-top: 18px; font-size: 9px; }
+.gp-sign > div { flex: 1; text-align: center; } .gp-sign .line { border-bottom: 1px solid #333; height: 26px; margin-bottom: 3px; }

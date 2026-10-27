@@ -98,6 +98,8 @@ export const ROLE_SEES = {
 };
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
+// Whoever sees projects sees their schedule (Project Planner).
+for (const list of Object.values(ROLE_SEES)) if (list.includes('projects')) list.push('schedule_activities', 'schedule_baselines');
 export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
 
 // Special actions a role may be allowed, beyond module access.
@@ -115,6 +117,7 @@ export const FUNCTIONS = {
   hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
   leave_approve: 'Approve leave requests',
   task_assign: 'Assign tasks to other people (and see everyone\'s tasks)',
+  schedule_baseline: 'Projects head – approve project schedule baselines (Project Planner)',
   allow_negative: 'Issue more than the available stock',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
@@ -138,7 +141,7 @@ export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', 
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
   purchase_head: ['task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
-  technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign'],
+  technical: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
   store: ['stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
@@ -167,7 +170,14 @@ export const APPROVAL_FLOWS = {
   Expense: [{ stage: 'Accounts', fn: 'pay_approve' }, { stage: 'GM', fn: 'pay_final' }],
   'Credit Note': [{ stage: 'GM', fn: 'pay_final' }],
   Leave: [{ stage: 'Approval', fn: 'leave_approve' }],
+  'Schedule Baseline': [{ stage: 'Projects Head', fn: 'schedule_baseline' }],
 };
+// Project Planner: who does an activity, and why it ran late (the delay list of the WIESPL / MSP schedules).
+export const SCHEDULE_PARTIES = ['WIESPL', 'Client', 'Vendor', 'PMC', 'Other'];
+export const DELAY_REASONS = ['', 'Customer input delay', 'Customer approval delay', 'Customer modification', 'Front not available (civil / site readiness)',
+  'Vendor input delay', 'Vendor readiness / manufacturing delay', 'Internal submission delay', 'Internal changes', 'Techno-commercial risk',
+  'Optimisation delay', 'Priority issue', 'PR / PO delay', 'Material shortage', 'Dispatch / transport issue', 'Contractor manpower issue',
+  'Payment issue', 'Power supply delay', 'Customer audit / permit issue', 'Hiring equipment not available', 'Material theft / damage at site', 'Other'];
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
 const BILL_OWN = `(COALESCE({t}.amount,0) - ${BILL_DN} - ${BILL_DIRECT})`;
@@ -480,6 +490,7 @@ export const ENTITIES = {
       { key: 'material_cost', label: 'Material Issued (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(CASE WHEN m.type IN ('OUTWARD','OUT','TRANSFER') THEN m.qty * COALESCE(m.rate,0) WHEN m.type = 'RETURN' THEN -m.qty * COALESCE(m.rate,0) ELSE 0 END),0) FROM stock_moves m WHERE m.project_id = {t}.id)" },
       { key: 'po_value', label: 'PO Value (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(p.total),0) FROM purchase_orders p WHERE p.project_id = {t}.id AND p.status NOT IN ('Cancelled','Rejected','Draft','Archived (old)'))" },
       { key: 'site_address', label: 'Site Address', type: 'textarea', span: 2 },
+      { key: 'pmc', label: 'PMC / Consultant', type: 'text', hint: 'Shown on the printed project schedule' },
       { key: 'engineer', label: 'Site Engineer', type: 'person' },
       { key: 'start_date', label: 'Start Date', type: 'date' },
       { key: 'target_date', label: 'Target Completion', type: 'date' },
@@ -489,6 +500,66 @@ export const ENTITIES = {
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'On Hold', 'Completed', 'Cancelled'], default: 'Active' },
       { key: 'warranty_until', label: 'Warranty Until', type: 'date' },
       { key: 'notes', label: 'Site Notes', type: 'textarea', span: 2 },
+    ],
+  },
+  // Project Planner: one row per phase / activity / milestone of a project's schedule (Gantt). Dates are worked out by
+  // the planner from durations and "after" links (Mon–Sat, holidays off); the baseline dates come from the approved baseline.
+  schedule_activities: {
+    label: 'Project Schedule Activities', singular: 'Activity', icon: '📅', write: ENG,
+    display: "{t}.sr || '. ' || {t}.name",
+    search: ['name', 'responsible', 'remark', 'dept'],
+    list: ['project_id', 'sr', 'name', 'party', 'plan_start', 'plan_finish', 'progress', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true },
+      { key: 'sr', label: 'Sr. No.', type: 'number', required: true, hint: 'Other activities refer to this number in "After"' },
+      { key: 'kind', label: 'Type', type: 'select', options: ['Activity', 'Phase', 'Milestone'], default: 'Activity' },
+      { key: 'name', label: 'Activity', type: 'text', required: true, span: 2 },
+      { key: 'party', label: 'Scope', type: 'select', options: SCHEDULE_PARTIES, default: 'WIESPL' },
+      { key: 'dept', label: 'Department', type: 'text', suggest: ['Sales', 'Engg', 'Purchase', 'Production', 'Store', 'Site', 'Accounts', 'Client', 'PMC'] },
+      { key: 'responsible', label: 'Responsible', type: 'person' },
+      { key: 'duration', label: 'Duration (working days)', type: 'number', default: 1 },
+      { key: 'after', label: 'After (Sr. No.)', type: 'text', hint: 'e.g. "3" or "3, 5+2" (5 finished + 2 days); "4ss" = starts with 4' },
+      { key: 'fixed_start', label: 'Not Before', type: 'date', hint: 'Earliest start (e.g. a date agreed with the client)' },
+      { key: 'plan_start', label: 'Start (plan / forecast)', type: 'date', readonly: true },
+      { key: 'plan_finish', label: 'Finish (plan / forecast)', type: 'date', readonly: true },
+      { key: 'base_start', label: 'Baseline Start', type: 'date', readonly: true },
+      { key: 'base_finish', label: 'Baseline Finish', type: 'date', readonly: true },
+      { key: 'actual_start', label: 'Actual Start', type: 'date' },
+      { key: 'actual_finish', label: 'Actual Finish', type: 'date' },
+      { key: 'qty', label: 'Quantity (BOQ)', type: 'number', hint: 'If given, progress = installed ÷ quantity' },
+      { key: 'uom', label: 'UOM', type: 'text', suggest: UOMS },
+      { key: 'qty_done', label: 'Installed / Done Qty', type: 'number' },
+      { key: 'progress', label: 'Progress %', type: 'number', default: 0 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Not started', 'In progress', 'Done', 'On hold'], default: 'Not started' },
+      { key: 'delay_reason', label: 'Delay Reason', type: 'select', options: DELAY_REASONS },
+      { key: 'remark', label: 'Remark', type: 'textarea', span: 2 },
+      { key: 'total_float', label: 'Float (days)', type: 'number', readonly: true },
+      { key: 'critical', label: 'Critical', type: 'yn', readonly: true },
+      { key: 'sort', label: 'Order', type: 'number', hidden: true },
+    ],
+  },
+  // A frozen copy of a project's planned dates (R0, R1 …), approved by the Projects head. The approved one is what
+  // progress and delay are measured against; earlier ones are kept.
+  schedule_baselines: {
+    label: 'Schedule Baselines', singular: 'Schedule Baseline', icon: '📌', write: ENG, noCreate: true,
+    display: "{t}.rev",
+    search: ['rev', 'reason'],
+    list: ['project_id', 'rev', 'finish', 'activities', 'requested_by', 'approved_by', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true, readonly: true },
+      { key: 'rev', label: 'Revision', type: 'text', readonly: true },
+      { key: 'reason', label: 'Reason', type: 'textarea', span: 2, readonly: true },
+      { key: 'start', label: 'Planned Start', type: 'date', readonly: true },
+      { key: 'finish', label: 'Planned Finish', type: 'date', readonly: true },
+      { key: 'activities', label: 'Activities', type: 'number', readonly: true },
+      { key: 'requested_by', label: 'Requested By', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'applied_at', label: 'Applied At', type: 'text', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'], default: 'Draft', readonly: true },
+      { key: 'snapshot', label: 'Snapshot', type: 'json', hidden: true },
     ],
   },
   // Client work order (the customer's Excel, e.g. Lokmanya "Electrical & HVAC - Work Order 1"); table name kept from earlier versions.

@@ -5,6 +5,7 @@ import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/j
 import { prefillProduction } from './storeflow.js';
 import { parseLatLng, prepLeave, markLeave } from './hr.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
+import { applyBaseline } from './schedule.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -607,6 +608,7 @@ export function afterSave(name, id, user, deleted) {
   }
   if (name === 'leave_requests' && !deleted) markLeave(id, user);
   if (name === 'work_tasks' && !deleted) afterSaveTask(id, user);
+  if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
   if (name === 'credit_notes') {
     const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);
     if (cn?.invoice_id) refreshReceivables({ invoiceId: cn.invoice_id });

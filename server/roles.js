@@ -176,6 +176,18 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_boq_flow_v1', '\"1\"')").run();
   }
+  // Project Planner (once): whoever sees projects gets their schedule; the GM and Technical Manager approve baselines.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_planner_v1'").get()) {
+    for (const r of db.prepare('SELECT name, perms FROM roles').all()) {
+      const p = parse(r.perms);
+      p.modules ||= {};
+      const proj = r.name === 'manager' ? 'full' : p.modules.projects;
+      if (proj && proj !== 'none') for (const m of ['schedule_activities', 'schedule_baselines']) if (!p.modules[m] || p.modules[m] === 'none') p.modules[m] = ['edit', 'full'].includes(proj) ? proj : 'view';
+      if (['manager', 'technical'].includes(r.name)) p.functions = [...new Set([...(p.functions || []), 'schedule_baseline'])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_planner_v1', '\"1\"')").run();
+  }
   loadRoles();
 }
 
