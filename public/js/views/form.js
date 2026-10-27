@@ -821,6 +821,21 @@ function actionsFor(entity, row, reload, ctx = {}) {
         A.push(h('a.btn', { href: `#/stock-entry?type=INWARD&item=${id}` }, '📥 Inward'));
         A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&item=${id}` }, '📤 Issue'));
       }
+      if (can('items') && hasFunction(state.user.role, 'stock_post')) A.push(h('button.btn', { title: 'This item was entered twice: move its stock and history to the other item and remove this one', onclick: go(async () => {
+        const { itemPicker } = await import('./form.js');
+        const all = (await api('/items?limit=20000')).filter(x => x.id !== Number(id));
+        const opts = all.map(x => ({ id: x.id, label: `${x.code} · ${x.name}` }));
+        const same = all.filter(x => String(x.name).trim().toLowerCase() === String(row.name).trim().toLowerCase());
+        let into = same.length === 1 ? same[0].id : null;
+        if (!(await modal(`Merge ${row.code} into another item`, h('div.grid',
+          h('p', `${row.code} · ${row.name} (stock ${row.stock ?? 0} ${row.uom || ''}) is removed. Its stock movements, PO / requisition / challan / BOQ lines and opening stock move to the item you keep.`),
+          same.length ? h('p.muted', `Same name: ${same.map(x => x.code).join(', ')}`) : null,
+          h('label', 'Keep this item', itemPicker(opts, into, { onPick: x => { into = x; } }))),
+          [{ label: 'Cancel', value: false }, { label: 'Merge', cls: 'danger solid', value: true }]))) return;
+        if (!into) throw new Error('Choose the item to keep');
+        const r = await post(`/items/${id}/merge`, { into });
+        toast(`Merged into ${r.kept.code}: stock now ${r.stock}`); location.hash = `#/view/items/${r.kept.id}`;
+      }) }, '🔗 Merge into another item'));
       break;
     case 'stock_moves':
       if (row.doc_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.type}?doc=${encodeURIComponent(row.doc_no)}`, target: '_blank' }, '🖨 Print Slip'));

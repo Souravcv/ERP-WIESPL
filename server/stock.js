@@ -72,12 +72,7 @@ export function stockEntry(body, user) {
     const created = [];
     for (const l of lines) {
       // Which PO line: the one chosen on the GRN, else the first line of the same item that is still pending.
-      let idx = -1;
-      if (po) {
-        idx = Number.isInteger(l.po_line) && po.lines[l.po_line] ? l.po_line : -1;
-        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id) && (Number(x.received) || 0) < (Number(x.qty) || 0));
-        if (idx < 0) idx = po.lines.findIndex(x => x.item_id && Number(x.item_id) === Number(l.item_id));
-      }
+      const idx = po ? poLineFor(po, l.item_id, Number.isInteger(l.po_line) ? l.po_line : null) : -1;
       // A PO for several sites: the material received belongs to the project of its PO line.
       const lineProject = l.project_id || (idx >= 0 && po.lines[idx].project_id) || header.project_id || (type === 'INWARD' && po?.project_id) || null;
       const row = insertRow('stock_moves', {
@@ -366,13 +361,66 @@ export function stockDoc(q) {
   return { type: q.type, doc_no: moves[0].doc_no, date: moves[0].date, moves, pos };
 }
 
-// PO line a received item belongs to: the line saved on the GRN, else the first line of that item (pending first).
-function lineOf(po, itemId, saved, wantPending = true) {
+// PO line a received item belongs to: the line saved on the GRN, else a line of that store item (pending first), else
+// the line whose name matches the item's name best (POs imported from Excel have names, not store items). The match
+// is remembered on the PO line, so the next GRN finds it directly.
+const STOP = new Set(['make', 'with', 'and', 'for', 'the', 'of', 'type', 'nos', 'no', 'mm', 'size', 'model', 'pcs', 'set', 'per']);
+const words = s => new Set(String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(' ').filter(w => w.length > 1 && !STOP.has(w)));
+export function poLineFor(po, itemId, saved = null, wantPending = true) {
   if (Number.isInteger(saved) && po.lines[saved]) return saved;
   const same = x => x.item_id && Number(x.item_id) === Number(itemId);
-  let i = wantPending ? po.lines.findIndex(x => same(x) && (Number(x.received) || 0) < (Number(x.qty) || 0)) : po.lines.findIndex(x => same(x) && (Number(x.received) || 0) > 0);
+  const open = x => (Number(x.received) || 0) < (Number(x.qty) || 0);
+  let i = po.lines.findIndex(x => same(x) && (wantPending ? open(x) : (Number(x.received) || 0) > 0));
   if (i < 0) i = po.lines.findIndex(same);
-  return i;
+  if (i >= 0 || !itemId) return i;
+  const it = db.prepare('SELECT name, code FROM items WHERE id = ?').get(Number(itemId));
+  const a = words(it?.name);
+  let best = -1, top = 0;
+  po.lines.forEach((l, k) => {
+    if (!(Number(l.qty) > 0) || (l.item_id && Number(l.item_id) !== Number(itemId))) return;
+    const b = words(`${l.description || ''} ${String(l.spec || '').split('\n')[0]} ${l.vendor_code || ''}`);
+    let hit = 0;
+    for (const w of a) if (b.has(w)) hit++;
+    const score = hit / Math.max(1, Math.min(a.size, b.size)) + (open(l) ? 0.01 : 0);
+    if (score > top) { top = score; best = k; }
+  });
+  if (best < 0 || top < 0.3) return -1;
+  if (!po.lines[best].item_id) po.lines[best].item_id = Number(itemId);
+  return best;
+}
+const lineOf = poLineFor;
+
+// GRN lines that point at a PO but were never counted on it (linked later, e.g. by an import): add them to the PO lines.
+export function addReceipts(poId, moves, user = { name: 'system' }) {
+  const po = getRow('purchase_orders', poId);
+  if (!po || !moves.length) return 0;
+  let n = 0;
+  for (const m of moves) {
+    const i = poLineFor(po, m.item_id, Number.isInteger(m.po_line) ? m.po_line : null);
+    if (i < 0) continue;
+    po.lines[i].received = round2((Number(po.lines[i].received) || 0) + Number(m.qty));
+    db.prepare('UPDATE stock_moves SET po_line = ? WHERE id = ?').run(i, m.id);
+    n++;
+  }
+  const patch = { lines: po.lines };
+  if (['Approved', 'Sent', 'Partially Received'].includes(po.status)) patch.status = fullyIn(po) ? 'Closed' : anyIn(po) ? 'Partially Received' : po.status;
+  updateRow('purchase_orders', po.id, patch, user, { system: true });
+  return n;
+}
+
+// Once: live POs that show nothing received although GRNs point at them get their receipts counted.
+export function repairPoReceipts() {
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'po_receipts_v1'").get()) return 0;
+  let n = 0;
+  for (const p of db.prepare("SELECT id, lines FROM purchase_orders WHERE status IN ('Approved', 'Sent', 'Partially Received', 'Closed')").all()) {
+    let rec = 0;
+    try { rec = JSON.parse(p.lines || '[]').reduce((s, l) => s + (Number(l.received) || 0), 0); } catch { continue; }
+    if (rec > 0) continue;
+    const moves = db.prepare("SELECT id, item_id, qty, po_line FROM stock_moves WHERE po_id = ? AND type = 'INWARD'").all(p.id);
+    if (moves.length) n += addReceipts(p.id, moves);
+  }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('po_receipts_v1', '\"1\"')").run();
+  return n;
 }
 const PO_OPEN = ['Approved', 'Sent', 'Partially Received', 'Closed', 'Received'];
 const fullyIn = po => po.lines.filter(x => Number(x.qty) > 0).every(x => (Number(x.received) || 0) >= Number(x.qty) - 1e-9);
@@ -444,5 +492,48 @@ export function editGrn(body, user) {
     }
     audit(user.name, 'stock_moves', moves[0].id, `GRN ${moves[0].doc_no} edited`, newPo ? `against PO ${newPo.po_no}` : 'no PO');
     return stockDoc({ type: 'INWARD', doc: body.doc, date: head.date || body.date });
+  });
+}
+
+// ---------------------------------------------------------------- merge a duplicate item
+// The same material entered twice (two codes): everything that refers to the duplicate — stock movements, POs,
+// requisitions, challans, BOQs, work orders, drafts, material lists … — moves to the item that is kept, its opening
+// stock is added, and the duplicate is removed. The stock of the kept item is then the sum of both.
+const ITEM_COLS = [['stock_moves', 'item_id'], ['boq_items', 'item_id'], ['bom_items', 'item_id'], ['material_lists', 'makes_item_id'], ['production_entries', 'fg_item_id']];
+const ITEM_LINES = ['purchase_orders', 'requisitions', 'challans', 'invoices', 'material_lists', 'service_work_orders', 'costing_sheets', 'material_requests', 'production_entries', 'dispatch_plans'];
+export function mergeItems(fromId, intoId, user) {
+  fromId = Number(fromId); intoId = Number(intoId);
+  if (!intoId || fromId === intoId) throw new HttpError(400, 'Choose the other item to keep');
+  const from = db.prepare('SELECT * FROM items WHERE id = ?').get(fromId), into = db.prepare('SELECT * FROM items WHERE id = ?').get(intoId);
+  if (!from || !into) throw new HttpError(404, 'Item not found');
+  return tx(() => {
+    const moved = {};
+    // Opening stock entries on the same date become one (the stock counts only the latest opening of an item).
+    for (const o of db.prepare("SELECT id, date, qty FROM stock_moves WHERE item_id = ? AND type = 'OPENING'").all(fromId)) {
+      const keep = db.prepare("SELECT id FROM stock_moves WHERE item_id = ? AND type = 'OPENING' AND date = ? ORDER BY id DESC LIMIT 1").get(intoId, o.date);
+      if (keep) { db.prepare('UPDATE stock_moves SET qty = qty + ? WHERE id = ?').run(Number(o.qty) || 0, keep.id); db.prepare('DELETE FROM stock_moves WHERE id = ?').run(o.id); moved.opening = (moved.opening || 0) + 1; }
+    }
+    for (const [t, c] of ITEM_COLS) {
+      const n = Number(db.prepare(`UPDATE ${t} SET ${c} = ? WHERE ${c} = ?`).run(intoId, fromId).changes);
+      if (n) moved[t] = (moved[t] || 0) + n;
+    }
+    const swap = list => { let hit = 0; for (const l of list || []) if (l && Number(l.item_id) === fromId) { l.item_id = intoId; hit++; } return hit; };
+    for (const t of ITEM_LINES) {
+      for (const r of db.prepare(`SELECT id, lines FROM ${t} WHERE lines LIKE ?`).all(`%"item_id":${fromId}%`)) {
+        let lines; try { lines = JSON.parse(r.lines); } catch { continue; }
+        const hit = swap(lines);
+        if (hit) { db.prepare(`UPDATE ${t} SET lines = ? WHERE id = ?`).run(JSON.stringify(lines), r.id); moved[t] = (moved[t] || 0) + hit; }
+      }
+    }
+    for (const r of db.prepare('SELECT id, payload FROM stock_drafts WHERE payload LIKE ?').all(`%"item_id":${fromId}%`)) {
+      let p; try { p = JSON.parse(r.payload); } catch { continue; }
+      if (swap(p.lines)) { db.prepare('UPDATE stock_drafts SET payload = ? WHERE id = ?').run(JSON.stringify(p), r.id); moved.stock_drafts = (moved.stock_drafts || 0) + 1; }
+    }
+    const patch = { opening_stock: round2((Number(into.opening_stock) || 0) + (Number(from.opening_stock) || 0)) };
+    for (const k of ['hsn', 'gst_rate', 'location', 'description', 'preferred_vendor_id', 'lead_days', 'reorder_level']) if ((into[k] == null || into[k] === '') && from[k] != null && from[k] !== '') patch[k] = from[k];
+    updateRow('items', intoId, patch, user, { system: true });
+    db.prepare('DELETE FROM items WHERE id = ?').run(fromId);
+    audit(user.name, 'items', intoId, `merged ${from.code} ${from.name}`, JSON.stringify(moved));
+    return { kept: getRow('items', intoId), moved, stock: stockOf(intoId) };
   });
 }

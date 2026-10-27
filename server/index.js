@@ -48,6 +48,7 @@ roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 importer.linkInwardPOs();
+stock.repairPoReceipts();
 sf.backfillLeadTimes();
 purgeExpiredSessions();
 notify.purgeOld();
@@ -545,6 +546,10 @@ api.post('/service/import/amc', need('amc_contracts'), express.raw({ type: () =>
 
 // ---------------------------------------------------------------- draft issue slips / dispatch challans / transfers
 const storeView = req => { if (!canView('stock_moves', req.user.role)) throw new HttpError(403, 'No access to stock movements'); };
+api.post('/items/:id/merge', need('items'), wrap(req => {
+  if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Only the store (people allowed to post stock) can merge items');
+  return stock.mergeItems(req.params.id, req.body?.into, req.user);
+}));
 api.get('/stock/docs', wrap(req => { storeView(req); return stock.stockDocs(req.query); }));
 api.get('/stock/doc', wrap(req => { storeView(req); return stock.stockDoc(req.query); }));
 api.put('/stock/grn', need('stock_moves'), wrap(req => {

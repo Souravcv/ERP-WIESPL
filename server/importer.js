@@ -9,6 +9,7 @@ import { insertRow, updateRow, HttpError } from './crud.js';
 import { nextItemCode } from './hooks.js';
 import { GST_STATE_CODES, STATES, ITEM_CATEGORIES, UOMS, MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
 import { fyOf, round2, poTotals } from '../public/js/calc.js';
+import { addReceipts } from './stock.js';
 
 // ---------------------------------------------------------------- helpers
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -639,6 +640,7 @@ export async function importPoFile(buffer, filename, user) {
           note += ` · CHECK: the Excel grand total is ₹${Math.round(p.excel_total).toLocaleString('en-IN')}, the CRM got ₹${Math.round(crmTotal).toLocaleString('en-IN')} (unusual layout in the file)`;
           data.remarks = `Imported from ${filename}: the Excel grand total is ₹${Math.round(p.excel_total)}, the CRM calculated ₹${Math.round(crmTotal)}. Check the lines, rates and charges.`;
         }
+        if (/^\d{1,4}$/.test(String(data.po_no || '').trim()) && data.date) data.po_no = `${String(data.po_no).trim().padStart(3, '0')}/20${fyOf(data.date)}`;
         const existing = db.prepare('SELECT id, status FROM purchase_orders WHERE po_no = ?').get(data.po_no);
         if (existing) {
           const received = db.prepare('SELECT COUNT(*) n FROM stock_moves WHERE po_id = ?').get(existing.id).n;
@@ -664,11 +666,14 @@ export function linkInwardPOs() {
   const byNo = new Map(db.prepare("SELECT id, po_no FROM purchase_orders WHERE status <> 'Archived (old)'").all().map(p => [normPoNo(p.po_no), p.id]));
   const upd = db.prepare('UPDATE stock_moves SET po_id = ? WHERE id = ?');
   let n = 0;
-  for (const m of db.prepare("SELECT id, po_no FROM stock_moves WHERE type = 'INWARD' AND po_id IS NULL AND COALESCE(po_no, '') <> ''").all()) {
+  const linked = new Map();
+  for (const m of db.prepare("SELECT id, po_no, item_id, qty FROM stock_moves WHERE type = 'INWARD' AND po_id IS NULL AND COALESCE(po_no, '') <> ''").all()) {
     // A cell may name more than one PO ("453/2025-26, 454/2025-26"): the first that exists.
     const id = String(m.po_no).split(/[,&;+]| and /i).map(s => byNo.get(normPoNo(s.trim()))).find(Boolean);
-    if (id) { upd.run(id, m.id); n++; }
+    if (id) { upd.run(id, m.id); n++; (linked.get(id) || linked.set(id, []).get(id)).push(m); }
   }
+  // The PO now shows what came in against it (received per line, partly received / closed).
+  for (const [poId, moves] of linked) addReceipts(poId, moves);
   return n;
 }
 
