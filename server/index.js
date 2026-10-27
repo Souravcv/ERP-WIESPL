@@ -16,6 +16,7 @@ import {
 import { listRows, getRow, insertRow, updateRow, deleteRow, canRemove, options, entityOr404, HttpError } from './crud.js';
 import * as notify from './notify.js';
 import { publicRouter, unfinishedLeads, briefFor } from './public.js';
+import { newRoom, cleanBrief } from '../public/js/brief-fields.js';
 import { migratePhotos, listPhotos, addPhoto, removePhoto } from './photos.js';
 import * as sig from './signatures.js';
 import { tx } from './db.js';
@@ -724,6 +725,40 @@ api.put('/files/:id/plan', express.json({ limit: '60mb' }), wrap(req => {
   fs.mkdirSync(path.dirname(planCache(a.id)), { recursive: true });
   fs.writeFileSync(planCache(a.id), JSON.stringify(p));
   return { ok: true };
+}));
+// which record a drawing belongs to (the 3D viewer offers to send OT sizes to that enquiry)
+api.get('/files/:id/meta', wrap(req => {
+  const a = roles.attachmentFile(req.params.id);
+  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  return { id: a.id, entity: a.entity, record_id: a.record_id, filename: a.filename, canWrite: canWrite(a.entity, req.user.role) };
+}));
+// OT names and sizes read from a CAD drawing → the enquiry's detailed requirement form (same name = updated, new = added)
+api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: '200kb' }), wrap(req => {
+  const e = db.prepare('SELECT id FROM enquiries WHERE id = ?').get(Number(req.params.id));
+  if (!e) throw new HttpError(404, 'Enquiry not found');
+  const incoming = (Array.isArray(req.body?.rooms) ? req.body.rooms : []).slice(0, 30)
+    .map(r => ({ name: String(r.name || '').trim().slice(0, 60), length: Number(r.length), width: Number(r.width), height: Number(r.height) }))
+    .filter(r => r.name && r.length > 0 && r.width > 0);
+  if (!incoming.length) throw new HttpError(400, 'No rooms with sizes to add');
+  let lead = {}; try { lead = JSON.parse(db.prepare('SELECT data FROM web_leads WHERE enquiry_id = ?').get(e.id)?.data || '{}'); } catch { /* none */ }
+  const token = briefFor(e.id, lead);
+  const b = db.prepare('SELECT id, data FROM design_briefs WHERE token = ?').get(token);
+  let data = {}; try { data = JSON.parse(b.data || '{}'); } catch { /* start again */ }
+  data.rooms ||= [];
+  // a brief made automatically has placeholder rooms "OT 1", "OT 2" … without real names: those are replaced first
+  const placeholder = r => /^OT \d+$/.test(r.name || '');
+  let added = 0, updated = 0;
+  for (const r of incoming) {
+    const size = { length: Math.round(r.length * 10) / 10, width: Math.round(r.width * 10) / 10, ...(r.height > 0 ? { height: Math.round(r.height * 10) / 10 } : {}) };
+    const same = data.rooms.find(x => String(x.name || '').toUpperCase() === r.name.toUpperCase());
+    if (same) { Object.assign(same, size); updated++; continue; }
+    const spare = data.rooms.find(placeholder);
+    if (spare) { Object.assign(spare, { name: r.name }, size); updated++; continue; }
+    data.rooms.push({ ...newRoom(data.rooms.length, null), name: r.name, ...size }); added++;
+  }
+  db.prepare("UPDATE design_briefs SET data = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(JSON.stringify(cleanBrief(data)), b.id);
+  audit(req.user.name, 'enquiries', e.id, 'drawing sizes', `${added} OT(s) added, ${updated} updated from a CAD drawing`);
+  return { added, updated, token };
 }));
 api.delete('/files/:id', wrap(req => {
   const a = roles.attachmentFile(req.params.id);

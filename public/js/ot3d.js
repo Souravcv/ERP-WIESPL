@@ -181,7 +181,10 @@ export async function mount3D(box, opts) {
   const AHU_KEYS = new Set(['ahu', 'ahu_pre', 'ahu_fine', 'ahu_coil', 'shrm', 'ahu_fan', 'ahu_heat']);
   const spinning = [];    // blower wheel, ODU fan
   const flows = [];       // animated arrows along the ducts
-  const W = isWard ? 9 : 6, D = 6, H = 3;
+  // room size: the standard 6 × 6 m OT, or a real room from a CAD drawing (opts.room in metres, kept between 5 and 12 m)
+  const fitRoom = (v, def) => (Number(v) > 0 ? Math.max(5, Math.min(12, Number(v))) : def);
+  const W = fitRoom(opts.room?.w, isWard ? 9 : 6), D = fitRoom(opts.room?.d, 6), H = 3;
+  const RS = Math.max(W / (isWard ? 9 : 6), D / 6); // camera distance follows the room size
   const room = new T.Group(); scene.add(room);
 
   // gas outlets (O2 white, N2O blue, air black, vacuum yellow, CO2 grey) and power sockets
@@ -864,9 +867,9 @@ export async function mount3D(box, opts) {
   applyVisibility();
 
   const views = {
-    overview: isWard ? [V(6.4, 5.4, 7.4), V(0, 0.9, -0.3)] : [V(6.6, 5.3, 7.2), V(0, 1.05, -0.1)],
+    overview: isWard ? [V(6.4 * RS, 5.4 * RS, 7.4 * RS), V(0, 0.9, -0.3)] : [V(6.6 * RS, 5.3 * RS, 7.2 * RS), V(0, 1.05, -0.1)],
     eye: isWard ? [V(-1, 1.65, 2.4), V(-1.5, 1.2, -2.2)] : [V(2.4, 1.7, 2.5), V(-0.4, 1.35, -0.8)],
-    anatomy: isWard ? [V(9.5, 10, 8.5), V(0, 2.2, -2.6)] : [V(8.6, 8.8, 7.6), V(0, 2.2, -2.2)],
+    anatomy: isWard ? [V(9.5 * RS, 10 * RS, 8.5 * RS), V(0, 2.2, -2.6)] : [V(8.6 * RS, 8.8 * RS, 7.6 * RS), V(0, 2.2, -2.2)],
   };
   let anim = null;
   const fit = () => { const a = Math.max(0.3, box.clientWidth / Math.max(1, box.clientHeight)); return a < 1.3 ? Math.min(1.75, (1.3 / a) ** 0.55) : 1; };

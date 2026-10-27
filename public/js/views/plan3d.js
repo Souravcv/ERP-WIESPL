@@ -3,6 +3,7 @@
 // The DWG is read once in a Web Worker (plan-worker.js); the result is kept on the server so it reopens instantly.
 import { h, api, toast, fail } from '../ui.js';
 import { guessRole } from '../plan-extract.js';
+import { roomSize, isOt, openOtRoom, quantitiesDialog } from './plan3d-extras.js';
 
 const ROLES = [['wall', 'Wall'], ['glass', 'Glass'], ['column', 'Column'], ['door', 'Door'], ['furniture', 'Furniture / fittings'], ['floor', 'Lines on floor'], ['hide', 'Hide']];
 const COLOR = { wall: 0xe9edf2, glass: 0x9fd0f2, column: 0x707b8c, door: 0x9a5b22, furniture: 0x52627a, floor: 0x9aa7b6 };
@@ -74,7 +75,8 @@ export async function plan3dView(root, fileId) {
       api(`/files/${id}/plan`, { method: 'PUT', body: plan }).catch(() => {}); // next time it opens instantly
     }
   } catch (e) { status.textContent = `⚠ ${e.message}`; return; }
-  build(stage, side, plan);
+  const meta = await api(`/files/${id}/meta`).catch(() => null);
+  build(stage, side, plan, meta);
 }
 
 // premium look: solid walls with dark section-cut tops, soft shadows, studio light, tiled floor, raised furniture
@@ -82,7 +84,7 @@ const TINT = name => (/NICOMAC|PANEL|HPL|CLEAN ROOM/i.test(name) ? 0xdde6ef : /P
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
-function build(stage, side, plan) {
+function build(stage, side, plan, meta) {
   const T = window.THREE;
   const roles = loadRoles();
   const roleOf = l => roles[l] || guessRole(l);
@@ -221,7 +223,7 @@ function build(stage, side, plan) {
       const lines = t.t.split('\n').filter(Boolean).slice(0, 2);
       const el = h(`div.p3-label.k-${KIND(t.t)}`, h('b', lines[0]), lines[1] ? h('span', lines[1]) : null);
       labelsLayer.append(el);
-      labels.push({ el, v: new T.Vector3(X(t.x + (t.w || 0) / 2), 0.15, Z(t.y)), t, room: ROOM_RE.test(t.t) });
+      labels.push({ el, v: new T.Vector3(X(t.x + (t.w || 0) / 2), 0.15, Z(t.y)), t, room: ROOM_RE.test(t.t), size: roomSize(t.t) });
     }
     labels.sort((a, b) => Number(b.room) - Number(a.room));
     drawSide();
@@ -260,6 +262,24 @@ function build(stage, side, plan) {
     fly(new T.Vector3(ex, 1.6, ez), new T.Vector3(ex + best.dx * 3, 1.4, ez + best.dz * 3), 1300);
   };
 
+  async function openQuantities() {
+    const A = plan.areas[areaIdx] || { x0: -1e9, y0: -1e9, x1: 1e9, y1: 1e9 };
+    const seen = new Set(), rooms = [];
+    for (const t of plan.texts) {
+      if (t.x < A.x0 || t.x > A.x1 || t.y < A.y0 || t.y > A.y1) continue;
+      const s = roomSize(t.t), key = s && s.name + s.w + s.d;
+      if (s && !seen.has(key)) { seen.add(key); rooms.push(s); }
+    }
+    rooms.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const layers = Object.entries(plan.layers).map(([name, L]) => {
+      const role = roleOf(name); if (!['wall', 'glass', 'column'].includes(role)) return null;
+      let m = 0; const s = L.segs;
+      for (let i = 0; i < s.length; i += 4) if (s[i] >= A.x0 && s[i] <= A.x1 && s[i + 1] >= A.y0 && s[i + 1] <= A.y1) m += Math.hypot(s[i + 2] - s[i], s[i + 3] - s[i + 1]);
+      return m > 0.5 ? { name, role, metres: m } : null;
+    }).filter(Boolean).sort((a, b) => b.metres - a.metres);
+    await quantitiesDialog({ rooms, layers, heightM: wallH, meta });
+  }
+
   // side panel: views, rooms, heights, layers
   function drawSide() {
     const rooms = labels.filter(l => l.room);
@@ -274,7 +294,9 @@ function build(stage, side, plan) {
     side.replaceChildren(
       h('div.p3-box', h('b', 'View'), h('div.toolbar', h('button.btn.small', { onclick: views.persp }, '3D'), h('button.btn.small', { onclick: views.top }, 'Plan (top)'),
         h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names')),
-        roomSel, current ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null),
+        roomSel, current ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
+        current && isOt(current.t.t) ? h('button.btn.small.p3-otbtn', { onclick: () => openOtRoom(current.size || { name: current.t.t.split('\n')[0], w: 6, d: 6 }).catch(fail) }, `🏥 Open as WIESPL OT${current.size ? ` · ${Math.round(current.size.w * 10) / 10} × ${Math.round(current.size.d * 10) / 10} m` : ''}`) : null),
+      h('div.p3-box', h('b', 'Quantities'), h('p.muted', 'Floor, wall panels, ceiling and coving per OT, from the room sizes in the drawing.'), h('button.btn.small', { onclick: () => openQuantities().catch(fail) }, '📐 Quantities from the drawing')),
       h('div.p3-box', h('b', 'Heights'), h('div.p3-row', h('span', 'Walls'), num(wallH, 1, 10, 0.1, v => { wallH = v; }), h('span', 'm')),
         h('div.p3-row', h('span', 'Furniture'), num(furnH, 0, 2, 0.1, v => { furnH = v; }), h('span', 'm (0 = flat)'))),
       plan.areas.length > 1 ? h('div.p3-box', h('b', 'Part of the sheet'), h('select', { onchange: e => { areaIdx = Number(e.target.value); current = null; rebuild(); views.persp(); } },
