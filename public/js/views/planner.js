@@ -54,14 +54,21 @@ export async function plannerView(root, projectId) {
   picker.querySelector('input').placeholder = 'Project name or work order no…';
   const head = h('div.page-head', h('h1', '📅 Project Planner'), h('div.actions', h('span', { style: { minWidth: '320px', display: 'inline-block' } }, picker)));
   if (!projectId) {
-    root.replaceChildren(head, h('div.card', h('p', 'Choose a project to plan or follow its schedule: phases and activities with WIESPL and client scope, durations and "after" links, the critical path, baseline against forecast, and the printed bar chart.')));
+    root.replaceChildren(head, h('div', 'Loading all projects…'));
+    root.replaceChildren(head, await portfolioView());
     return;
   }
   let d = await api(`/projects/${projectId}/schedule`);
   const out = h('div');
 
+  const savedNote = h('span.muted', { style: { fontSize: '12px' } }, d.canEdit ? 'Changes save by themselves when you leave a cell' : 'View only: your login may not change schedules');
   const save = async (rows, deleted = []) => {
-    try { d = await api(`/projects/${projectId}/schedule`, { method: 'PUT', body: { rows, deleted } }); render(); return true; } catch (e) { fail(e); d = await api(`/projects/${projectId}/schedule`); render(); return false; }
+    savedNote.textContent = 'Saving…'; savedNote.style.color = '';
+    try {
+      d = await api(`/projects/${projectId}/schedule`, { method: 'PUT', body: { rows, deleted } });
+      savedNote.textContent = `✓ Saved ${new Date().toTimeString().slice(0, 5)} · dates worked out again`; savedNote.style.color = 'var(--good)';
+      render(); return true;
+    } catch (e) { fail(e); savedNote.textContent = '✗ Not saved: ' + e.message; savedNote.style.color = 'var(--bad)'; d = await api(`/projects/${projectId}/schedule`); render(); return false; }
   };
   // Inline cell edits: saved when the cell is left, then the page is drawn again with the cell keeping focus.
   const cell = (r, key, input) => {
@@ -99,12 +106,12 @@ export async function plannerView(root, projectId) {
       h('label', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, 'Show', filter),
       hasRows ? h('button.btn.small', { onclick: () => { for (const r of d.rows) if (r.kind === 'Phase') collapsed.add(r.id); render(); } }, '⊟ Fold phases') : null,
       hasRows ? h('button.btn.small', { onclick: () => { collapsed.clear(); render(); } }, '⊞ Unfold') : null,
-      h('span', { style: { flex: 1 } }),
+      h('span', { style: { flex: 1 } }), savedNote,
       d.canEdit && hasRows ? h('button.btn.small', { onclick: () => editRow(null, 'Phase') }, '+ Phase') : null,
       d.canEdit && hasRows ? h('button.btn.small', { onclick: () => editRow(null, 'Activity') }, '+ Activity') : null,
       d.canEdit && hasRows ? h('button.btn.small', { onclick: busy(baseline) }, '📌 Freeze baseline') : null,
       hasRows ? h('a.btn.small', { href: `#/planner-print/${projectId}` }, '🖨 Print bar chart') : null,
-      h('a.btn.small', { href: `#/view/projects/${projectId}` }, '🏗️ Project'));
+      h('a.btn.small', { href: `#/view/projects/${projectId}` }, '🏗️ Project'), h('a.btn.small', { href: '#/planner' }, '📊 All projects'));
   }
 
   async function baseline() {
@@ -281,6 +288,64 @@ export async function plannerView(root, projectId) {
 
   root.replaceChildren(head, out);
   render();
+}
+
+// ---------------------------------------------------------------- all projects at a glance
+// Each open project on one line: progress, forecast finish against the baseline, what is late, what is going on now,
+// the next milestone and dispatch, and a bar on one shared time line (today marked) to compare the projects.
+async function portfolioView() {
+  const { today: t, projects } = await api('/planner/portfolio');
+  const sched = projects.filter(p => p.has_schedule);
+  const lateOf = p => (p.summary.variance > 0 ? p.summary.variance : 0) + p.summary.late + p.summary.overdue;
+  sched.sort((a, b) => lateOf(b) - lateOf(a) || String(a.summary.finish).localeCompare(String(b.summary.finish)));
+  const dates = sched.flatMap(p => [p.summary.start, p.summary.finish, p.summary.base_finish]).filter(Boolean).sort();
+  const from = mondayOf(dates[0] || t), to = plus(dates.at(-1) || plus(t, 90), 7);
+  const pos = s => Math.max(0, Math.min(100, ((T(s) - T(from)) / (T(to) - T(from))) * 100));
+  const avg = sched.length ? Math.round(sched.reduce((a, p) => a + p.summary.progress, 0) / sched.length) : 0;
+  const k = (label, value, sub, color) => h('div.kpi', h('div.label', label), h('div.value', { style: color ? { color } : {} }, value), sub ? h('div.sub', sub) : null);
+  const lateN = sched.filter(p => lateOf(p) > 0).length;
+  const bar = p => {
+    const s = p.summary;
+    return h('div', { style: { position: 'relative', height: '22px', background: 'var(--surface-2, #f3f4f6)', borderRadius: '4px', minWidth: '220px' } },
+      h('div', { title: `${fmtDate(s.start)} → ${fmtDate(s.finish)} · ${s.progress}% done`, style: { position: 'absolute', top: '5px', height: '12px', left: pos(s.start) + '%', width: Math.max(1, pos(plus(s.finish, 1)) - pos(s.start)) + '%', background: s.variance > 0 ? 'var(--bad)' : 'var(--accent, #2563eb)', opacity: 0.35, borderRadius: '3px' } },
+        h('div', { style: { height: '100%', width: Math.min(100, s.progress) + '%', background: s.variance > 0 ? 'var(--bad)' : 'var(--accent, #2563eb)', borderRadius: '3px' } })),
+      s.base_finish ? h('div', { title: `baseline finish ${fmtDate(s.base_finish)}`, style: { position: 'absolute', top: '2px', height: '18px', width: '2px', left: pos(s.base_finish) + '%', background: '#111' } }) : null,
+      h('div', { title: `today ${fmtDate(t)}`, style: { position: 'absolute', top: 0, bottom: 0, width: '1px', left: pos(t) + '%', background: 'var(--bad)' } }));
+  };
+  const scale = () => {
+    const marks = [];
+    for (let s = iso(Date.UTC(new Date(T(from)).getUTCFullYear(), new Date(T(from)).getUTCMonth() + 1, 1)); s < to; s = iso(Date.UTC(new Date(T(s)).getUTCFullYear(), new Date(T(s)).getUTCMonth() + 1, 1)))
+      marks.push(h('span', { style: { position: 'absolute', left: pos(s) + '%', fontSize: '11px', color: 'var(--muted)', borderLeft: '1px solid var(--grid, #ddd)', paddingLeft: '2px' } }, monthOf(s)));
+    return h('div', { style: { position: 'relative', height: '16px', minWidth: '220px' } }, marks);
+  };
+  const vs = s => s.variance == null ? h('span.muted', 'no baseline') : s.variance > 0 ? h('b', { style: { color: 'var(--bad)' } }, `+${days(s.variance)} late`) : s.variance < 0 ? h('span', { style: { color: 'var(--good)' } }, `${days(-s.variance)} early`) : h('span', { style: { color: 'var(--good)' } }, 'on time');
+  const rows = sched.map(p => {
+    const s = p.summary;
+    return h('tr.clickable', { onclick: () => (location.hash = `#/planner/${p.id}`) },
+      h('td', h('b', p.name), h('div.muted', { style: { fontSize: '12px' } }, [p.no, p.customer, p.engineer && `PM: ${p.engineer}`].filter(Boolean).join(' · '))),
+      h('td', { style: { minWidth: '120px' } }, h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+        h('div', { style: { flex: 1, height: '8px', background: 'var(--surface-2, #eee)', borderRadius: '4px', overflow: 'hidden' } }, h('div', { style: { width: s.progress + '%', height: '100%', background: 'var(--good)' } })),
+        h('b', `${Math.round(s.progress)}%`)), h('div.muted', { style: { fontSize: '11px' } }, `${s.done} of ${s.activities} done`)),
+      h('td.nowrap', fmtDate(s.finish), h('div', { style: { fontSize: '12px' } }, vs(s))),
+      h('td', { style: { fontSize: '12px' } }, p.late.length ? p.late.map(x => h('div', { style: { color: 'var(--bad)' } }, `${x.sr}. ${x.name.slice(0, 40)}${x.days ? ` +${x.days}d` : ' (past finish)'}`)) : h('span', { style: { color: 'var(--good)' } }, 'nothing late'),
+        s.client_open ? h('div', { style: { color: 'var(--warn)' } }, `${s.client_open} client action(s) due in 14 days`) : null),
+      h('td', { style: { fontSize: '12px' } }, p.now.length ? p.now.map(x => h('div', `${x.sr}. ${x.name.slice(0, 40)}${x.party !== 'WIESPL' ? ` (${x.party})` : ''}`)) : h('span.muted', '—')),
+      h('td', { style: { fontSize: '12px' } }, p.next_milestone ? [h('div', '◆ ' + p.next_milestone.name.slice(0, 40)), h('div.muted', fmtDate(p.next_milestone.date))] : h('span.muted', '—'),
+        p.next_dispatch ? h('div', { style: { marginTop: '3px' } }, `🚛 ${p.next_dispatch.plan_no} ${fmtDate(p.next_dispatch.planned_date)}`) : null),
+      h('td', bar(p)));
+  });
+  const none = projects.filter(p => !p.has_schedule);
+  return h('div',
+    h('div.kpis', k('Open projects', projects.length, `${sched.length} with a schedule`), k('Average progress', `${avg}%`),
+      k('Late', lateN, 'behind baseline or past a finish date', lateN ? 'var(--bad)' : 'var(--good)'),
+      k('On time', sched.length - lateN, '', 'var(--good)'),
+      k('Client actions', sched.reduce((a, p) => a + p.summary.client_open, 0), 'due in the next 14 days')),
+    sched.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
+      h('thead', h('tr', h('th', 'Project'), h('th', 'Progress'), h('th', 'Forecast finish'), h('th', 'Late / client'), h('th', 'Going on now'), h('th', 'Next milestone / dispatch'), h('th', scale()))),
+      h('tbody', rows)))) : null,
+    h('p.muted', { style: { fontSize: '12px' } }, 'Late projects first. The bar runs from start to forecast finish (darker part = progress, red = behind baseline); the black mark is the baseline finish, the red line is today. Click a project to open its Gantt chart.'),
+    none.length ? h('div.card', h('h3', { style: { margin: '0 0 6px' } }, 'Projects without a schedule'),
+      h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } }, none.map(p => h('a.btn.small', { href: `#/planner/${p.id}` }, `+ ${p.no ? p.no + ' · ' : ''}${p.name.trim().slice(0, 50)}`)))) : null);
 }
 
 // ---------------------------------------------------------------- printed bar chart (A3 landscape, like the WIESPL Excel)

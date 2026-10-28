@@ -42,7 +42,7 @@ let tasksOpen = 0;
 function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/taskboard' }, '🗂️ Task board'));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/taskboard' }, '🗂️ Task board'));
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
@@ -106,6 +106,7 @@ async function route() {
       case 'planner-print': { $('app').classList.add('hidden'); const { plannerPrint } = await import('./views/planner.js'); await plannerPrint($('print-root'), a); break; }
       case 'payables': { const { payablesView } = await import('./views/payables.js'); await payablesView(view, a || 'due', b); break; }
       case 'taskboard': { const { taskBoardView } = await import('./views/taskboard.js'); await taskBoardView(view); break; }
+      case 'drafts': { const { draftsView } = await import('./views/drafts.js'); await draftsView(view); break; }
       case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
       case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }
       case 'service': { const { serviceView } = await import('./views/service.js'); await serviceView(view); break; }

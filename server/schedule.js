@@ -282,3 +282,30 @@ export function applyBaseline(id, user) {
 }
 
 export const scheduleFields = () => ENTITIES.schedule_activities.fields;
+
+// ---------------------------------------------------------------- all projects at a glance
+// Every open project: its schedule summary (progress, forecast vs baseline, late, critical), what is being worked on
+// now, the next milestone and the next dispatch. Projects without a schedule are listed too, to start one.
+export function portfolio(user) {
+  mayView(user);
+  const t = today();
+  const projects = db.prepare("SELECT id FROM projects WHERE COALESCE(status, 'Active') NOT IN ('Completed', 'Cancelled') ORDER BY id").all();
+  const nextDispatch = db.prepare("SELECT plan_no, planned_date, title, status FROM dispatch_plans WHERE project_id = ? AND status IN ('Planned', 'Material ready') ORDER BY planned_date LIMIT 1");
+  const out = projects.map(({ id }) => {
+    const p = getRow('projects', id);
+    const base = { id, no: p.project_no || p.code, name: p.name, customer: p.customer_id_label || null, site: p.site || null, engineer: p.engineer || null, status: p.status,
+      target: p.target_date || null, next_dispatch: nextDispatch.get(id) || null };
+    const n = db.prepare('SELECT COUNT(*) n FROM schedule_activities WHERE project_id = ?').get(id).n;
+    if (!n) return { ...base, has_schedule: false };
+    const c = compute(id, { save: false });
+    const acts = c.rows.filter(r => r.kind !== 'Phase');
+    const open = acts.filter(r => r.status !== 'Done');
+    const now = open.filter(r => r.status === 'In progress' || (r.plan_start <= t && r.plan_finish >= t)).slice(0, 3).map(r => ({ sr: r.sr, name: r.name, party: r.party, late: r.late_days || 0 }));
+    const ms = open.filter(r => r.kind === 'Milestone').sort((a, b) => String(a.plan_finish).localeCompare(String(b.plan_finish)))[0];
+    const late = open.filter(r => r.late_days > 0 || r.overdue === 'Yes').sort((a, b) => (b.late_days || 0) - (a.late_days || 0)).slice(0, 3).map(r => ({ sr: r.sr, name: r.name, days: r.late_days || 0, overdue: r.overdue === 'Yes' }));
+    const phases = c.rows.filter(r => r.kind === 'Phase').map(r => ({ name: r.name, progress: r.progress, status: r.status, start: r.plan_start, finish: r.plan_finish }));
+    return { ...base, has_schedule: true, summary: c.summary, problems: c.problems.length, now, late, phases,
+      next_milestone: ms ? { name: ms.name, date: ms.plan_finish, base: ms.base_finish || null } : null };
+  });
+  return { today: t, projects: out };
+}

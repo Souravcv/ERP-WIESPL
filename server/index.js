@@ -413,6 +413,23 @@ api.get('/receipts-register', wrap(req => { arView(req); return recv.receiptsReg
 // Project Planner (Gantt): the schedule worked out, saved from the grid, started from a template, baselined.
 api.post('/dispatch_plans/:id/fill', need('dispatch_plans'), wrap(req => planning.fillPlan(req.params.id, req.body, req.user)));
 api.post('/boqs/:id/departments', wrap(req => planning.setDepartments(req.params.id, req.body, req.user)));
+// My Drafts: records this login created that are still Draft (or sent back as Rejected), in every module it can see.
+api.get('/my-drafts', wrap(req => {
+  const out = [];
+  for (const [name, e] of Object.entries(ENTITIES)) {
+    const sf = e.fields.find(f => f.key === e.statusField);
+    if (!sf || !(sf.options || []).includes('Draft') || !canView(name, req.user.role) || name === 'schedule_baselines') continue;
+    const who = name === 'stock_drafts' ? "COALESCE(t.prepared_by, t.created_by)" : 't.created_by';
+    const label = e.display ? e.display.replaceAll('{t}', 't') : "'#' || t.id";
+    const st = (sf.options || []).includes('Rejected') ? "('Draft', 'Rejected')" : "('Draft')";
+    try {
+      for (const r of db.prepare(`SELECT t.id, t.${e.statusField} status, t.created_at, t.updated_at, ${label} label FROM ${name} t WHERE t.${e.statusField} IN ${st} AND ${who} = ? ORDER BY COALESCE(t.updated_at, t.created_at) DESC LIMIT 100`).all(req.user.name))
+        out.push({ entity: name, ...r });
+    } catch { /* a module whose display needs other tables */ }
+  }
+  return out.sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
+}));
+api.get('/planner/portfolio', wrap(req => planner.portfolio(req.user)));
 api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
 api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));
 api.post('/projects/:id/schedule/template', wrap(req => planner.applyTemplate(req.params.id, req.body, req.user)));
