@@ -86,7 +86,8 @@ function spoofFlags(p, prev, ip, inIp) {
     const h = Math.max((Date.parse(now().replace(' ', 'T')) - Date.parse(String(prev.at).replace(' ', 'T'))) / 3600e3, 1 / 60);
     if (km > 2 && km / h > 120) f.push(`moved ${km.toFixed(1)} km in ${Math.round(h * 60)} min`);
   }
-  const net = s => String(s || '').split('.').slice(0, 2).join('.');
+  // The operator's part of the address: IPv4 a.b, IPv6 the first two groups (mobile data changes the rest all the time).
+  const net = s => { const x = String(s || '').replace(/^::ffff:/, ''); return x.includes(':') ? x.split(':').slice(0, 2).join(':') : x.split('.').slice(0, 2).join('.'); };
   if (ip && inIp && net(ip) !== net(inIp)) f.push('network changed since clock-in');
   return f;
 }
@@ -220,6 +221,9 @@ export function check(user, body = {}, ip) {
   const loc = siteOf(att);
   const f = loc ? fence(loc, p) : null;
   const kind = body.photo ? 'Photo check' : body.reason === 'geofence-exit' ? 'Geofence exit' : 'Auto';
+  // A plain check within 20 s of the last one adds nothing (e.g. the button pressed again and again).
+  const last = db.prepare('SELECT at FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
+  if (kind === 'Auto' && last && Date.parse(now().replace(' ', 'T')) - Date.parse(String(last.at).replace(' ', 'T')) < 20e3) return { recorded: true, at: now().slice(11, 16) };
   return tx(() => {
     const prev = db.prepare('SELECT inside FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
     const photoId = savePhoto(att.id, 'Presence check', body.photo, user);
