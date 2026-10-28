@@ -580,6 +580,8 @@ const clientIp = req => String(req.headers['x-forwarded-for'] || '').split(',')[
 api.get('/hr/me', wrap(req => hr.myDay(req.user)));
 api.post('/hr/clock-in', wrap(req => hr.clockIn(req.user, req.body, clientIp(req))));
 api.post('/hr/check', wrap(req => hr.check(req.user, req.body, clientIp(req))));
+api.post('/hr/going-out', wrap(req => hr.goingOut(req.user, req.body, clientIp(req))));
+api.post('/hr/back', wrap(req => hr.backAtSite(req.user, req.body, clientIp(req))));
 api.post('/hr/clock-out', wrap(req => hr.clockOut(req.user, req.body, clientIp(req))));
 api.post('/hr/leave', wrap(req => hr.applyLeave(req.user, req.body)));
 const hrView = req => { if (!canView('attendance', req.user.role)) throw new HttpError(403, 'No access to attendance'); };

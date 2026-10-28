@@ -177,6 +177,8 @@ export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + ad
 // Leave types of the WIESPL HR Policy. Paid = the day counts for salary; PL comes from the quarterly credit.
 export const LEAVE_TYPES = ['Privilege Leave (PL)', 'Comp-off', 'Short leave (up to 1½ h)', 'Leave without pay', 'Maternity', 'Paternity', 'Adoption', 'Marriage', 'Special (declared closure)', 'On duty (outside)'];
 export const UNPAID_LEAVE = ['Leave without pay', 'Unpaid'];
+// Why someone stepped outside the site during the day (told by the employee with "Going out", or set by HR).
+export const OUT_REASONS = ['Material / purchase', 'Other site / client work', 'Lunch / food', 'Personal', 'Other'];
 export const EMPLOYMENT_TYPES = ['Probation', 'Confirmed', 'Fixed-term', 'Trainee', 'Contract'];
 export const APPROVAL_FLOWS = {
   Quotation: [{ stage: 'Approval', fn: 'approve_quotation' }],
@@ -1273,7 +1275,7 @@ export const ENTITIES = {
     label: 'Attendance Register', singular: 'Attendance', group: 'HR', icon: '🕘', write: HR_ROLES,
     display: "{t}.date",
     search: ['flags', 'note', 'remarks'],
-    list: ['date', 'employee_id', 'location_id', 'mode', 'check_in', 'check_out', 'hours', 'timing', 'checks_inside', 'status', 'review'],
+    list: ['date', 'employee_id', 'location_id', 'mode', 'check_in', 'check_out', 'hours', 'away_minutes', 'net_hours', 'timing', 'status', 'review'],
     statusField: 'status',
     fields: [
       { key: 'date', label: 'Date', type: 'date', required: true },
@@ -1291,7 +1293,20 @@ export const ENTITIES = {
       { key: 'checks_inside', label: 'Checks Inside', type: 'number', readonly: true },
       { key: 'photo_checks', label: 'Photo Checks', type: 'number', readonly: true },
       { key: 'last_check', label: 'Last Check', type: 'text', readonly: true },
-      { key: 'away_minutes', label: 'Away From Site (min)', type: 'number', readonly: true },
+      { key: 'away_minutes', label: 'Outside the Site (min)', type: 'number', readonly: true },
+      { key: 'out_since', label: 'Gone Out At (told by the employee)', type: 'text', readonly: true },
+      { key: 'out_reason', label: 'Gone Out For', type: 'text', readonly: true },
+      { key: 'outings', label: 'Outside Periods', type: 'lines', span: 2, amounts: false, hint: 'From the location checks. Hours stay clock-in to clock-out; HR sets the reason and, if needed, the minutes to deduct.', columns: [
+        { key: 'from', label: 'From', type: 'text', width: 70 },
+        { key: 'to', label: 'To', type: 'text', width: 70 },
+        { key: 'minutes', label: 'Min', type: 'number', width: 60 },
+        { key: 'reason', label: 'Reason', type: 'select', options: ['', ...OUT_REASONS], width: 170 },
+        { key: 'by', label: 'Reason by', type: 'text', width: 90 },
+        { key: 'deduct', label: 'Deduct (min)', type: 'number', width: 90 },
+        { key: 'note', label: 'Note', type: 'text', width: 200 },
+      ] },
+      { key: 'deduct_minutes', label: 'Deducted by HR (min)', type: 'number', readonly: true },
+      { key: 'net_hours', label: 'Net Working Hours', type: 'number', readonly: true },
       { key: 'away_since', label: 'Away Since (alert sent)', type: 'text', readonly: true },
       { key: 'alert_at', label: 'Last Alert to HR', type: 'text', readonly: true },
       { key: 'in_ip', label: 'Network at Clock In', type: 'text', readonly: true },
@@ -1312,7 +1327,8 @@ export const ENTITIES = {
       { key: 'attendance_id', label: 'Attendance', type: 'ref', ref: 'attendance' },
       { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees' },
       { key: 'at', label: 'Time', type: 'text' },
-      { key: 'kind', label: 'Kind', type: 'select', options: ['In', 'Auto', 'Geofence exit', 'Photo check', 'Out'] },
+      { key: 'kind', label: 'Kind', type: 'select', options: ['In', 'Auto', 'Geofence exit', 'Photo check', 'Going out', 'Back', 'Out'] },
+      { key: 'note', label: 'Note', type: 'text' },
       { key: 'lat', label: 'Latitude', type: 'number' },
       { key: 'lng', label: 'Longitude', type: 'number' },
       { key: 'accuracy_m', label: 'GPS Accuracy (m)', type: 'number' },

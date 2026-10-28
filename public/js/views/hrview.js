@@ -54,7 +54,8 @@ async function month(box) {
   const pick = h('input', { type: 'month', value: today().slice(0, 7) });
   const out = h('div');
   let d = null;
-  const COLS = [['present', 'Present'], ['late_marks', 'Late marks'], ['half', '½ days'], ['absent', 'Absent'], ['leave', 'Paid leave'], ['lwp', 'LWP'], ['sandwich', 'Sandwich'], ['off_worked', 'Off days worked'], ['pay_extra', 'Pay extra (comp-off not taken)'], ['paid_days', 'Paid days']];
+  const COLS = [['present', 'Present'], ['late_marks', 'Late marks'], ['half', '½ days'], ['absent', 'Absent'], ['leave', 'Paid leave'], ['lwp', 'LWP'], ['sandwich', 'Sandwich'], ['off_worked', 'Off days worked'], ['pay_extra', 'Pay extra (comp-off not taken)'], ['paid_days', 'Paid days'],
+    ['hours', 'Hours (in to out)'], ['outside_hours', 'Outside the site (h)'], ['deducted_hours', 'Deducted by HR (h)'], ['net_hours', 'Net hours']];
   const csv = () => {
     const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const lines = [['Code', 'Employee', 'Department', ...d.days.map(x => x.slice(8)), ...COLS.map(c => c[1]), 'To review'].map(q).join(',')]
@@ -68,11 +69,12 @@ async function month(box) {
       h('p.muted', { style: { fontSize: '12px' } }, LEGEND, `. First ${d.late_free} late marks a month are free. Paid days = P + P* + ½ (H, H*, HL) + L + CO + OD + HO + WO + W.`),
       h('div.card.flush', h('div.table-wrap', h('table.data', { style: { fontSize: '11.5px' } },
         h('thead', h('tr', h('th', 'Employee'), d.days.map(x => h('th', { style: { padding: '4px 3px', textAlign: 'center', color: d.holidays[x] ? 'var(--warn)' : '' }, title: d.holidays[x] || '' }, Number(x.slice(8)))),
-          ['P', 'Late', '½', 'A', 'L', 'LWP', 'S', 'W', 'Pay+', 'Paid', '?'].map(x => h('th.num', x)))),
+          ['P', 'Late', '½', 'A', 'L', 'LWP', 'S', 'W', 'Pay+', 'Paid', 'Hrs', 'Out h', 'Net h', '?'].map(x => h('th.num', x)))),
         h('tbody', d.rows.map(r => h('tr', h('td.nowrap', r.name),
           r.codes.map(c => h('td', { style: { padding: '4px 3px', textAlign: 'center', fontWeight: 600, color: CODE_COLOR[c.replace('?', '')] || '' } }, c)),
           h('td.num', r.present), h('td.num', { style: { color: r.late_marks > d.late_free ? 'var(--bad)' : '' } }, r.late_marks || ''), h('td.num', r.half || ''), h('td.num', r.absent || ''), h('td.num', r.leave || ''),
           h('td.num', r.lwp || ''), h('td.num', r.sandwich || ''), h('td.num', r.off_worked || ''), h('td.num', r.pay_extra || ''), h('td.num', h('b', inr(r.paid_days, 1))),
+          h('td.num', r.hours || ''), h('td.num', { title: r.deducted_hours ? `${r.deducted_hours} h deducted by HR` : '' }, r.outside_hours || ''), h('td.num', r.net_hours || ''),
           h('td.num', { style: { color: r.to_review ? 'var(--warn)' : '' } }, r.to_review || ''))))))),
       h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } }, h('button.btn', { onclick: () => window.print() }, '🖨 Print'), h('button.btn', { onclick: csv }, '⬇ Excel (CSV) for salary')));
   };

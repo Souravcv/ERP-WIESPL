@@ -348,6 +348,20 @@ export function beforeSave(name, row, existing, user) {
         [row.lat, row.lng] = ll;
       }
       break;
+    case 'attendance':
+      if ('outings' in row && !user?.system && user?.name !== 'system') {
+        const prev = parse(existing?.outings, []);
+        const L = parse(row.outings, []).map(o => {
+          const was = prev.find(x => x.from === o.from);
+          const changed = !was || was.reason !== o.reason || String(was.deduct ?? '') !== String(o.deduct ?? '') || (was.note || '') !== (o.note || '');
+          return changed ? { ...o, by: 'HR' } : o;
+        });
+        const deduct = L.reduce((s, o) => s + (Number(o.deduct) || 0), 0);
+        row.outings = JSON.stringify(L);
+        row.deduct_minutes = deduct || null;
+        row.net_hours = Math.round(Math.max(0, (Number(existing?.hours) || 0) - deduct / 60) * 10) / 10;
+      }
+      break;
     case 'onboardings':
       if (!existing && !row.onb_no) row.onb_no = docNo('onboarding', date, (n, fy) => `ONB-${n}/20${fy}`);
       prepOnboarding(row, existing);

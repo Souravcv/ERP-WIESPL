@@ -4,7 +4,7 @@
 // a fake-GPS app (reported by the Android app), no clock-out. Leave requests go through approval and mark the days On Leave.
 import { db, tx, audit, getSettings } from './db.js';
 import { getRow, insertRow, updateRow, listRows, HttpError } from './crud.js';
-import { hasFunction } from '../public/js/schema.js';
+import { hasFunction, OUT_REASONS } from '../public/js/schema.js';
 import { saveAttachment } from './roles.js';
 import { submitForApproval } from './workflows.js';
 import { notify } from './notify.js';
@@ -111,6 +111,35 @@ function addPing(att, emp, kind, p, f, ip, photoId, extraFlags = []) {
   return flags;
 }
 
+// Periods outside the fence from the checks: one starts at the employee's "Going out" or the first check outside, and
+// ends at "Back", or at a check inside after being seen outside, or at clock-out / the end of the day. Short GPS
+// blips (under 5 min, not told by the employee) are left out. HR's reason, deduction and note are kept.
+export function outingsOf(pings, end, previous) {
+  const at = s => Date.parse(String(s).replace(' ', 'T'));
+  const out = [];
+  let cur = null, seenOut = false;
+  const close = to => { cur.to = to || cur.from; out.push(cur); cur = null; seenOut = false; };
+  for (const p of pings) {
+    if (p.kind === 'Going out') { if (!cur) cur = { from: p.at, reason: p.note || '', by: p.note ? 'Employee' : '' }; else if (!cur.reason) Object.assign(cur, { reason: p.note || '', by: 'Employee' }); seenOut = false; continue; }
+    if (p.kind === 'Back') { if (cur) close(p.at); continue; }
+    if (p.inside === 'No') { if (!cur) cur = { from: p.at, reason: '', by: '' }; seenOut = true; if (p.kind === 'Out') close(p.at); continue; }
+    if (cur && (p.kind === 'Out' || (p.inside === 'Yes' && (seenOut || !cur.by)))) close(p.at);
+  }
+  if (cur) { cur.open = true; close(end); }
+  let prev = [];
+  try { prev = Array.isArray(previous) ? previous : JSON.parse(previous || '[]') || []; } catch { prev = []; }
+  const list = out.map(o => {
+    const minutes = Math.max(0, Math.round((at(o.to) - at(o.from)) / 60e3));
+    const was = prev.find(x => x.from === hhmm(o.from));
+    const row = { from: hhmm(o.from), to: o.open && !o.to ? '' : hhmm(o.to), minutes, reason: o.reason, by: o.by, deduct: was?.deduct ?? '', note: was?.note ?? '' };
+    if (was?.by === 'HR') Object.assign(row, { reason: was.reason, by: 'HR' });
+    return row;
+  }).filter(o => o.by || o.minutes >= 5 || o.deduct);
+  // rows HR added by hand (no matching period) stay
+  for (const x of prev) if (x.by === 'HR' && !list.some(o => o.from === x.from)) list.push(x);
+  return list.sort((a, b) => String(a.from).localeCompare(String(b.from)));
+}
+
 function counts(attId) {
   return db.prepare("SELECT COUNT(*) checks, SUM(inside = 'Yes') inside_n, SUM(kind = 'Photo check') photos, MAX(at) last FROM attendance_pings WHERE attendance_id = ?").get(attId);
 }
@@ -123,7 +152,7 @@ export function evaluate(attId) {
   const emp = getRow('employees', a.employee_id);
   const R = rules();
   const flags = new Set(String(a.flags || '').split('\n').filter(Boolean).filter(x => !/^(late|left early|few presence checks|no clock-out|short day|worked on a weekly off)/.test(x)));
-  const pings = db.prepare('SELECT kind, at, inside, flags FROM attendance_pings WHERE attendance_id = ? ORDER BY id').all(a.id);
+  const pings = db.prepare('SELECT kind, at, inside, flags, note FROM attendance_pings WHERE attendance_id = ? ORDER BY id').all(a.id);
   for (const p of pings) if (p.flags) for (const x of p.flags.split('; ')) flags.add(x);
   let hours = 0, short = null, timing = '';
   const off = isOffDay(emp, a.date);
@@ -160,22 +189,24 @@ export function evaluate(attId) {
     : timing === 'Half day (late / early)' ? 'Half Day' : timing.startsWith('Full day cut') ? 'Absent' : 'Present';
   if (a.check_in && hours < R.halfDay && !working) flags.add(`short day (${hours} h)`);
   // Minutes away: from each check outside the fence to the next check (or the end of the day).
-  let away = 0;
+  // Outside periods (going out is not clocking out): hours stay clock-in to clock-out; HR sees each period with its reason.
   const end = a.check_out || (a.date < today() ? pings.at(-1)?.at : now());
-  pings.forEach((p, i) => {
-    if (p.inside !== 'No') return;
-    const to = pings[i + 1]?.at || end;
-    if (to) away += Math.max(0, (Date.parse(String(to).replace(' ', 'T')) - Date.parse(String(p.at).replace(' ', 'T'))) / 60e3);
-  });
-  away = Math.round(away);
-  for (const x of [...flags]) if (/^away from the site/.test(x)) flags.delete(x);
-  if (away >= 15) flags.add(`away from the site about ${away} min`);
+  const outings = outingsOf(pings, end, a.outings);
+  const away = outings.reduce((s, o) => s + (Number(o.minutes) || 0), 0);
+  const deduct = outings.reduce((s, o) => s + (Number(o.deduct) || 0), 0);
+  for (const x of [...flags]) if (/^(away from the site|outside the site)/.test(x)) flags.delete(x);
+  if (away >= 15) {
+    const why = {};
+    for (const o of outings) why[o.reason || 'no reason given'] = (why[o.reason || 'no reason given'] || 0) + o.minutes;
+    flags.add(`outside the site ${outings.length} time(s), ${away} min (${Object.entries(why).map(([k, v]) => `${k} ${v}`).join(', ')})`);
+  }
   const c = counts(a.id);
   const list = [...flags];
   // Late / early alone is settled by the policy (late marks), so it does not wait for HR.
   const needsLook = list.filter(x => !/^(late|left early)/.test(x));
   const review = a.review === 'Approved' || a.review === 'Rejected' ? a.review : list.includes(MOCK) || ((needsLook.length || a.mode === 'Travel / outstation') && !working) ? 'To review' : '';
-  return updateRow('attendance', a.id, { hours, status, short_min: short, timing: timing || null, flags: list.join('\n') || null, review, away_minutes: away || null, checks: c.checks || 0, checks_inside: c.inside_n || 0, photo_checks: c.photos || 0, last_check: c.last ? hhmm(c.last) : null }, { name: 'system' }, { system: true });
+  return updateRow('attendance', a.id, { hours, status, short_min: short, timing: timing || null, flags: list.join('\n') || null, review, away_minutes: away || null,
+    outings: JSON.stringify(outings), deduct_minutes: deduct || null, net_hours: r1(Math.max(0, hours - deduct / 60)), checks: c.checks || 0, checks_inside: c.inside_n || 0, photo_checks: c.photos || 0, last_check: c.last ? hhmm(c.last) : null }, { name: 'system' }, { system: true });
 }
 
 // ---------------------------------------------------------------- the phone
@@ -245,13 +276,48 @@ function awayAlert(att, emp, loc, f, prevOutside, user) {
     const clear = prevOutside || f.distance > 1000;
     const recent = att.alert_at && Date.parse(now().replace(' ', 'T')) - Date.parse(String(att.alert_at).replace(' ', 'T')) < 60 * 60e3;
     if (!clear || recent) return;
-    notify({ ...to, kind: 'attendance', title: `⚠ ${emp.name} is away from ${loc.name} (${d})`, body: `${att.away_since ? 'since ' + hhmm(att.away_since) + ' · ' : ''}checked at ${now().slice(11, 16)}`, link }, { name: 'Attendance' });
+    notify({ ...to, kind: 'attendance', title: att.out_reason ? `🚶 ${emp.name} is out for ${att.out_reason} (${d} from ${loc.name})` : `⚠ ${emp.name} is away from ${loc.name} (${d}), no reason given`,
+      body: `${att.out_since ? 'went out at ' + hhmm(att.out_since) + ' · ' : att.away_since ? 'since ' + hhmm(att.away_since) + ' · ' : ''}checked at ${now().slice(11, 16)}`, link }, { name: 'Attendance' });
     updateRow('attendance', att.id, { alert_at: now(), away_since: att.away_since || now() }, user, { system: true });
   } else if (att.away_since) {
     const mins = Math.round((Date.parse(now().replace(' ', 'T')) - Date.parse(String(att.away_since).replace(' ', 'T'))) / 60e3);
     notify({ ...to, kind: 'attendance', title: `${emp.name} is back at ${loc.name}`, body: `away about ${mins} min`, link }, { name: 'Attendance' });
     updateRow('attendance', att.id, { away_since: null }, user, { system: true });
   }
+}
+
+// The employee steps out (material, other site, lunch …): the day keeps running; HR is told the reason.
+export function goingOut(user, body = {}, ip) {
+  const emp = employeeOf(user);
+  const att = openDay(emp);
+  if (att.out_since) throw new HttpError(409, `You are already out since ${hhmm(att.out_since)} (${att.out_reason}): press Back at site when you return`);
+  const reason = OUT_REASONS.includes(body.reason) ? body.reason : null;
+  if (!reason) throw new HttpError(400, 'Choose why you are going out');
+  const note = [reason, String(body.note || '').trim()].filter(Boolean).join(': ');
+  let p = null;
+  try { p = position(body); } catch { p = null; }   // the reason counts even without a GPS fix
+  return tx(() => {
+    if (p) addPing(att, emp, 'Going out', p, siteOf(att) ? fence(siteOf(att), p) : null, ip, null);
+    else insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind: 'Going out', ip: ip || null }, { name: emp.name }, { system: true });
+    db.prepare("UPDATE attendance_pings SET note = ? WHERE id = (SELECT MAX(id) FROM attendance_pings WHERE attendance_id = ?)").run(reason, att.id);
+    updateRow('attendance', att.id, { out_since: now(), out_reason: note }, user, { system: true });
+    notify({ fn: 'hr_manage', userNames: emp.reporting_to ? [emp.reporting_to] : [], kind: 'attendance', title: `🚶 ${emp.name} going out: ${note}`, body: `at ${now().slice(11, 16)}`, link: `#/view/attendance/${att.id}` }, { name: 'Attendance' });
+    evaluate(att.id);
+    return { recorded: true, at: now().slice(11, 16) };
+  });
+}
+export function backAtSite(user, body = {}, ip) {
+  const emp = employeeOf(user);
+  const att = openDay(emp);
+  let p = null;
+  try { p = position(body); } catch { p = null; }
+  return tx(() => {
+    if (p) addPing(att, emp, 'Back', p, siteOf(att) ? fence(siteOf(att), p) : null, ip, null);
+    else insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind: 'Back', ip: ip || null }, { name: emp.name }, { system: true });
+    updateRow('attendance', att.id, { out_since: null, out_reason: null }, user, { system: true });
+    evaluate(att.id);
+    return { recorded: true, at: now().slice(11, 16) };
+  });
 }
 
 export function clockOut(user, body = {}, ip) {
@@ -264,14 +330,14 @@ export function clockOut(user, body = {}, ip) {
   return tx(() => {
     const photoId = savePhoto(att.id, 'Clock out', body.photo, user);
     addPing(att, emp, 'Out', p, f, ip, photoId, f && !f.inside ? ['clocked out outside the site'] : []);
-    updateRow('attendance', att.id, { check_out: now(), out_distance_m: f?.distance ?? null }, user, { system: true });
+    updateRow('attendance', att.id, { check_out: now(), out_distance_m: f?.distance ?? null, out_since: null, out_reason: null }, user, { system: true });
     audit(user.name, 'attendance', att.id, 'clock out', f ? `${f.distance} m` : '');
     return { attendance: forPhone(evaluate(att.id)) };
   });
 }
 
 // The employee's own copy of a day: no distances, site-check results or HR notes.
-const HR_ONLY = ['flags', 'in_distance_m', 'out_distance_m', 'checks_inside', 'away_minutes', 'away_since', 'alert_at', 'in_ip', 'remarks'];
+const HR_ONLY = ['flags', 'in_distance_m', 'out_distance_m', 'checks_inside', 'away_minutes', 'away_since', 'alert_at', 'in_ip', 'remarks', 'outings', 'deduct_minutes', 'net_hours'];
 const forPhone = att => att && Object.fromEntries(Object.entries(att).filter(([k]) => !HR_ONLY.includes(k)));
 
 // What the phone shows: today, where the person may clock in, their month, their leave.

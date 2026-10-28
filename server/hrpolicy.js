@@ -188,6 +188,7 @@ export function monthRegister(ym) {
   const emps = db.prepare("SELECT id, emp_code, name, department, weekly_off, joining_date, leaving_date FROM employees WHERE COALESCE(status, 'Active') = 'Active' OR leaving_date >= ? ORDER BY name").all(first);
   const rows = emps.map(e => {
     const att = new Map(db.prepare('SELECT date, status, review, check_in, timing FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ?').all(e.id, from, to).map(a => [a.date, a]));
+    const hrs = db.prepare('SELECT COALESCE(SUM(hours), 0) h, COALESCE(SUM(away_minutes), 0) away, COALESCE(SUM(deduct_minutes), 0) ded FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ?').get(e.id, first, last);
     const leaves = db.prepare("SELECT type, from_date, to_date, half_day FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?").all(e.id, to, from);
     const code = d => {
       const a = att.get(d), off = hol.has(d) || isWeeklyOff(e, d);
@@ -222,7 +223,8 @@ export function monthRegister(ym) {
     return { employee_id: e.id, code: e.emp_code, name: e.name, department: e.department, codes,
       present: n('P') + n('P*'), late_marks: late, late_half: n('H*'), half: n('H') + n('H*'), absent: n('A'), leave: n('L') + n('HL') / 2 + n('CO') + n('OD'), lwp: n('LWP'), sandwich: n('S'),
       off_worked: worked, comp_off_taken: co, pay_extra: Math.max(0, worked - co),
-      paid_days: r2(codes.reduce((s, c) => s + (PAY[bare(c)] ?? 0), 0)), to_review: codes.filter(x => x.endsWith('?')).length };
+      paid_days: r2(codes.reduce((s, c) => s + (PAY[bare(c)] ?? 0), 0)), to_review: codes.filter(x => x.endsWith('?')).length,
+      hours: r2(hrs.h), outside_hours: r2(hrs.away / 60), deducted_hours: r2(hrs.ded / 60), net_hours: r2(hrs.h - hrs.ded / 60) };
   });
   return { month, days, holidays: Object.fromEntries([...hol].filter(([d]) => d >= first && d <= last)), rows, late_free: P.lateFree };
 }

@@ -1,7 +1,7 @@
 // My Attendance (phone): clock in / out at the work location with GPS + selfie, presence checks during the day
 // (automatic while the app is open, and a photo check every few hours), leave requests, my month.
-import { h, api, toast, fail, fmtDate, today, busy } from '../ui.js';
-import { LEAVE_TYPES } from '../schema.js';
+import { h, api, toast, fail, fmtDate, today, busy, modal } from '../ui.js';
+import { LEAVE_TYPES, OUT_REASONS } from '../schema.js';
 
 let timer = null, wakeLock = null;
 const stop = () => { clearInterval(timer); timer = null; try { wakeLock?.release(); } catch { /* none */ } wakeLock = null; };
@@ -133,6 +133,16 @@ export async function attendView(root) {
       needPhoto ? h('button.btn.good', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
         try { const r = await send('/hr/check', {}, true); toast('Presence check saved'); reload(); } catch (e) { fail(e); }
       }) }, '📸 Presence check (photo)') : null,
+      // Stepping out is not clocking out: say why, and press Back on return (the day keeps running).
+      a.out_since ? h('div', { style: { padding: '10px', borderRadius: '10px', background: 'var(--bg)' } }, h('b', `🚶 Out since ${hm(a.out_since)}`), h('div.muted', a.out_reason || ''),
+        h('button.btn.good', { style: { marginTop: '8px', width: '100%' }, onclick: busy(async () => {
+          try { await send('/hr/back', {}, false).catch(() => api('/hr/back', { method: 'POST', body: {} })); toast('Welcome back'); reload(); } catch (e) { fail(e); }
+        }) }, '↩ Back at site'))
+        : h('button.btn', { onclick: busy(async () => {
+          const why = h('select', h('option', { value: '' }, 'Choose…'), OUT_REASONS.map(r => h('option', r))), note = h('input', { placeholder: 'Where / what (e.g. hardware shop, Aundh site)' });
+          if (!(await modal('Going out', h('div.grid', h('p.muted', 'You stay clocked in. Press “Back at site” when you return.'), h('label', 'Reason', why), h('label', 'Note', note)), [{ label: 'Cancel', value: false }, { label: '🚶 Going out', cls: 'primary', value: true }]))) return;
+          try { await send('/hr/going-out', { reason: why.value, note: note.value }, false).catch(e => (/GPS|location|Location/.test(e.message) ? api('/hr/going-out', { method: 'POST', body: { reason: why.value, note: note.value } }) : Promise.reject(e))); toast('Noted: you are out'); reload(); } catch (e) { fail(e); }
+        }) }, '🚶 Going out (material / work / lunch)'),
       h('button.btn', { onclick: busy(async () => { await autoCheck(true); }) }, '📍 Check my location now'),
       bg,
       app ? null : h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: async e => {
