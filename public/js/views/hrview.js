@@ -4,7 +4,7 @@ import { h, api, fmtDate, today, toast, fail, modal, busy, state } from '../ui.j
 import { hasFunction } from '../schema.js';
 import { inr } from '../calc.js';
 
-const TABS = [['today', '🕘 Today'], ['month', '📅 Month register'], ['balances', '🌴 Leave balances'], ['review', '🔎 To review']];
+const TABS = [['today', '🕘 Today'], ['month', '📅 Month register'], ['balances', '🌴 Leave balances'], ['people', '🧑‍💼 Joining & exits'], ['review', '🔎 To review']];
 const kpi = (l, v, sub, c) => h('div.kpi', h('div.label', l), h('div.value', { style: c ? { color: c } : {} }, String(v)), sub ? h('div.sub', sub) : null);
 const dist = m => (m == null ? '' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
 const STATE_COLOR = { Working: 'var(--good)', 'Clocked out': 'var(--text)', 'Not in': 'var(--bad)', 'On leave': 'var(--warn)' };
@@ -15,13 +15,15 @@ const LEGEND = 'P present · P* late mark (free) · H* late mark after the free 
 export async function hrView(root, tab = 'today') {
   const head = h('div.page-head', h('h1', '👥 HR & Attendance'), h('div.actions',
     h('a.btn', { href: '#/list/employees' }, '🧑‍💼 Employees'), h('a.btn', { href: '#/list/work_locations' }, '📍 Work locations'),
-    h('a.btn', { href: '#/list/site_assignments' }, '🗓️ Site assignments'), h('a.btn', { href: '#/list/leave_requests' }, '🌴 Leave'), h('a.btn', { href: '#/list/holidays' }, '🎉 Holidays')));
+    h('a.btn', { href: '#/list/site_assignments' }, '🗓️ Site assignments'), h('a.btn', { href: '#/list/leave_requests' }, '🌴 Leave'), h('a.btn', { href: '#/list/holidays' }, '🎉 Holidays'),
+    h('a.btn', { href: '#/list/onboardings' }, '🧾 Onboarding'), h('a.btn', { href: '#/list/probation_reviews' }, '📋 Probation'), h('a.btn', { href: '#/list/asset_issues' }, '💻 Assets'), h('a.btn', { href: '#/list/separations' }, '🚪 Exits')));
   const tabs = h('div.tabs', TABS.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { location.hash = `#/hr/${k}`; } }, l)));
   const box = h('div', h('div.muted', 'Loading…'));
   root.replaceChildren(head, tabs, box);
   if (tab === 'month') return month(box);
   if (tab === 'review') return reviewList(box, root);
   if (tab === 'balances') return balancesTab(box);
+  if (tab === 'people') return peopleTab(box);
   return todayTab(box);
 }
 
@@ -104,6 +106,26 @@ async function balancesTab(box) {
   date.onchange = () => load().catch(fail);
   box.replaceChildren(h('div.toolbar', h('span.muted', 'As on'), date), out);
   await load();
+}
+
+// Joining and exits: onboarding in progress, probation reviews due, probation ending, people on notice and full &
+// final pending, company assets out, retirements, bonds running.
+async function peopleTab(box) {
+  const d = await api('/hr/people');
+  const sec = (title, rows, cols, link, empty = 'None') => h('div.card', h('h2', `${title} (${rows.length})`), rows.length ? h('div.table-wrap', h('table.data',
+    h('thead', h('tr', cols.map(c => h('th', c[0])))), h('tbody', rows.map(r => h('tr.clickable', { onclick: () => (location.hash = link(r)) }, cols.map(c => h('td', c[1](r)))))))) : h('p.muted', empty));
+  const late = x => x && x < today() ? { color: 'var(--bad)', fontWeight: 600 } : {};
+  box.replaceChildren(
+    d.unset.length ? h('p', { style: { color: 'var(--warn)' } }, `Employment type not set for: ${d.unset.map(e => e.name).join(', ')} – open each employee and set Probation / Confirmed (and the confirmation date).`) : null,
+    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' } }, h('a.btn.primary', { href: '#/edit/onboardings/new' }, '+ New joiner (onboarding)'), h('a.btn', { href: '#/edit/separations/new' }, '+ Resignation / exit')),
+    sec('Onboarding in progress', d.joining, [['No', r => r.onb_no], ['Employee', r => r.name], ['Joining', r => fmtDate(r.joining_date)], ['Done', r => `${r.progress}%`]], r => `#/view/onboardings/${r.id}`),
+    sec('Probation reviews due (next 7 days and overdue)', d.reviews, [['No', r => r.review_no], ['Employee', r => r.name], ['Review', r => r.stage], ['Due', r => h('span', { style: late(r.due_date) }, fmtDate(r.due_date))], ['Status', r => r.status]], r => `#/view/probation_reviews/${r.id}`),
+    sec('Probation ending (next 30 days) – confirmation needed', d.probation, [['Employee', r => r.name], ['Probation ends', r => h('span', { style: late(r.probation_end) }, fmtDate(r.probation_end))]], r => `#/view/employees/${r.id}`),
+    sec('Exits: notice period and full & final', d.exits, [['No', r => r.sep_no], ['Employee', r => r.name], ['Type', r => r.type], ['Status', r => r.status], ['Relieving', r => fmtDate(r.relieving_date)],
+      ['Acceptance letter', r => r.accepted_on ? fmtDate(r.accepted_on) : h('span', { style: late(r.acceptance_due) }, r.acceptance_due ? 'due ' + fmtDate(r.acceptance_due) : '')], ['F&F due', r => h('span', { style: r.status === 'Relieved' ? late(r.fnf_due) : {} }, fmtDate(r.fnf_due))], ['Net F&F', r => r.net_payable != null ? inr(r.net_payable) : '']], r => `#/view/separations/${r.id}`),
+    sec('Company assets with employees', d.assets, [['Employee', r => [r.name, r.emp_status === 'Left' ? h('b', { style: { color: 'var(--bad)' } }, ' (left)') : null]], ['Asset', r => r.asset_type], ['Serial', r => r.serial_no || ''], ['Value', r => r.value ? inr(r.value) : '']], r => `#/view/asset_issues/${r.id}`),
+    sec('Retiring in the next 90 days (age 58)', d.retiring, [['Employee', r => r.name], ['Retires', r => fmtDate(r.retirement_date)]], r => `#/view/employees/${r.id}`),
+    sec('Employment bonds running', d.bonds, [['Employee', r => r.name], ['Signed', r => fmtDate(r.bond_signed_on)], ['Ends', r => fmtDate(r.bond_end)], ['Amount', r => r.bond_amount ? inr(r.bond_amount) : '']], r => `#/view/employees/${r.id}`));
 }
 
 async function reviewList(box, root) {

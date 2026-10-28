@@ -18,6 +18,9 @@ const DOCS = {
     title: r => `${r.type} – ${r.employee_id_label || ''} – ${r.days} day(s), ${r.from_date}${r.to_date && r.to_date !== r.from_date ? ' to ' + r.to_date : ''}${r.half_day === 'Yes' ? ' (half day)' : ''}${r.balance_note ? ' · ' + r.balance_note : ''} · ${String(r.reason || '').slice(0, 80)}`,
     // HR Policy: the reporting manager approves leave (HR, with the leave approval right, can too).
     alsoBy: r => db.prepare('SELECT reporting_to FROM employees WHERE id = ?').get(r.employee_id)?.reporting_to || null },
+  // Probation decision (Onboarding Policy 12): management approves confirmation, extension or separation.
+  Confirmation: { entity: 'probation_reviews', ref: 'review_no', amount: null, noLines: true, submitFrom: ['Due', 'Done'],
+    title: r => `${r.recommendation || 'Decision'} – ${r.employee_id_label || ''} – ${r.stage}${r.score != null ? ' – score ' + r.score + '%' : ''}${r.recommendation === 'Extend probation' ? ' by ' + (r.extend_months || 1) + ' month(s)' : ''}${r.effective_date ? ' w.e.f. ' + r.effective_date : ''}` },
   'Schedule Baseline': { entity: 'schedule_baselines', ref: 'rev', amount: null, noLines: true, title: r => `Project schedule baseline ${r.rev} – ${r.project_id_label || ''}${r.finish ? ' – finish ' + r.finish : ''}` },
   'Credit Note': { entity: 'credit_notes', ref: 'cn_no', amount: 'total', noLines: true, title: r => `Credit note to ${r.customer_id_label || ''} on ${r.invoice_id_label || ''} – ${r.reason}` },
 };
@@ -26,7 +29,7 @@ const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines'];
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews'];
 
 export function canApprove(docType, stage, user, ap = null) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
@@ -53,7 +56,8 @@ export function submitForApproval(docType, id, user) {
     const v = db.prepare('SELECT name, vendor_status, blacklist_reason FROM vendors WHERE id = ?').get(row.vendor_id);
     if (v?.vendor_status === 'Blacklisted') throw new HttpError(409, `${v.name} is blacklisted (${v.blacklist_reason || 'see the vendor'}): choose another vendor`);
   }
-  if (!['Draft', 'Rejected'].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
+  if (!['Draft', 'Rejected', ...(d.submitFrom || [])].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
+  if (docType === 'Confirmation' && !['Confirm', 'Extend probation', 'Not suitable – separate'].includes(row.recommendation)) throw new HttpError(400, 'Choose the recommendation (confirm, extend or not suitable) first');
   if (docType !== 'Quotation' && !d.noLines && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
   const flow = APPROVAL_FLOWS[docType];
   if (d.settingKey && getSettings()[d.settingKey] === 'No') {

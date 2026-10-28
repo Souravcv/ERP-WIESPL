@@ -36,6 +36,7 @@ import * as planning from './planning.js';
 import * as lots from './lots.js';
 import * as vend from './vendors.js';
 import * as hrp from './hrpolicy.js';
+import * as hrf from './hrfile.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -53,6 +54,7 @@ importer.fixPoNumbers();
 lots.setupLots();
 vend.setupVendors();
 hrp.setupHrPolicy();
+hrf.setupHrFile();
 importer.linkInwardPOs();
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'reg_address_v2'").get()) {
   setSettings({ reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033' });
@@ -202,6 +204,9 @@ const DOC_SERIES = [
   { key: 'costing', label: 'Costing Sheet', table: 'costing_sheets', col: 'cs_no', fmt: (n, fy) => `CS-${n}/20${fy}` },
   { key: 'task', label: 'Task', table: 'work_tasks', col: 'task_no', fmt: (n, fy) => `TSK-${n}/20${fy}` },
   { key: 'leave', label: 'Leave Request', table: 'leave_requests', col: 'leave_no', fmt: (n, fy) => `LV-${n}/20${fy}` },
+  { key: 'onboarding', label: 'Onboarding File', table: 'onboardings', col: 'onb_no', fmt: (n, fy) => `ONB-${n}/20${fy}` },
+  { key: 'probation', label: 'Probation Review', table: 'probation_reviews', col: 'review_no', fmt: (n, fy) => `PRV-${n}/20${fy}` },
+  { key: 'separation', label: 'Exit / Full & Final', table: 'separations', col: 'sep_no', fmt: (n, fy) => `EXIT-${n}/20${fy}` },
   { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
   { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'so', label: 'Sales Order', table: 'sales_orders', col: 'so_no', fmt: (n, fy) => `${pfx()}/SO/${fy}/${n}` },
@@ -580,6 +585,12 @@ api.post('/hr/leave', wrap(req => hr.applyLeave(req.user, req.body)));
 const hrView = req => { if (!canView('attendance', req.user.role)) throw new HttpError(403, 'No access to attendance'); };
 api.get('/hr/today', wrap(req => { hrView(req); return hr.todayBoard(req.query.date || undefined); }));
 api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.query.month); }));
+api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
+api.post('/leave_requests/:id/submit', need('leave_requests'), wrap(req => wf.submitForApproval('Leave', req.params.id, req.user)));
+api.post('/probation_reviews/:id/submit', need('probation_reviews'), wrap(req => wf.submitForApproval('Confirmation', req.params.id, req.user)));
+api.post('/separations/:id/act/:action', wrap(req => hrf.separationAction(req.params.id, req.params.action, req.body, req.user)));
+// HR cancels a leave (also an approved one): its days are taken back from the register.
+api.post('/leave_requests/:id/cancel', wrap(req => { if (!hasFunction(req.user.role, 'hr_manage') && !hasFunction(req.user.role, 'leave_approve')) throw new HttpError(403, 'Only HR cancels leave'); return updateRow('leave_requests', req.params.id, { status: 'Cancelled' }, req.user, { system: true }); }));
 api.get('/hr/balances', wrap(req => { hrView(req); return hrp.balances(req.query.date || undefined); }));
 api.get('/hr/attendance/:id/pings', wrap(req => { hrView(req); return hr.pingsOf(req.params.id); }));
 api.post('/attendance/:id/review', wrap(req => hr.review(req.params.id, req.body, req.user)));
@@ -859,6 +870,7 @@ const LOCKED = {
   material_requests: ['Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed'],
   production_entries: ['Posted'],
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
+  probation_reviews: ['Pending Approval', 'Approved'],
   schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
 };
 
@@ -962,6 +974,7 @@ setInterval(() => flow.dailyTick(), 30 * 60 * 1000);
 setInterval(() => {
   try { hr.closeOpenDays(); } catch (e) { console.error('attendance close', e.message); }
   try { if (new Date().getHours() >= 11) hrp.absenceAlerts(); } catch (e) { console.error('absence alerts', e.message); }
+  try { if (new Date().getHours() >= 9) hrf.dailyHr(); } catch (e) { console.error('hr reminders', e.message); }
 }, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {

@@ -163,6 +163,12 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_vendors_v1', '\"1\"')").run();
   }
+  // Employee file (once): the GM approves confirmation / extension of probation.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_hrfile_v1'").get()) {
+    const r = db.prepare("SELECT perms FROM roles WHERE name = 'manager'").get();
+    if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'hr_confirm'])]; db.prepare("UPDATE roles SET perms = ? WHERE name = 'manager'").run(JSON.stringify(p)); }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_hrfile_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

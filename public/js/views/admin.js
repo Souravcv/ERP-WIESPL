@@ -121,6 +121,7 @@ const SETTINGS_FORM = [
     ['hr_pl_per_year', 'Privilege leave (PL) days a year, credited quarterly after confirmation (default 24)'], ['hr_lwp_max_days', 'Leave without pay: most days a year (default 10)'],
     ['hr_full_day_hours', 'Day without clock-out / off-day work: hours for a full day (default 8)'], ['hr_half_day_hours', '… hours for a half day (default 4)'],
     ['hr_check_every_hours', 'Field staff: a photo presence check every … hours (default 3)'], ['hr_auto_ping_minutes', 'Automatic location check every … minutes while the app is open (default 30)'], ['hr_max_accuracy_m', 'Reject a GPS fix rougher than … metres (default 150)']]],
+  ['HR letters', [['hr_bond_template', 'Employment bond text (printed from the employee). Filled in: {{name}} {{father_name}} {{address}} {{aadhaar}} {{pan}} {{date}} {{reg_address}} {{company}} {{bond_years}} {{amount}} {{amount_words}} {{designation}}', 'ta']]],
   ['Costing', [['sales_margin_pct', 'Company % added on cost – sales costing sheets (default 20)'], ['service_margin_pct', 'Company % added on cost – service costing sheets (default 30)']]],
   ['Payments', [['payment_approval_limit', 'Accounts may approve payments up to (₹); above this the GM approves too'], ['expense_po_limit', 'Expense vouchers without a PO allowed up to (₹) (salary, rent, utilities, fees: any amount)'],
     ['bill_tolerance_pct', 'Bills may exceed the value received by up to (%) before payment is blocked']]],

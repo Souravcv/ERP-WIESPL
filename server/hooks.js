@@ -4,6 +4,7 @@ import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
 import { prefillProduction } from './storeflow.js';
 import { parseLatLng, prepLeave, markLeave } from './hr.js';
+import { prepEmployee, prepOnboarding, afterOnboarding, prepReview, afterReview, prepSeparation } from './hrfile.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
 import { applyBaseline } from './schedule.js';
 import { afterDispatchPlan, challanToPlan } from './planning.js';
@@ -332,6 +333,7 @@ export function beforeSave(name, row, existing, user) {
       beforeSaveTask(row, existing, user, docNo, date);
       break;
     case 'employees':
+      prepEmployee(row, existing);
       if (!existing && !row.emp_code) {
         const max = db.prepare("SELECT MAX(CAST(substr(emp_code, 5) AS INTEGER)) m FROM employees WHERE emp_code LIKE 'EMP-%'").get().m || 0;
         row.emp_code = `EMP-${String(max + 1).padStart(3, '0')}`;
@@ -345,6 +347,18 @@ export function beforeSave(name, row, existing, user) {
         if (!ll) throw Object.assign(new Error('Could not read a position from that link: open the pin in Google Maps and copy the link that shows @lat,lng, or type "18.6201, 73.7447"'), { status: 400 });
         [row.lat, row.lng] = ll;
       }
+      break;
+    case 'onboardings':
+      if (!existing && !row.onb_no) row.onb_no = docNo('onboarding', date, (n, fy) => `ONB-${n}/20${fy}`);
+      prepOnboarding(row, existing);
+      break;
+    case 'probation_reviews':
+      if (!existing && !row.review_no) row.review_no = docNo('probation', date, (n, fy) => `PRV-${n}/20${fy}`);
+      prepReview(row, existing);
+      break;
+    case 'separations':
+      if (!existing && !row.sep_no) row.sep_no = docNo('separation', date, (n, fy) => `EXIT-${n}/20${fy}`);
+      prepSeparation(row, existing);
       break;
     case 'leave_requests':
       if (!existing && !row.leave_no) row.leave_no = docNo('leave', date, (n, fy) => `LV-${n}/20${fy}`);
@@ -697,6 +711,8 @@ export function afterSave(name, id, user, deleted) {
     }
   }
   if (name === 'leave_requests' && !deleted) markLeave(id, user);
+  if (name === 'onboardings' && !deleted) afterOnboarding(id, user);
+  if (name === 'probation_reviews' && !deleted) afterReview(id, user);
   if (name === 'work_tasks' && !deleted) afterSaveTask(id, user);
   if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
   if (name === 'dispatch_plans' && !deleted) afterDispatchPlan(id, user);

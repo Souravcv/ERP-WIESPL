@@ -9,14 +9,14 @@ const ROMAN = ['I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
 const lines = s => String(s || '').split('\n');
 const multiline = s => lines(s).flatMap((l, i) => (i ? [h('br'), l] : [l]));
 
-function letterhead(s) {
+export function letterhead(s) {
   return h('div.letterhead', h('img', { src: 'logo.jpeg', alt: 'WIESPL' }),
     h('div.co', h('b', s.company_name), h('div', s.reg_address), h('div', `${s.phone} · ${s.email} · ${s.website}`),
       s.gstin ? h('div', `GSTIN: ${s.gstin}`) : null));
 }
-const footer = () => h('img.foot-img', { src: 'letterfoot.jpeg', alt: '' });
+export const footer = () => h('img.foot-img', { src: 'letterfoot.jpeg', alt: '' });
 const sign = (s, by) => h('div.sign', h('div', h('b', `For, ${s.company_name}`)), h('div.space' + (by ? '.signed' : ''), by ? [stampImg(), sigImg(by)] : null), h('div', h('b', 'AUTHORISED SIGNATORY')), by ? h('div.signame', plainSigner(by)) : null);
-const page = (...c) => h('div.page', ...c);
+export const page = (...c) => h('div.page', ...c);
 
 function bar(title) {
   return h('div.print-bar', h('b', title), h('span', { style: { flex: 1 } }),
@@ -165,9 +165,9 @@ async function siteLabels(lines) {
 
 
 // ---------------------------------------------------------------- service documents
-const grid = info => h('table', h('tbody', info.filter(x => x && x[1] != null && x[1] !== '').reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '17%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c))));
+export const grid = info => h('table', h('tbody', info.filter(x => x && x[1] != null && x[1] !== '').reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '17%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c))));
 const box = (title, text) => (text ? [h('div', { style: { fontWeight: 700, marginTop: '8px' } }, title), h('div.spec', { style: { border: '1px solid #999', padding: '6px', minHeight: '40px' } }, text)] : null);
-const signRow = (...who) => h('table', { style: { marginTop: '22px' } }, h('tbody', h('tr', who.map(w => h('th', { style: { width: `${100 / who.length}%` } }, w[0]))),
+export const signRow = (...who) => h('table', { style: { marginTop: '22px' } }, h('tbody', h('tr', who.map(w => h('th', { style: { width: `${100 / who.length}%` } }, w[0]))),
   h('tr', who.map(w => h('td', { style: { height: '56px', verticalAlign: 'bottom' } }, w[1] || '')))));
 
 function swoDoc(w, s) {
@@ -234,7 +234,7 @@ function costingDoc(cs, sell, c, s) {
 
 // ---------------------------------------------------------------- WIESPL purchase order (format WIESPL/PUR./02/R0)
 const plainName = s => String(s || '').replace(/\s*\(\d{4}-\d{2}-\d{2}[^)]*\)\s*$/, '').replace(/\s*\(auto\)$/, '');
-function companyHead(s, title) {
+export function companyHead(s, title) {
   return h('div', { style: { textAlign: 'center', borderBottom: '2px solid #1f4e9a', paddingBottom: '6px', marginBottom: '6px', position: 'relative' } },
     h('img', { src: 'logo.jpeg', style: { position: 'absolute', left: 0, top: 0, height: '58px' } }),
     h('div', { style: { fontSize: '17px', fontWeight: 700, color: '#1f4e9a' } }, s.company_name),
@@ -546,6 +546,9 @@ export async function printView(root, kind, id) {
     title = `${SLIP_TITLES[id] || id} ${docNo}`;
     const lotsOf = ['OUTWARD', 'TRANSFER', 'SCRAP'].includes(id) ? await api(`/lots/for-doc?type=${encodeURIComponent(id)}&doc=${encodeURIComponent(docNo)}`).catch(() => ({})) : {};
     doc = stockSlipDoc(id, docNo, moves, s, lotsOf);
+  } else if (['bond', 'onboarding', 'probation', 'confirmation', 'acceptance', 'relieving', 'fnf', 'exitinterview'].includes(kind)) {
+    const { hrDoc } = await import('./hrprint.js');
+    ({ doc, title } = await hrDoc(kind, id, s));
   } else throw new Error('Unknown document');
   document.title = title;
   root.replaceChildren(bar(title), doc);

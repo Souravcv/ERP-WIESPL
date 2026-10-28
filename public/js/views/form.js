@@ -556,10 +556,77 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }) }, '📍 Use my location here'));
       if (can('site_assignments')) A.push(h('button.btn', { onclick: () => newRecord('site_assignments', { location_id: id, project_id: row.project_id || undefined }) }, '🗓️ Assign people'));
       break;
-    case 'employees':
+    case 'employees': {
       A.push(h('a.btn', { href: `#/list/attendance?employee_id=${id}` }, '🕘 Attendance'));
       if (can('site_assignments')) A.push(h('button.btn', { onclick: () => newRecord('site_assignments', { employee_id: id }) }, '🗓️ Assign to a site'));
       if (can('leave_requests')) A.push(h('button.btn', { onclick: () => newRecord('leave_requests', { employee_id: id }) }, '🌴 Leave'));
+      // the employee file: joining, probation, assets, bond, exit
+      const openOr = (entity, pre, label) => h('button.btn', { onclick: go(async () => {
+        const rows = await api(`/${entity}?employee_id=${id}&limit=5`);
+        if (rows.length) location.hash = `#/view/${entity}/${rows[0].id}`; else newRecord(entity, pre);
+      }) }, label);
+      if (can('onboardings')) A.push(openOr('onboardings', { employee_id: id, joining_date: row.joining_date || undefined }, '🧾 Onboarding file'));
+      if (can('probation_reviews')) A.push(h('a.btn', { href: `#/list/probation_reviews?employee_id=${id}` }, '📋 Probation reviews'));
+      if (can('asset_issues')) A.push(h('button.btn', { onclick: () => newRecord('asset_issues', { employee_id: id }) }, '💻 Issue asset'), h('a.btn', { href: `#/list/asset_issues?employee_id=${id}` }, 'Assets held'));
+      if (row.bond_signed_on || row.bond_amount) A.push(h('a.btn', { href: `#/print/bond/${id}`, target: '_blank' }, '🖨 Employment bond'));
+      else if (can('employees')) A.push(h('a.btn', { href: `#/print/bond/${id}`, target: '_blank', title: 'Fill the bond amount / period on this employee first' }, '🖨 Bond (blank amount)'));
+      if (can('separations') && row.status !== 'Left') A.push(openOr('separations', { employee_id: id }, '🚪 Exit / resignation'));
+      break;
+    }
+    case 'onboardings':
+      A.push(h('a.btn', { href: `#/print/onboarding/${id}`, target: '_blank' }, '🖨 Joining checklist'), h('a.btn', { href: `#/view/employees/${row.employee_id}` }, '🧑‍💼 Employee'));
+      if (row.progress != null) A.push(h('b', { style: { color: row.status === 'Completed' ? 'var(--good)' : 'var(--warn)' } }, `${row.progress}% done`));
+      break;
+    case 'probation_reviews': {
+      const st = row.status;
+      A.push(h('a.btn', { href: `#/print/probation/${id}`, target: '_blank' }, '🖨 Review form'));
+      if (can(entity) && ['Due', 'Done', 'Rejected'].includes(st) && ['Confirm', 'Extend probation', 'Not suitable – separate'].includes(row.recommendation)) A.push(h('button.btn.primary', { onclick: submit }, `📤 Send “${row.recommendation}” to management`));
+      if (st === 'Approved' && ['Confirm', 'Extend probation'].includes(row.recommendation)) A.push(h('a.btn.good', { href: `#/print/confirmation/${id}`, target: '_blank' }, row.recommendation === 'Confirm' ? '🖨 Confirmation letter' : '🖨 Extension letter'));
+      break;
+    }
+    case 'asset_issues':
+      if (can(entity) && row.status === 'Issued') A.push(h('button.btn.good', { onclick: go(async () => {
+        const d = h('input', { type: 'date', value: today() }), c = h('input', { placeholder: 'Condition on return' });
+        if (!(await modal(`Returned: ${row.asset_type} ${row.serial_no || ''}`, h('div.form-grid', h('label', 'Returned on', d), h('label', 'Condition', c)), [{ label: 'Cancel', value: false }, { label: 'Returned', cls: 'good', value: true }]))) return;
+        await api(`/asset_issues/${id}`, { method: 'PUT', body: { status: 'Returned', returned_on: d.value, received_by: state.user.name, remarks: [row.remarks, c.value && `Returned: ${c.value}`].filter(Boolean).join('\n') } });
+        toast('Marked returned'); reload();
+      }) }, '↩ Returned'));
+      break;
+    case 'separations': {
+      const st = row.status;
+      const hr = hasFunction(state.user.role, 'hr_manage');
+      const act = (action, body) => post(`/separations/${id}/act/${action}`, body);
+      const ask = (title, fields, label) => modal(title, h('div.form-grid', ...fields.map(([l, el]) => h('label', l, el))), [{ label: 'Cancel', value: false }, { label, cls: 'primary', value: true }]);
+      if (hr && st === 'Notice period' && row.type === 'Resignation' && !row.accepted_on) A.push(h('button.btn.primary', { onclick: go(async () => {
+        const d = h('input', { type: 'date', value: today() }), r = h('input', { type: 'date', value: row.relieving_date || '' });
+        if (!(await ask('Accept the resignation', [['Letter date', d], ['Relieving date', r]], 'Accept'))) return;
+        await act('accept', { date: d.value, relieving_date: r.value }); toast('Accepted: print the acceptance letter'); reload();
+      }) }, '✔ Accept resignation'));
+      if (row.accepted_on) A.push(h('a.btn', { href: `#/print/acceptance/${id}`, target: '_blank' }, '🖨 Acceptance letter'));
+      if (hr && st === 'Notice period') A.push(h('button.btn.good', { onclick: go(async () => {
+        const d = h('input', { type: 'date', value: row.relieving_date || today() });
+        const open = (row.checklist || []).filter(c => c.item && !c.done).length;
+        if (!(await ask(`Relieve ${row.employee_id_label}`, [['Last working day', d], ['', h('p.muted', `${open ? open + ' clearance point(s) still open. ' : ''}The employee is marked Left; site assignments end. Close the CRM login under Users.`)]], 'Relieve'))) return;
+        await act('relieve', { date: d.value }); toast('Relieved'); reload();
+      }) }, '🚪 Relieve'));
+      if (hr && st === 'Notice period') A.push(h('button.btn', { onclick: go(async () => { if (!(await confirmBox('The employee withdraws the resignation (with management\'s consent)?'))) return; await act('withdraw'); reload(); }) }, 'Withdrawn'));
+      if (['Relieved', 'F&F settled'].includes(st)) A.push(h('a.btn', { href: `#/print/relieving/${id}`, target: '_blank', onclick: e => {
+        if (row.shortfall_days && row.notice_waived !== 'Yes' && !Number(row.notice_recovery) && !confirm('Notice not served and not recovered: the HR Policy withholds the relieving / experience letter. Print anyway?')) e.preventDefault();
+      } }, '🖨 Relieving & experience letter'));
+      A.push(h('a.btn', { href: `#/print/exitinterview/${id}`, target: '_blank' }, '🖨 Exit interview'), h('a.btn', { href: `#/print/fnf/${id}`, target: '_blank' }, '🖨 Full & final'));
+      if ((hr || hasFunction(state.user.role, 'pay_record')) && st === 'Relieved') A.push(h('button.btn.good', { onclick: go(async () => {
+        const d = h('input', { type: 'date', value: today() }), r = h('input', { placeholder: 'UTR / cheque no' });
+        if (!(await ask(`Full & final paid: ₹ ${inr(row.net_payable || 0)}`, [['Paid on', d], ['Reference', r]], 'Paid'))) return;
+        await act('settle', { date: d.value, ref: r.value }); toast('Full & final settled'); reload();
+      }) }, '💸 F&F paid'));
+      break;
+    }
+    case 'leave_requests':
+      if (can(entity) && ['Draft', 'Rejected'].includes(row.status)) A.push(h('button.btn.primary', { onclick: submit }, '📤 Submit for approval'));
+      if ((hasFunction(state.user.role, 'hr_manage') || hasFunction(state.user.role, 'leave_approve')) && ['Draft', 'Pending Approval', 'Approved'].includes(row.status)) A.push(h('button.btn.danger', { onclick: go(async () => {
+        if (!(await confirmBox(`Cancel ${row.leave_no}? Its days come off the register.`))) return;
+        await post(`/leave_requests/${id}/cancel`); toast('Leave cancelled'); reload();
+      }) }, 'Cancel leave'));
       break;
     case 'service_tickets': {
       const pre = { ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined };
@@ -1118,7 +1185,7 @@ export async function recordView(root, entity, id) {
 
 // ---------------------------------------------------------------- the document inside its approval request
 const APPROVAL_DOCS = { Quotation: 'quotations', 'Purchase Order': 'purchase_orders', Requisition: 'requisitions', 'Sales Order': 'sales_orders', Payment: 'vendor_payments',
-  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes' };
+  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes', Confirmation: 'probation_reviews' };
 const shown = (f, v, row) => {
   if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
   if (f.type === 'ref') return row[f.key + '_label'] || `#${v}`;
