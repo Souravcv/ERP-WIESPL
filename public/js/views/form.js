@@ -973,6 +973,7 @@ export async function recordView(root, entity, id) {
     const saved = isNew
       ? await api(`/${entity}`, { method: 'POST', body })
       : await api(`/${entity}/${id}`, { method: 'PUT', body });
+    keep.drop();
     clearRefCache(entity);
     if (isNew) {
       // From here on this page edits the saved record, so saving again never makes a copy.
@@ -1004,6 +1005,9 @@ export async function recordView(root, entity, id) {
   }
 
   const newFiles = pendingAttachments(entity);
+  const keep = keepUnsaved(entity, ent, isNew ? 'new' : id, row, inputs, writable, () => { inputs.lines?.refresh?.(); applyShowIf(); });
+  grid.addEventListener('input', keep.touch);
+  grid.addEventListener('change', keep.touch);
   const r = row;
   const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
@@ -1025,6 +1029,7 @@ export async function recordView(root, entity, id) {
         }) }, '📍 Use my location here') : null,
         writable ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save') : null,
         !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
+    keep.el,
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
     !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
@@ -1037,6 +1042,35 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
+}
+
+// ---------------------------------------------------------------- unsaved changes kept while typing
+// What is typed in a form is kept in this browser every second (a refresh, a closed tab or an expired login does not
+// lose a half-filled PO); opening the form again offers it back. Saving or "Discard" clears it.
+function keepUnsaved(entity, ent, recId, row, inputs, writable, after) {
+  const query = recId === 'new' ? new URLSearchParams(location.hash.split('?')[1] || '').toString() : '';
+  const key = `wiespl-unsaved:${state.user?.username || state.user?.name}:${entity}:${recId}${query ? '?' + query : ''}`;
+  const el = h('div');
+  const collect = () => Object.fromEntries(ent.fields.filter(f => inputs[f.key] && !f.readonly && !f.computed).map(f => [f.key, inputs[f.key].get()]));
+  const read = () => { try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch { return null; } };
+  const drop = () => { try { localStorage.removeItem(key); } catch { /* private window */ } el.replaceChildren(); };
+  let timer = null;
+  const touch = () => {
+    if (!writable) return;
+    clearTimeout(timer);
+    timer = setTimeout(() => { try { localStorage.setItem(key, JSON.stringify({ at: new Date().toLocaleString('sv-SE').slice(0, 19), data: collect() })); } catch { /* storage full or blocked */ } }, 1000);
+  };
+  const d = writable && read();
+  const old = d && (Date.now() - Date.parse(String(d.at).replace(' ', 'T')) > 14 * 864e5 || (row.updated_at && d.at < row.updated_at));
+  if (old) drop();
+  else if (d && JSON.stringify(d.data) !== JSON.stringify(collect())) {
+    const n = Array.isArray(d.data.lines) ? d.data.lines.filter(l => l.description || l.item_id || Number(l.qty)).length : 0;
+    el.append(h('div.card', { style: { borderLeft: '4px solid var(--warn)', borderRadius: 0, display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+      h('span', `💾 You have unsaved changes to this ${ent.singular.toLowerCase()} from ${fmtDate(d.at.slice(0, 10))} ${d.at.slice(11, 16)}${n ? ` (${n} line${n === 1 ? '' : 's'})` : ''}.`),
+      h('button.btn.small.primary', { onclick: () => { for (const [k, v] of Object.entries(d.data)) inputs[k]?.set?.(v); after(); el.replaceChildren(); toast('Unsaved changes brought back: check them and press Save'); } }, '↩ Restore'),
+      h('button.btn.small', { onclick: drop }, 'Discard')));
+  }
+  return { el, touch, drop };
 }
 
 // ---------------------------------------------------------------- files: work orders, drawings, CAD (dwg/dxf), PDFs, photos …
