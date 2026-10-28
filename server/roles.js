@@ -149,6 +149,20 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_iqc_v1', '\"1\"')").run();
   }
+  // Vendor management (once): purchase works with evaluations, complaints and audits; the store raises complaints;
+  // the Purchase Head and GM approve vendors.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_vendors_v1'").get()) {
+    const lvl = { manager: 'full', purchase_head: 'edit', purchase: 'edit', accounts: 'view', technical: 'edit', planning: 'view' };
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const p = parse(r.perms);
+      p.modules ||= {};
+      for (const m of ['vendor_evaluations', 'vendor_complaints', 'vendor_audits']) if (lvl[r.name] && (!p.modules[m] || p.modules[m] === 'none')) p.modules[m] = lvl[r.name];
+      if (r.name === 'store' && (!p.modules.vendor_complaints || p.modules.vendor_complaints === 'none')) p.modules.vendor_complaints = 'edit';
+      if (['purchase_head', 'manager'].includes(r.name)) p.functions = [...new Set([...(p.functions || []), 'vendor_approve'])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_vendors_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

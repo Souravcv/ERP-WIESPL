@@ -29,6 +29,11 @@ export const GST_STATE_CODES = {
 };
 export const STATES = ['Maharashtra', ...Object.values(GST_STATE_CODES).filter(s => s !== 'Maharashtra').sort(), 'Other'];
 
+// Vendor management (Supply Chain Manual 4A–4C): code groups (VND-EL-001), status, scorecard weights (total 100).
+export const VENDOR_GROUPS = { EL: 'Electrical & controls', HV: 'HVAC & refrigeration', ST: 'Steel & metals', HW: 'Hardware & tools', OT: 'OR integration equipment',
+  PN: 'Panels, doors & glass', CO: 'Consumables & packing', SV: 'Services & job work', CV: 'Civil & contractors', GN: 'General' };
+export const VENDOR_STATUS = ['New (to approve)', 'Approved', 'Preferred', 'Conditional', 'Under review', 'Blacklisted'];
+export const VENDOR_WEIGHTS = { quality: 30, delivery: 20, price: 15, support: 10, documentation: 10, response: 5, warranty: 5, improvement: 5 };
 export const ITEM_CATEGORIES = ['Bought-out', 'HVAC', 'Electrical (BGM)', 'R&D (Electronic)', 'Hardware', 'Raw Materials', 'Finished Goods', 'Packaging', 'Tools'];
 export const UOMS = ['Nos', 'Set', 'Pair', 'Kg', 'Mtr', 'RFt', 'Ft', 'Sq. Ft', 'Sq. Mtr', 'Roll', 'Sheet', 'TR', 'Ltr', 'Pkt', 'Box', 'Tin', 'Coil', 'Cyl', 'Bundle', 'Lot'];
 
@@ -105,6 +110,8 @@ export const ROLE_SEES = {
 // Every department sees the master work order; the store, site, design and purchase see the dispatch plans.
 for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].push('boqs', 'boq_items');
 for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
+for (const r of ['purchase', 'purchase_head', 'accounts', 'technical', 'planning']) ROLE_SEES[r].push('vendor_evaluations', 'vendor_complaints', 'vendor_audits');
+ROLE_SEES.store.push('vendor_complaints');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 // Whoever sees projects sees their schedule (Project Planner).
@@ -129,6 +136,7 @@ export const FUNCTIONS = {
   schedule_baseline: 'Projects head – approve project schedule baselines (Project Planner)',
   allow_negative: 'Issue more than the available stock',
   iqc_inspect: 'Incoming inspection (IQC): accept / reject / hold received material',
+  vendor_approve: 'Vendors – approve, prefer, make conditional, review or blacklist; finalise evaluations',
   import: 'Import from Excel',
   view_audit: 'See change history / activity log',
   notify_requisition: 'Pop-up: new material requisition',
@@ -150,7 +158,7 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
-  purchase_head: ['task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
   store: ['iqc_inspect', 'stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
@@ -1318,11 +1326,21 @@ export const ENTITIES = {
   vendors: {
     label: 'Vendors', singular: 'Vendor', group: 'Purchase', icon: '🏭', write: PURCHASE,
     display: "{t}.name",
-    search: ['name', 'contact_person', 'phone', 'emails', 'category', 'gstin', 'city'],
-    list: ['name', 'category', 'city', 'state', 'contact_person', 'phone', 'gstin', 'incomplete'],
-    related: [['purchase_orders', 'vendor_id'], ['stock_moves', 'vendor_id']],
+    search: ['name', 'vendor_code', 'contact_person', 'phone', 'emails', 'category', 'gstin', 'city'],
+    list: ['vendor_code', 'name', 'code_group', 'city', 'vendor_status', 'rating_band', 'last_review', 'contact_person', 'phone', 'incomplete'],
+    statusField: 'vendor_status',
+    related: [['purchase_orders', 'vendor_id'], ['vendor_evaluations', 'vendor_id'], ['vendor_complaints', 'vendor_id'], ['vendor_audits', 'vendor_id'], ['stock_moves', 'vendor_id']],
     fields: [
       { key: 'name', label: 'Vendor Name', type: 'text', required: true, span: 2 },
+      { key: 'vendor_code', label: 'Vendor Code', type: 'text', readonly: true, hint: 'Auto: VND-EL-001 (group + running number)' },
+      { key: 'code_group', label: 'Vendor Group', type: 'select', options: Object.entries(VENDOR_GROUPS).map(([k, v]) => `${k} – ${v}`), default: 'GN – General' },
+      { key: 'vendor_status', label: 'Vendor Status', type: 'select', options: VENDOR_STATUS, default: 'New (to approve)', readonly: true, hint: 'Approved / blacklisted by the Purchase Head or GM' },
+      { key: 'rating', label: 'Last Rating %', type: 'number', readonly: true },
+      { key: 'rating_band', label: 'Rating Band', type: 'text', readonly: true },
+      { key: 'last_review', label: 'Last Evaluation', type: 'date', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+      { key: 'approved_on', label: 'Approved On', type: 'date', readonly: true },
+      { key: 'valid_till', label: 'Approval Valid Till', type: 'date', hint: 'Approved vendor list: review before this date' },
       { key: 'category', label: 'Category Supplied', type: 'text', hint: 'e.g. ODU, HEPA filters, PPGL sheets, Hardware' },
       { key: 'gstin', label: 'GSTIN', type: 'text', hint: 'State and PAN are filled in from the GSTIN' },
       { key: 'pan', label: 'PAN', type: 'text' },
@@ -1337,8 +1355,101 @@ export const ENTITIES = {
       { key: 'payment_terms', label: 'Payment Terms', type: 'text' },
       { key: 'bank_details', label: 'Bank Details', type: 'textarea' },
       { key: 'incomplete', label: 'Details Incomplete (complete later)', type: 'yn' },
+      { key: 'msme_no', label: 'MSME / Udyam No', type: 'text' },
+      { key: 'iso_cert', label: 'ISO Certificate (no / valid till)', type: 'text' },
+      { key: 'doc_gst', label: 'GST certificate received', type: 'yn' },
+      { key: 'doc_pan', label: 'PAN copy received', type: 'yn' },
+      { key: 'doc_cheque', label: 'Cancelled cheque received', type: 'yn' },
+      { key: 'doc_msme', label: 'MSME certificate received', type: 'yn' },
+      { key: 'factory_visit', label: 'Factory Visit / Capability Check On', type: 'date', hint: 'For critical suppliers' },
+      { key: 'trial_order', label: 'Trial Order (PO no / result)', type: 'text' },
+      { key: 'critical', label: 'Critical Supplier', type: 'yn', hint: 'Single source or hard to replace: keep an alternate and a continuity plan' },
+      { key: 'alternate_vendor_id', label: 'Alternate Supplier', type: 'ref', ref: 'vendors' },
+      { key: 'risk_notes', label: 'Risk & Continuity Plan', type: 'textarea', span: 2, hint: 'Risk, impact, mitigation, owner; what we do if this vendor cannot supply' },
+      { key: 'bcp_review', label: 'Continuity Plan Reviewed On', type: 'date' },
+      { key: 'status_note', label: 'Status Note', type: 'text', readonly: true, span: 2 },
+      { key: 'blacklist_reason', label: 'Blacklist Reason', type: 'textarea', readonly: true, span: 2 },
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
       { key: 'po_value', label: 'Total PO Value', type: 'money', computed: "(SELECT COALESCE(SUM(p.total),0) FROM purchase_orders p WHERE p.vendor_id = {t}.id AND p.status NOT IN ('Archived (old)','Cancelled','Rejected'))" },
+    ],
+  },
+  // Half-yearly vendor scorecard (manual 4B): eight parameters 0–100 with their weights; delivery and quality come from data.
+  vendor_evaluations: {
+    label: 'Vendor Evaluations', singular: 'Vendor Evaluation', group: 'Purchase', icon: '📊', write: ['admin', 'manager', 'purchase_head', 'purchase'],
+    display: "{t}.eval_no || ' · ' || COALESCE({t}.period, '')",
+    search: ['eval_no', 'period', 'remarks'],
+    list: ['eval_no', 'vendor_id', 'period', 'total', 'band', 'status', 'evaluated_by'],
+    statusField: 'status',
+    fields: [
+      { key: 'eval_no', label: 'Evaluation No', type: 'text', readonly: true },
+      { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', required: true },
+      { key: 'period', label: 'Period', type: 'text', hint: 'e.g. Apr–Sep 2026' },
+      { key: 'from_date', label: 'From', type: 'date' },
+      { key: 'to_date', label: 'To', type: 'date' },
+      { key: 'quality', label: 'Product Quality (30%)', type: 'number', hint: '0–100; from IQC: accepted share' },
+      { key: 'delivery', label: 'On-Time Delivery (20%)', type: 'number', hint: '0–100; from GRN date vs PO delivery date' },
+      { key: 'price', label: 'Price Competitiveness (15%)', type: 'number', hint: '0–100' },
+      { key: 'support', label: 'Technical Support (10%)', type: 'number', hint: '0–100' },
+      { key: 'documentation', label: 'Documentation Compliance (10%)', type: 'number', hint: '0–100: invoices, test certificates, manuals' },
+      { key: 'response', label: 'Complaint Response (5%)', type: 'number', hint: '0–100; from complaints closed in time' },
+      { key: 'warranty', label: 'Replacement & Warranty Support (5%)', type: 'number', hint: '0–100' },
+      { key: 'improvement', label: 'Continuous Improvement (5%)', type: 'number', hint: '0–100' },
+      { key: 'total', label: 'Total %', type: 'number', readonly: true },
+      { key: 'band', label: 'Rating', type: 'text', readonly: true, hint: '90+ Preferred · 80–89 Approved · 70–79 Conditional · below 70 Under review' },
+      { key: 'data_note', label: 'From the data', type: 'text', readonly: true, span: 2 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Final'], default: 'Draft', readonly: true },
+      { key: 'evaluated_by', label: 'Evaluated By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks / Development Actions', type: 'textarea', span: 2 },
+    ],
+  },
+  // Vendor complaints and supplier corrective action requests (SCAR); IQC rejections open one by themselves.
+  vendor_complaints: {
+    label: 'Vendor Complaints / SCAR', singular: 'Vendor Complaint', group: 'Purchase', icon: '⚠️', write: ['admin', 'manager', 'purchase_head', 'purchase', 'store', 'technical'],
+    display: "{t}.scar_no",
+    search: ['scar_no', 'grn_no', 'item', 'description', 'root_cause', 'corrective_action'],
+    list: ['scar_no', 'date', 'vendor_id', 'issue_type', 'item', 'grn_no', 'target_date', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'scar_no', label: 'SCAR No', type: 'text', readonly: true },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', required: true },
+      { key: 'po_id', label: 'PO', type: 'ref', ref: 'purchase_orders' },
+      { key: 'grn_no', label: 'GRN No', type: 'text' },
+      { key: 'grn_move_id', label: 'GRN line', type: 'number', hidden: true },
+      { key: 'item', label: 'Material', type: 'text' },
+      { key: 'issue_type', label: 'Issue', type: 'select', options: ['Quality (IQC rejection)', 'Quality (at site / production)', 'Late delivery', 'Short supply', 'Damaged material', 'Wrong material', 'Documents missing', 'Warranty / replacement', 'Other'] },
+      { key: 'qty_affected', label: 'Qty Affected', type: 'number' },
+      { key: 'description', label: 'Complaint', type: 'textarea', span: 2, required: true },
+      { key: 'root_cause', label: 'Root Cause (vendor)', type: 'textarea', span: 2 },
+      { key: 'corrective_action', label: 'Corrective Action', type: 'textarea' },
+      { key: 'preventive_action', label: 'Preventive Action', type: 'textarea' },
+      { key: 'target_date', label: 'Target Date', type: 'date' },
+      { key: 'closed_on', label: 'Closed On', type: 'date', readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Sent to vendor', 'Action taken', 'Closed'], default: 'Open' },
+      { key: 'raised_by', label: 'Raised By', type: 'text', readonly: true },
+    ],
+  },
+  // Vendor audit / factory visit with its checklist (manual 4A, 4C).
+  vendor_audits: {
+    label: 'Vendor Audits', singular: 'Vendor Audit', group: 'Purchase', icon: '🔍', write: ['admin', 'manager', 'purchase_head', 'purchase', 'technical'],
+    display: "{t}.audit_no",
+    search: ['audit_no', 'findings', 'actions'],
+    list: ['audit_no', 'date', 'vendor_id', 'kind', 'score', 'next_audit', 'auditor'],
+    fields: [
+      { key: 'audit_no', label: 'Audit No', type: 'text', readonly: true },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'vendor_id', label: 'Vendor', type: 'ref', ref: 'vendors', required: true },
+      { key: 'kind', label: 'Type', type: 'select', options: ['Registration / factory visit', 'Quarterly audit', 'Annual audit', 'Special (after complaint)'] },
+      { key: 'auditor', label: 'Auditor(s)', type: 'text' },
+      { key: 'lines', label: 'Checklist', type: 'lines', span: 2, amounts: false, hint: 'The standard points are filled in on a new audit; add or remove as needed', columns: [
+        { key: 'point', label: 'Checklist point', type: 'text', width: 340 },
+        { key: 'result', label: 'Result', type: 'select', options: ['', 'OK', 'Not OK', 'N/A'], width: 100 },
+        { key: 'remark', label: 'Remarks / evidence', type: 'text', width: 260 },
+      ] },
+      { key: 'score', label: 'Score % (OK of checked)', type: 'number', readonly: true },
+      { key: 'findings', label: 'Findings', type: 'textarea', span: 2 },
+      { key: 'actions', label: 'Actions / Corrective Plan', type: 'textarea', span: 2 },
+      { key: 'next_audit', label: 'Next Audit', type: 'date' },
     ],
   },
   requisitions: {
@@ -1593,6 +1704,7 @@ export const ENTITIES = {
       { key: 'lead_days', label: 'Lead Time (days)', type: 'number', hint: 'Worked out by itself from PO date to GRN date (average of the last 5 receipts against a PO); BOQ order-by date = required-by − lead time (blank = 7)' },
       { key: 'preferred_vendor_id', label: 'Preferred Vendor', type: 'ref', ref: 'vendors' },
       { key: 'location', label: 'Store Location / Rack', type: 'text' },
+      { key: 'alternate_vendor_id', label: 'Alternate Supplier', type: 'ref', ref: 'vendors', hint: 'Approved second source for this material' },
       { key: 'description', label: 'Specification', type: 'textarea', span: 2 },
       { key: 'opening_stock', label: 'Opening Stock (old)', type: 'number', hidden: true },
       { key: 'stock', label: 'Current Stock', type: 'number', computed: STOCK_SQL },

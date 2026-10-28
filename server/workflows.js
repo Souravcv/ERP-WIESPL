@@ -44,6 +44,10 @@ function openStep(docType, docId, row, stepIndex, user, requestedBy = user.name)
 export function submitForApproval(docType, id, user) {
   const d = DOCS[docType];
   const row = getRow(d.entity, id);
+  if (docType === 'Purchase Order' && row.vendor_id) {
+    const v = db.prepare('SELECT name, vendor_status, blacklist_reason FROM vendors WHERE id = ?').get(row.vendor_id);
+    if (v?.vendor_status === 'Blacklisted') throw new HttpError(409, `${v.name} is blacklisted (${v.blacklist_reason || 'see the vendor'}): choose another vendor`);
+  }
   if (!['Draft', 'Rejected'].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
   if (docType !== 'Quotation' && !d.noLines && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
   const flow = APPROVAL_FLOWS[docType];

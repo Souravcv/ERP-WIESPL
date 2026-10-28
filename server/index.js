@@ -34,6 +34,7 @@ import * as wt from './worktasks.js';
 import * as planner from './schedule.js';
 import * as planning from './planning.js';
 import * as lots from './lots.js';
+import * as vend from './vendors.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -49,6 +50,7 @@ roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 lots.setupLots();
+vend.setupVendors();
 importer.linkInwardPOs();
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'reg_address_v2'").get()) {
   setSettings({ reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033' });
@@ -444,6 +446,17 @@ api.get('/lots/:item/:lot', wrap(req => { lotView(req); return lots.lotTrail(req
 api.get('/iqc', wrap(req => { lotView(req); return lots.iqcPending(); }));
 api.post('/iqc', wrap(req => lots.inspect(req.body, req.user)));
 api.get('/health', wrap(req => lots.health(req.user)));
+// Vendor management
+api.post('/vendors/:id/status', wrap(req => vend.setStatus(req.params.id, req.body, req.user)));
+api.get('/vendors/:id/scores', wrap(req => { if (!canView('vendors', req.user.role)) throw new HttpError(403, 'No access'); return vend.suggestScores(req.params.id, req.query.from, req.query.to); }));
+api.get('/vendor-performance', wrap(req => { if (!canView('vendors', req.user.role)) throw new HttpError(403, 'No access'); return vend.performance(req.query); }));
+api.post('/vendor_evaluations/:id/fill', need('vendor_evaluations'), wrap(req => vend.fillEvaluation(req.params.id, req.user)));
+api.post('/vendor_evaluations/:id/final', wrap(req => {
+  if (!hasFunction(req.user.role, 'vendor_approve')) throw new HttpError(403, 'Only the Purchase Head / GM make an evaluation final');
+  const e = getRow('vendor_evaluations', req.params.id);
+  if (e.total == null) throw new HttpError(400, 'Fill in all eight scores first');
+  return updateRow('vendor_evaluations', e.id, { status: 'Final', _finalising: true }, req.user, { system: true });
+}));
 api.get('/planner/portfolio', wrap(req => planner.portfolio(req.user)));
 api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
 api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));

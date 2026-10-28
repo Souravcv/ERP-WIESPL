@@ -425,6 +425,39 @@ function actionsFor(entity, row, reload, ctx = {}) {
         }) }, '🏥 Save hospital as Customer'));
       }
       break;
+    case 'vendors': {
+      const st = row.vendor_status;
+      const may = hasFunction(state.user.role, 'vendor_approve');
+      const setStatus = (status, needReason) => go(async () => {
+        const reason = h('textarea', { rows: 3, placeholder: needReason ? 'Reason (required)' : 'Note (optional)' });
+        const till = h('input', { type: 'date', value: row.valid_till || '' });
+        if (!(await modal(`${row.name}: ${status}`, h('div.grid', h('label', needReason ? 'Reason *' : 'Note', reason), ['Approved', 'Preferred', 'Conditional'].includes(status) ? h('label', 'Approval valid till', till) : null,
+          status === 'Blacklisted' ? h('p', { style: { color: 'var(--bad)' } }, 'A blacklisted vendor cannot get a PO submitted for approval.') : null),
+          [{ label: 'Cancel', value: false }, { label: status, cls: status === 'Blacklisted' ? 'danger solid' : 'primary', value: true }]))) return;
+        await post(`/vendors/${id}/status`, { status, reason: reason.value, valid_till: till.value || null }); toast(`${row.name}: ${status}`); reload();
+      });
+      if (may && st !== 'Approved') A.push(h('button.btn.good', { onclick: setStatus('Approved') }, '✔ Approve vendor'));
+      if (may && st !== 'Preferred') A.push(h('button.btn', { onclick: setStatus('Preferred') }, '★ Preferred'));
+      if (may && st !== 'Conditional') A.push(h('button.btn', { onclick: setStatus('Conditional', true) }, '◐ Conditional'));
+      if (may && st !== 'Under review') A.push(h('button.btn', { onclick: setStatus('Under review', true) }, '⚠ Under review'));
+      if (may && st !== 'Blacklisted') A.push(h('button.btn.danger', { onclick: setStatus('Blacklisted', true) }, '⛔ Blacklist'));
+      if (can('vendor_evaluations')) A.push(h('button.btn', { onclick: () => newRecord('vendor_evaluations', { vendor_id: id }) }, '📊 Evaluate'));
+      if (can('vendor_complaints')) A.push(h('button.btn', { onclick: () => newRecord('vendor_complaints', { vendor_id: id }) }, '⚠️ Complaint / SCAR'));
+      if (can('vendor_audits')) A.push(h('button.btn', { onclick: () => newRecord('vendor_audits', { vendor_id: id }) }, '🔍 Audit'));
+      break;
+    }
+    case 'vendor_evaluations': {
+      if (row.status !== 'Final' && can(entity)) A.push(h('button.btn', { title: 'On-time delivery, quality (IQC) and complaint response from the GRNs, POs and complaints of the period', onclick: go(async () => {
+        await post(`/vendor_evaluations/${id}/fill`);
+        toast('Scores filled from the data: check them, fill the others'); reload();
+      }) }, '⚡ Fill from data'));
+      if (row.status !== 'Final' && hasFunction(state.user.role, 'vendor_approve')) A.push(h('button.btn.good', { onclick: go(async () => {
+        if (!(await confirmBox(`Make ${row.eval_no} final? ${row.vendor_id_label} gets ${row.total ?? '—'}% (${row.band || '—'}) and its status follows the rating.`))) return;
+        await post(`/vendor_evaluations/${id}/final`); toast('Evaluation final'); reload();
+      }) }, '✔ Make final'));
+      if (row.band) A.push(h('b', { style: { color: row.total >= 80 ? 'var(--good)' : row.total >= 70 ? 'var(--warn)' : 'var(--bad)' } }, `${row.total}% · ${row.band}`));
+      break;
+    }
     case 'approvals': {
       const docEnt = APPROVAL_DOCS[row.doc_type];
       if (docEnt && ENTITIES[docEnt].print) A.push(h('a.btn', { href: `#/print/${ENTITIES[docEnt].print}/${row.doc_id}${docEnt === 'purchase_orders' ? '?internal=1' : ''}`, target: '_blank' }, `🖨 Print ${row.doc_type}`));

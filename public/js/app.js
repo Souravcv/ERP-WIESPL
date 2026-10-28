@@ -22,7 +22,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 // Screens that are not a single module list, shown at the top of their menu group.
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
-  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
+  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   'Sales & Projects': [['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
@@ -109,6 +109,7 @@ async function route() {
       case 'taskboard': { const { taskBoardView } = await import('./views/taskboard.js'); await taskBoardView(view); break; }
       case 'lots': { const { lotsView } = await import('./views/lots.js'); await lotsView(view); break; }
       case 'health': { const { healthView } = await import('./views/lots.js'); await healthView(view); break; }
+      case 'vendor-performance': { const { vendorPerformanceView } = await import('./views/vendorperf.js'); await vendorPerformanceView(view); break; }
       case 'drafts': { const { draftsView } = await import('./views/drafts.js'); await draftsView(view); break; }
       case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
       case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }

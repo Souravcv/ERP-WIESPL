@@ -7,6 +7,7 @@ import { parseLatLng, prepLeave, markLeave } from './hr.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
 import { applyBaseline } from './schedule.js';
 import { afterDispatchPlan, challanToPlan } from './planning.js';
+import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -152,6 +153,37 @@ export function beforeSave(name, row, existing, user) {
     case 'sales_orders':
       if (!existing && !row.so_no) row.so_no = docNo('so', date, (n, fy) => `${prefix()}/SO/${fy}/${n}`);
       break;
+    case 'vendor_evaluations': {
+      if (!existing && !row.eval_no) row.eval_no = docNo('vendor_eval', date, (n, fy) => `VE-${n}/20${fy}`);
+      if (!existing && !row.evaluated_by) row.evaluated_by = user?.name || null;
+      if (existing?.status === 'Final' && !row._finalising) throw Object.assign(new Error('This evaluation is final; make a new one for the next period'), { status: 409 });
+      const all = { ...(existing || {}), ...row };
+      row.total = weighted(all);
+      row.band = bandOf(row.total);
+      delete row._finalising;
+      break;
+    }
+    case 'vendor_complaints': {
+      if (!existing && !row.scar_no) row.scar_no = docNo('scar', date, (n, fy) => `SCAR-${n}/20${fy}`);
+      if (!existing && !row.raised_by) row.raised_by = user?.name || null;
+      if (row.status === 'Closed' && existing?.status !== 'Closed' && !(row.closed_on ?? existing?.closed_on)) row.closed_on = new Date().toLocaleString('sv-SE').slice(0, 10);
+      if (row.status && row.status !== 'Closed' && existing?.status === 'Closed') row.closed_on = null;
+      break;
+    }
+    case 'vendor_audits': {
+      if (!existing && !row.audit_no) row.audit_no = docNo('vendor_audit', date, (n, fy) => `VA-${n}/20${fy}`);
+      let L = parse(row.lines ?? existing?.lines, []);
+      if (!existing && !L.some(l => l.point)) {
+        L = ['Registration documents (GST, PAN, MSME, bank) on file', 'Manufacturing / service capability for our requirement', 'Machines and test equipment calibrated',
+          'Incoming and final inspection records kept', 'Test certificates / MTC supplied with material', 'Raw material traceability (batch / heat no)', 'Storage and packing protect the material',
+          'Delivery commitments met in the last 6 months', 'Complaints closed with root cause and action', 'Safety, housekeeping and statutory compliance', 'Second source / capacity for urgent orders']
+          .map(point => ({ point, result: '', remark: '' }));
+        row.lines = JSON.stringify(L);
+      }
+      const checked = L.filter(l => ['OK', 'Not OK'].includes(l.result));
+      row.score = checked.length ? Math.round(checked.filter(l => l.result === 'OK').length / checked.length * 100) : null;
+      break;
+    }
     case 'dispatch_plans':
       if (!existing && !row.plan_no) row.plan_no = docNo('dispatch_plan', date, (n, fy) => `DP-${n}/20${fy}`);
       if (!existing && !row.planned_by) row.planned_by = user?.name || null;
@@ -347,6 +379,13 @@ export function beforeSave(name, row, existing, user) {
       }
       break;
     case 'vendors': {
+      // Code VND-<group>-<running no>; the number stays, the letters follow the group.
+      if (!existing) {
+        row.vendor_status = row.vendor_status || 'New (to approve)';
+        if (!row.vendor_code) row.vendor_code = vendorCode(row.code_group, nextSeq('vendor_code', '2026-04-01').seq);
+      } else if ('code_group' in row && existing.vendor_code) {
+        row.vendor_code = existing.vendor_code.replace(/^VND-[A-Z]{2}-/, vendorCode(row.code_group, 0).slice(0, 7));
+      }
       const g = String(row.gstin ?? existing?.gstin ?? '').trim().toUpperCase();
       if ('gstin' in row) row.gstin = g || null;
       if (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]{3}$/.test(g)) {
@@ -661,6 +700,7 @@ export function afterSave(name, id, user, deleted) {
   if (name === 'work_tasks' && !deleted) afterSaveTask(id, user);
   if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
   if (name === 'dispatch_plans' && !deleted) afterDispatchPlan(id, user);
+  if (name === 'vendor_evaluations' && !deleted) afterEvaluation(id, user);
   if (name === 'challans' && !deleted) challanToPlan(id);
   if (name === 'credit_notes') {
     const cn = deleted || db.prepare('SELECT invoice_id, cn_no FROM credit_notes WHERE id = ?').get(id);
