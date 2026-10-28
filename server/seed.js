@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS = {
   company_name: 'WESTERN INDIA ELECTROMEDICAL SYSTEMS PVT. LTD.',
   company_short: 'WIESPL',
   tagline: 'Turnkey Solutions for Healthcare!',
-  reg_address: 'S. No. 282, Prasun Sai Palace, Flat No. 5, Tanaji Nagar, Chinchwad, Pune - 411033. Maharashtra',
+  reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033',
   works_address: 'Plot No.14, Narsimha Industrial Estate, Tathawade, Near Balaji Law College, Aundh-Rawet BRTS Road, Chinchwad, Pune - 411057. Maharashtra',
   phone: '+91-20-65100580',
   email: 'bgm.sdp@gmail.com',

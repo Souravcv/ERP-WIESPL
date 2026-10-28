@@ -243,7 +243,8 @@ function companyHead(s, title) {
     title ? h('div', { style: { fontSize: '15px', fontWeight: 700, marginTop: '4px', textDecoration: 'underline' } }, title) : null);
 }
 
-function poDoc(po, v, s) {
+// The vendor's copy names no project or site; the internal copy (approvals, files) shows them and the split per project.
+function poDoc(po, v, s, internal = false) {
   const lines = po.lines || [];
   const intra = !v.state || v.state === (s.state || 'Maharashtra');
   const t = poTotals(po, intra);
@@ -281,7 +282,7 @@ function poDoc(po, v, s) {
       h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
       h('tbody', lines.map(l => h('tr',
         td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
-        td([h('div.spec', l.spec || ''), l.site || l.site_label ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `Site: ${l.site || l.site_label}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
+        td([h('div.spec', l.spec || ''), internal && (l.site || l.site_label) ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `${l.split?.length > 1 ? 'For' : 'Site'}: ${l.site || l.site_label}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
         td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
         td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
       h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
@@ -302,15 +303,22 @@ function poDoc(po, v, s) {
         sumRow('Round off', rs(t.round_off)),
         sumRow('Grand Total', rs(t.total), true))))))),
     h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
-      td([h('b', 'Note: '), po.project_note || ''], { style: { width: '50%' } }),
+      td([h('b', 'Note: '), internal ? po.project_note || '' : ''], { style: { width: '50%' } }),
       td([h('b', 'Rupees in words: '), amountInWords(t.total).replace(/^Rupees /, '')])))),
-    // Sign-offs in the approval order: Purchase → Technical → Commercial → GM.
-    h('table', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
-      h('tr', ['Prepared By', 'Purchase Approval', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '20%' } }, x))),
-      h('tr', [po.prepared_by || po.created_by, po.purchase_approved_by, po.tech_approved_by, po.comm_approved_by, po.approved_by]
-        .map((x, i) => h('td', { style: { height: '42px', verticalAlign: 'bottom' } }, i === 4 && x ? stampImg() : null, x ? sigImg(x) : null, plainName(x) || ''))),
-      h('tr', ['Purchase Executive', 'Purchase Head', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x))))),
+    // Sign-offs in the approval order: Purchase (executive and head together, with the company stamp) → Technical →
+    // Commercial → GM.
+    (() => {
+      const purchase = [...new Set([po.prepared_by || po.created_by, po.purchase_approved_by].filter(Boolean).map(plainName))];
+      const cells = [[purchase.join(' / '), [po.prepared_by || po.created_by, po.purchase_approved_by].filter(Boolean).join(' · '), !!po.purchase_approved_by],
+        [plainName(po.tech_approved_by), po.tech_approved_by], [plainName(po.comm_approved_by), po.comm_approved_by], [plainName(po.approved_by), po.approved_by]];
+      return h('table.po-sign', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
+        h('tr', ['Purchase (Prepared & Approved)', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '25%' } }, x))),
+        h('tr', cells.map(([name, who, stamp]) => h('td', { style: { height: '40px', verticalAlign: 'bottom' } },
+          h('div', { style: { display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: '4px' } }, stamp ? stampImg() : null, who ? sigImg(who) : null), name || ''))),
+        h('tr', ['Purchase Executive / Purchase Head', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x)))));
+    })(),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
+    internal ? h('div', { style: { color: '#1f4e9a', fontWeight: 700, marginTop: '6px' } }, 'INTERNAL COPY – shows projects / sites; send the vendor copy to the vendor') : null,
     po.status !== 'Approved' && !['Sent', 'Partially Received', 'Closed', 'Received'].includes(po.status) ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, `DRAFT – status: ${po.status}${po.approval_stage ? ' (waiting for ' + po.approval_stage + ')' : ''}`) : null));
 }
 
@@ -489,8 +497,9 @@ export async function printView(root, kind, id) {
     const po = await api(`/purchase_orders/${id}`);
     await siteLabels(po.lines);
     const v = await api(`/vendors/${po.vendor_id}`);
-    title = `PO ${po.po_no} ${v.name}`;
-    doc = poDoc(po, v, s);
+    const internal = new URLSearchParams(location.hash.split('?')[1] || '').get('internal') === '1';
+    title = `PO ${po.po_no} ${v.name}${internal ? ' (internal)' : ''}`;
+    doc = poDoc(po, v, s, internal);
   } else if (kind === 'challan') {
     const c = await api(`/challans/${id}`);
     const project = c.project_id ? await api(`/projects/${c.project_id}`).catch(() => null) : null;

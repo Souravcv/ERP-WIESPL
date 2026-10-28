@@ -55,11 +55,39 @@ function siteLines(row, existing) {
   const head = row.project_id ?? existing?.project_id ?? null;
   const bomOf = db.prepare('SELECT b.id, b.project_id FROM bom_items i JOIN boms b ON b.id = i.bom_id WHERE i.id = ?');
   for (const l of lines) {
+    if (l.split?.length) continue; // one line for several projects: the split says which
     if (l.bom_item_id && !l.bom_id) { const b = bomOf.get(Number(l.bom_item_id)); if (b) { l.bom_id = b.id; if (!l.project_id && b.project_id) l.project_id = b.project_id; } }
     if (!l.project_id && head && (l.description || l.item_id)) l.project_id = Number(head);
   }
   row.lines = JSON.stringify(lines);
-  return [...new Set(lines.filter(l => Number(l.qty) > 0 && l.project_id).map(l => Number(l.project_id)))];
+  return [...new Set(lines.filter(l => Number(l.qty) > 0).flatMap(l => l.split?.length ? l.split.map(s => s.project_id) : [l.project_id]).filter(Boolean).map(Number))];
+}
+
+// The same material for several projects becomes one PO line: the total quantity, and "split" says how much is
+// for each project (shown on the internal copy, used to book the GRN to each project). Only while the PO is a draft.
+function mergeProjects(lines) {
+  const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const keyOf = l => `${l.item_id ? 'i' + l.item_id : 'd' + norm(l.description) + '|' + norm(String(l.spec || '').split('\n')[0])}|${norm(l.uom)}`;
+  const out = [], byKey = new Map();
+  for (const l of lines) {
+    if (!(Number(l.qty) > 0) || Number(l.received) > 0 || !(l.description || l.item_id)) { out.push(l); continue; }
+    const parts = l.split?.length ? l.split.map(s => ({ ...s })) : [{ project_id: l.project_id ? Number(l.project_id) : null, site: l.site || null, qty: Number(l.qty) }];
+    const m = byKey.get(keyOf(l));
+    if (m) { m.qty = Math.round((Number(m.qty) + Number(l.qty)) * 1000) / 1000; m.split.push(...parts); continue; }
+    const c = { ...l, split: parts };
+    byKey.set(keyOf(l), c);
+    out.push(c);
+  }
+  const names = new Map(db.prepare('SELECT id, name FROM projects').all().map(p => [p.id, p.name]));
+  for (const m of byKey.values()) {
+    const by = new Map();
+    for (const s of m.split) { const k = s.project_id || 's:' + (s.site || ''); const x = by.get(k); if (x) x.qty += Number(s.qty) || 0; else by.set(k, { ...s, qty: Number(s.qty) || 0 }); }
+    m.split = [...by.values()];
+    if (m.split.length <= 1) { const one = m.split[0]; delete m.split; if (one?.project_id) m.project_id = one.project_id; continue; }
+    m.project_id = null;
+    m.site = m.split.map(s => `${String(names.get(s.project_id) || s.site || 'stock').trim()}: ${s.qty}`).join(', ');
+  }
+  return out;
 }
 const siteNames = ids => db.prepare(`SELECT name, project_no FROM projects WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids).map(p => p.name).join(', ');
 
@@ -136,6 +164,7 @@ export function beforeSave(name, row, existing, user) {
       // WIESPL PO numbering: 008/2025-26, restarting every April.
       if (!existing && !row.po_no) row.po_no = docNo('po', date, (n, fy) => `${n}/20${fy}`);
       const sites = siteLines(row, existing);
+      if ('lines' in row && (!existing || ['Draft', 'Rejected'].includes(existing.status))) row.lines = JSON.stringify(mergeProjects(parse(row.lines, [])));
       if (sites?.length > 1) { row.project_id = null; row.project_note = `Multiple sites: ${siteNames(sites)}`; }
       else if (sites?.length === 1 && !(row.project_id ?? existing?.project_id)) row.project_id = sites[0];
       const vendorId = row.vendor_id ?? existing?.vendor_id;

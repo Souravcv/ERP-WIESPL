@@ -48,6 +48,10 @@ roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 importer.linkInwardPOs();
+if (!db.prepare("SELECT 1 FROM settings WHERE key = 'reg_address_v2'").get()) {
+  setSettings({ reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033' });
+  db.prepare("INSERT INTO settings (key, value) VALUES ('reg_address_v2', '\"1\"')").run();
+}
 stock.repairPoReceipts();
 sf.backfillLeadTimes();
 purgeExpiredSessions();
@@ -441,13 +445,15 @@ api.get('/projects/:id/analysis', wrap(req => {
   const LIVE = ['Cancelled', 'Rejected', 'Archived (old)'];
   // POs for several sites count with this project's share of their lines (by value).
   const shared = db.prepare(`SELECT DISTINCT p.id FROM purchase_orders p, json_each(p.lines) j
-    WHERE COALESCE(p.project_id, 0) <> ? AND p.status <> 'Archived (old)' AND json_extract(j.value, '$.project_id') = ?`).all(project.id, project.id).map(r => getRow('purchase_orders', r.id));
+    WHERE COALESCE(p.project_id, 0) <> ? AND p.status <> 'Archived (old)' AND (json_extract(j.value, '$.project_id') = ?
+      OR EXISTS (SELECT 1 FROM json_each(j.value, '$.split') s WHERE json_extract(s.value, '$.project_id') = ?))`).all(project.id, project.id, project.id).map(r => getRow('purchase_orders', r.id));
   const pos = [...listRows('purchase_orders', { project_id: project.id, limit: 5000 }).filter(p => p.status !== 'Archived (old)'), ...shared].map(p => {
     // Received = material in (GRN) at the PO rate incl. GST; advance at risk = paid beyond that.
     const m = pay.poMoney(p.id);
     const val = l => (Number(l.qty) || 0) * (Number(l.rate) || 0);
     const all = (p.lines || []).reduce((s, l) => s + val(l), 0);
-    const share = p.project_id === project.id || !all ? 1 : (p.lines || []).filter(l => Number(l.project_id) === project.id).reduce((s, l) => s + val(l), 0) / all;
+    const mine = l => l.split?.length ? (Number(l.rate) || 0) * l.split.filter(x => Number(x.project_id) === project.id).reduce((a, x) => a + (Number(x.qty) || 0), 0) : Number(l.project_id) === project.id ? val(l) : 0;
+    const share = p.project_id === project.id || !all ? 1 : (p.lines || []).reduce((s, l) => s + mine(l), 0) / all;
     const k = n => Math.round((Number(n) || 0) * share * 100) / 100;
     const next = (p.payment_schedule || []).filter(x => x.status !== 'Paid' && x.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0];
     return { id: p.id, po_no: p.po_no + (share < 1 ? ` (${Math.round(share * 100)}% for this site)` : ''), date: p.date, vendor: p.vendor_id_label, status: p.status, stage: p.approval_stage, total: k(p.total),

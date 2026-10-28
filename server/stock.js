@@ -73,15 +73,27 @@ export function stockEntry(body, user) {
     for (const l of lines) {
       // Which PO line: the one chosen on the GRN, else the first line of the same item that is still pending.
       const idx = po ? poLineFor(po, l.item_id, Number.isInteger(l.po_line) ? l.po_line : null) : -1;
-      // A PO for several sites: the material received belongs to the project of its PO line.
+      // A PO for several sites: the material received belongs to the project of its PO line; a line for several
+      // projects ("split") is booked to each project in turn, up to what that project still waits for.
       const lineProject = l.project_id || (idx >= 0 && po.lines[idx].project_id) || header.project_id || (type === 'INWARD' && po?.project_id) || null;
-      const row = insertRow('stock_moves', {
-        ...header, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: Number(l.qty),
-        rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
-        remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
-        hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: lineProject ? Number(lineProject) : null, po_line: idx >= 0 ? idx : null,
-      }, user, { system: true });
-      created.push(row.id);
+      const split = idx >= 0 && !l.project_id && po.lines[idx].split?.length > 1 ? po.lines[idx].split : null;
+      const portions = [];
+      if (split) {
+        let left = Number(l.qty);
+        split.forEach((s, k) => {
+          const want = k === split.length - 1 ? left : Math.min(left, Math.max(0, Number(s.qty) - (Number(s.received) || 0)));
+          if (want > 0) { portions.push({ project_id: s.project_id || null, qty: round2(want) }); s.received = round2((Number(s.received) || 0) + want); left = round2(left - want); }
+        });
+      } else portions.push({ project_id: lineProject ? Number(lineProject) : null, qty: Number(l.qty) });
+      for (const part of portions) {
+        const row = insertRow('stock_moves', {
+          ...header, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: part.qty,
+          rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
+          remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
+          hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: part.project_id, po_line: idx >= 0 ? idx : null,
+        }, user, { system: true });
+        created.push(row.id);
+      }
       if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
     }
     if (po) {

@@ -698,8 +698,8 @@ function actionsFor(entity, row, reload, ctx = {}) {
     }
     case 'purchase_orders': {
       const st = row.status;
-      A.push(h('a.btn', { href: `#/print/po/${id}`, target: '_blank' }, '🖨 Print PO'));
-      if (row.requisition_id) A.push(h('a.btn', { href: `#/view/requisitions/${row.requisition_id}`, title: 'Open the requisition this PO was made from' }, `📝 Requisition ${row.requisition_id_label || ''}`));
+      A.push(h('a.btn', { href: `#/print/po/${id}`, target: '_blank', title: 'For the vendor: no project or site on it' }, '🖨 Print PO (vendor)'));
+      A.push(h('a.btn', { href: `#/print/po/${id}?internal=1`, target: '_blank', title: 'With projects / sites and the split per project' }, '🖨 Internal copy'));
       if (st === 'Archived (old)') { A.push(h('span.muted', 'Old PO, kept to look up: not counted in payables, analysis or receipts')); break; }
       if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval'));
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
@@ -1031,6 +1031,7 @@ export async function recordView(root, entity, id) {
         !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
     keep.el,
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
+    !isNew && entity === 'purchase_orders' && r.requisition_id ? requisitionCard(r.requisition_id) : null,
     !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
     h('div.card', grid),
@@ -1042,6 +1043,22 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
+}
+
+// The requisition a PO was made from, in full, inside the PO (no need to open it).
+function requisitionCard(reqId) {
+  const box = h('details.card', { open: true }, h('summary', h('b', '📝 Requisition'), ' loading…'));
+  api(`/requisitions/${reqId}`).then(r => {
+    const lines = (r.lines || []).filter(l => l.description || l.item_id || Number(l.qty));
+    const info = [['Date', fmtDate(r.date)], ['Project', r.project_id_label || r.project_name], ['Requested by', r.requested_by], ['Department', r.department], ['Required by', fmtDate(r.required_by)],
+      ['Approved by', r.approved_by], ['Remarks', r.remarks]].filter(x => x[1]);
+    box.replaceChildren(h('summary', h('b', `📝 Requisition ${r.req_no}`), ' ', badge(r.status), ' ', h('a', { href: `#/view/requisitions/${r.id}`, style: { fontWeight: 400, marginLeft: '8px' } }, 'open ›')),
+      h('div', { style: { display: 'flex', gap: '18px', flexWrap: 'wrap', margin: '8px 0' } }, info.map(([k, v]) => h('div', h('div.muted', { style: { fontSize: '11px' } }, k), h('div', v)))),
+      lines.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['#', 'Material', 'Specification', 'Qty', 'UOM', 'Site / project', 'Remark'].map(x => h('th', x)))),
+        h('tbody', lines.map((l, i) => h('tr', h('td.muted', i + 1), h('td', l.description || l.item_id_label || ''), h('td', { style: { whiteSpace: 'pre-wrap', fontSize: '12px' } }, l.spec || ''),
+          h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', l.site || l.project_id_label || ''), h('td', l.remark || '')))))) : h('p.muted', 'No materials on it.'));
+  }).catch(e => box.replaceChildren(h('summary', `📝 Requisition: ${e.message}`)));
+  return box;
 }
 
 // ---------------------------------------------------------------- unsaved changes kept while typing

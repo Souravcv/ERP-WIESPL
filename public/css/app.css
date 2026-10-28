@@ -347,3 +347,7 @@ table.gp td.rm { font-size: 8px; white-space: normal; }
 .wf.ms { background: none !important; } .wf.ms::after { content: '◆'; position: absolute; left: 0; right: 0; top: -3px; text-align: center; font-size: 9px; color: #1b2433; }
 .gp-sign { display: flex; gap: 30px; margin-top: 18px; font-size: 9px; }
 .gp-sign > div { flex: 1; text-align: center; } .gp-sign .line { border-bottom: 1px solid #333; height: 26px; margin-bottom: 3px; }
+
+/* PO sign-offs: smaller signatures, the stamp beside the purchase signature */
+.doc table.po-sign img.sig { max-height: 30px; max-width: 105px; margin: 0 0 2px; }
+.doc table.po-sign img.stamp { height: 52px; margin: 0 0 2px; }
