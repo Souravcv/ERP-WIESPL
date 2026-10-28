@@ -127,6 +127,7 @@ export function requisitionToPO(id, body, user) {
       item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
       qty: Number(l.qty), uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18,
       ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}), ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}), ...(l.site ? { site: l.site } : {}),
+      ...(l.split?.length ? { split: l.split.map(s => ({ ...s })) } : {}),
     };
   });
   return tx(() => {

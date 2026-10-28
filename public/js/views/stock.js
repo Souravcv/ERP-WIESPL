@@ -417,7 +417,7 @@ export async function stockSummaryView(root) {
 // ---------------------------------------------------------------- PO tracker
 export async function poTrackerView(root) {
   const q = h('input.grow', { type: 'search', placeholder: 'Search PO no, vendor, item or project…', value: qs().q || '' });
-  const pending = h('select', { style: { width: 'auto' } }, h('option', { value: '' }, 'All lines'), h('option', { value: 'pending' }, 'Pending (not fully received)'), h('option', { value: 'procured' }, 'Procured (fully received)'), h('option', { value: 'Not approved yet' }, 'PO not approved yet'));
+  const pending = h('select', { style: { width: 'auto' } }, h('option', { value: '' }, 'All lines'), h('option', { value: 'pending' }, 'Pending (not fully received)'), h('option', { value: 'Partly received' }, '◐ Partly received'), h('option', { value: 'Pending' }, '○ Nothing received yet'), h('option', { value: 'procured' }, 'Procured (fully received)'), h('option', { value: 'Not approved yet' }, 'PO not approved yet'));
   pending.value = qs().state || '';
   const out = h('div');
   async function load() {

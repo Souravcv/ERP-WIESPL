@@ -97,16 +97,22 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
       const cells = f.columns.map(c => {
         // A reference column (e.g. the site / project of a requisition line): a list of that module's records.
         if (c.type === 'ref') {
+          const name = id => (refs[c.ref] || []).find(o => o.id === Number(id))?.label || '';
+          if (c.split && l.split?.length > 1) {
+            return h('td', h('div', { style: { fontSize: '12px', lineHeight: 1.5 } }, l.split.map(s => h('div', `${name(s.project_id) || s.site || '—'}: ${s.qty}`))),
+              readonly ? null : h('button.btn.small', { type: 'button', onclick: () => splitEditor(l, c) }, '✎ Projects & qty'));
+          }
           const sel = h('select', { disabled: readonly }, h('option', { value: '' }, c.blank || '—'), (refs[c.ref] || []).map(o => h('option', { value: o.id }, o.label)));
           sel.value = l[c.key] ?? '';
           sel.onchange = () => { l[c.key] = sel.value ? Number(sel.value) : null; };
-          return h('td', sel);
+          return h('td.nowrap', sel, c.split && !readonly ? h('button.icon-btn', { type: 'button', title: 'Same material for several projects: one line, give each project its quantity', onclick: () => splitEditor(l, c) }, '⇉') : null);
         }
         const inp = c.type === 'select' ? h('select', { disabled: readonly }, c.options.map(o => h('option', o)))
           : c.type === 'textarea' || (c.key === 'description' && !f.schedule)
             ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
             : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : c.type === 'date' ? 'date' : 'text', step: 'any', readOnly: readonly });
         inp.value = l[c.key] ?? (c.type === 'select' ? c.options[0] : '');
+        if (c.key === 'qty' && l.split?.length > 1) { inp.readOnly = true; inp.title = 'Total of the projects: change it with "Projects & qty"'; }
         if (c.type === 'select' && l[c.key] == null) l[c.key] = c.options[0];
         inp.oninput = inp.onchange = () => {
           l[c.key] = ['number', 'money'].includes(c.type) ? (inp.value === '' ? null : Number(inp.value)) : inp.value;
@@ -148,6 +154,36 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
       amounts ? totalsBox : null);
     totals();
   }
+  // Several projects on one line: a project and its quantity per row; the line's quantity is their total.
+  async function splitEditor(l, c) {
+    const opts = refs[c.ref] || [];
+    let rows = l.split?.length ? l.split.map(s => ({ ...s })) : [{ project_id: l.project_id || null, qty: Number(l.qty) || null }, { project_id: null, qty: null }];
+    const box = h('div'), total = h('b');
+    const draw = () => {
+      total.textContent = round2(rows.reduce((a, r) => a + (Number(r.qty) || 0), 0));
+      box.replaceChildren(h('table.data', h('thead', h('tr', h('th', 'Project'), h('th', 'Qty'), h('th'))), h('tbody', rows.map((r, i) => {
+        const sel = h('select', h('option', { value: '' }, '— choose project —'), opts.map(o => h('option', { value: o.id, selected: Number(r.project_id) === o.id }, o.label)));
+        sel.onchange = () => { r.project_id = sel.value ? Number(sel.value) : null; };
+        const q = h('input', { type: 'number', step: 'any', min: 0, value: r.qty ?? '', style: { width: '100px' }, oninput: e => { r.qty = e.target.value === '' ? null : Number(e.target.value); total.textContent = round2(rows.reduce((a, x) => a + (Number(x.qty) || 0), 0)); } });
+        return h('tr', h('td', sel), h('td', q), h('td', h('button.icon-btn.del', { type: 'button', onclick: () => { rows.splice(i, 1); draw(); } }, '✕')));
+      }))), h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', marginTop: '8px' } },
+        h('button.btn.small', { type: 'button', onclick: () => { rows.push({ project_id: null, qty: null }); draw(); } }, '+ Project'), h('span', 'Total quantity: ', total, ` ${l.uom || ''}`)));
+    };
+    draw();
+    const ok = await modal(`${l.description || 'Material'}: projects and quantity`, h('div.grid', h('p.muted', 'One line for the material; each project gets its own quantity. The line quantity is the total, and the material received is booked to each project.'), box),
+      [{ label: 'Cancel', value: false }, { label: 'Apply', cls: 'primary', value: true }]);
+    if (!ok) return;
+    const good = rows.filter(r => r.project_id && Number(r.qty) > 0);
+    if (good.length > 1) {
+      l.split = good.map(r => ({ project_id: r.project_id, qty: Number(r.qty) }));
+      l.qty = round2(good.reduce((a, r) => a + Number(r.qty), 0));
+      l.project_id = null;
+      l.site = good.map(r => `${(opts.find(o => o.id === r.project_id)?.label || '').trim()}: ${r.qty}`).join(', ');
+    } else if (good.length === 1) {
+      delete l.split; l.project_id = good[0].project_id; l.qty = Number(good[0].qty); if (/: \d/.test(l.site || '')) l.site = '';
+    } else { delete l.split; }
+    render();
+  }
   const refs = {};
   const refCols = [...new Set(f.columns.filter(c => c.type === 'ref').map(c => c.ref))];
   Promise.all([f.itemRef ? refOptions('items').then(o => { items = o; }) : null, ...refCols.map(r => refOptions(r).then(o => { refs[r] = o; }))]).then(render).catch(fail);
@@ -172,7 +208,7 @@ async function fillFromRequisition(reqId, inputs) {
     const it = l.item_id ? await api(`/items/${l.item_id}`).catch(() => null) : null;
     return { item_id: l.item_id || null, description: l.description || it?.name || '', hsn: it?.hsn || '', spec: l.spec || '',
       qty: l.qty ?? null, uom: l.uom || it?.uom || 'Nos', rate: it?.rate || 0, gst: it?.gst_rate ?? 18, ...(l.bom_item_id ? { bom_item_id: l.bom_item_id } : {}),
-      ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}), ...(l.site ? { site: l.site } : {}) };
+      ...(l.bom_id ? { bom_id: l.bom_id } : {}), ...(l.project_id ? { project_id: l.project_id } : {}), ...(l.site ? { site: l.site } : {}), ...(l.split?.length ? { split: l.split.map(s => ({ ...s })) } : {}) };
   }));
   inputs.lines.set([...keep, ...mapped]);
   if (r.project_id && inputs.project_id && !inputs.project_id.get()) inputs.project_id.set(r.project_id);
@@ -390,8 +426,9 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }
       break;
     case 'approvals': {
-      const link = { Quotation: `#/quotation/${row.doc_id}`, 'Purchase Order': `#/view/purchase_orders/${row.doc_id}`, Requisition: `#/view/requisitions/${row.doc_id}` }[row.doc_type];
-      if (link) A.push(h('a.btn', { href: link }, `Open ${row.doc_type}`));
+      const docEnt = APPROVAL_DOCS[row.doc_type];
+      if (docEnt && ENTITIES[docEnt].print) A.push(h('a.btn', { href: `#/print/${ENTITIES[docEnt].print}/${row.doc_id}${docEnt === 'purchase_orders' ? '?internal=1' : ''}`, target: '_blank' }, `🖨 Print ${row.doc_type}`));
+      if (docEnt) A.push(h('a.btn', { href: recordHref(docEnt, row.doc_id), title: 'Open the document itself (to edit it)' }, `Open ${row.doc_type} ›`));
       if (row.status === 'Pending' && canApprove(row.doc_type, row.stage)) {
         const decide = decision => go(async () => {
           const c = h('textarea', { placeholder: 'Comments (optional)' });
@@ -1030,6 +1067,7 @@ export async function recordView(root, entity, id) {
         writable ? h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save') : null,
         !isNew && mayDelete(entity, r) ? h('button.btn.danger', { onclick: busy(remove) }, '🗑 Delete') : null)),
     keep.el,
+    !isNew && entity === 'approvals' && APPROVAL_DOCS[r.doc_type] ? approvalDoc(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'purchase_orders' ? approvalStrip('Purchase Order', r) : null,
     !isNew && entity === 'purchase_orders' && r.requisition_id ? requisitionCard(r.requisition_id) : null,
     !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
@@ -1043,6 +1081,53 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
+}
+
+// ---------------------------------------------------------------- the document inside its approval request
+const APPROVAL_DOCS = { Quotation: 'quotations', 'Purchase Order': 'purchase_orders', Requisition: 'requisitions', 'Sales Order': 'sales_orders', Payment: 'vendor_payments',
+  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes' };
+const shown = (f, v, row) => {
+  if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
+  if (f.type === 'ref') return row[f.key + '_label'] || `#${v}`;
+  if (f.type === 'money') return money(v);
+  if (f.type === 'date') return fmtDate(v);
+  if (f.type === 'yn') return v === 'Yes' || v === true ? 'Yes' : 'No';
+  return typeof v === 'object' ? null : String(v);
+};
+function approvalDoc(ap, reload) {
+  const entity = APPROVAL_DOCS[ap.doc_type];
+  const ent = ENTITIES[entity];
+  const box = h('div.card', h('p.muted', `Loading ${ap.doc_type} …`));
+  api(`/${entity}/${ap.doc_id}`).then(doc => {
+    const skip = new Set(['status', 'approval_stage', 'notes_internal']);
+    const info = ent.fields.filter(f => !f.hidden && f.type !== 'lines' && f.type !== 'json' && !skip.has(f.key)).map(f => [f.label, shown(f, doc[f.key], doc), f]).filter(x => x[1]);
+    const long = info.filter(([, v, f]) => f.type === 'textarea' || String(v).length > 60);
+    const short = info.filter(x => !long.includes(x));
+    const linesFields = ent.fields.filter(f => f.type === 'lines' && Array.isArray(doc[f.key]) && doc[f.key].some(l => l.description || l.item_id || Number(l.qty)));
+    const table = f => {
+      const cols = f.columns.filter(c => doc[f.key].some(l => l[c.key] != null && l[c.key] !== ''));
+      const amounts = f.amounts !== false && cols.some(c => c.key === 'rate');
+      return h('div', { style: { marginTop: '10px' } }, h('b', f.label), h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', '#'), f.itemRef ? h('th', 'Item') : null, cols.map(c => h('th', c.label)), amounts ? h('th.num', 'Amount') : null)),
+        h('tbody', doc[f.key].filter(l => l.description || l.item_id || Number(l.qty)).map((l, i) => h('tr', h('td.muted', i + 1), f.itemRef ? h('td', l.item_id_label || '') : null,
+          cols.map(c => h('td', { style: { whiteSpace: c.type === 'textarea' ? 'pre-wrap' : '', fontSize: c.type === 'textarea' ? '12px' : '' } },
+            c.type === 'ref' ? (c.split && l.split?.length > 1 ? l.site : l[c.key + '_label'] || (l[c.key] ? `#${l[c.key]}` : '')) : c.type === 'money' ? inr(l[c.key]) : l[c.key] ?? '')),
+          amounts ? h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0))) : null))))));
+    };
+    box.replaceChildren(
+      h('h2', { style: { marginTop: 0 } }, `${ent.icon} ${ap.doc_type} ${ap.doc_ref || ''}`, ' ', badge(doc.status), doc.approval_stage ? h('span.badge.warn', { style: { marginLeft: '6px' } }, `waiting: ${doc.approval_stage}`) : null),
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '8px 18px' } },
+        short.map(([k, v]) => h('div', h('div.muted', { style: { fontSize: '11px' } }, k), h('div', { style: { fontWeight: 500 } }, v)))),
+      long.length ? h('div', { style: { marginTop: '8px' } }, long.map(([k, v]) => h('div', { style: { marginTop: '4px' } }, h('span.muted', { style: { fontSize: '11px' } }, k + ': '), h('span', { style: { whiteSpace: 'pre-wrap' } }, v)))) : null,
+      linesFields.map(table));
+    const extra = [];
+    if (entity === 'purchase_orders') {
+      extra.push(approvalStrip('Purchase Order', doc));
+      if (doc.requisition_id) extra.push(requisitionCard(doc.requisition_id));
+      extra.push(commercialPanel(doc, reload));
+    }
+    box.after(...extra.filter(Boolean), attachments(entity, doc.id, false));
+  }).catch(e => box.replaceChildren(h('p', `Could not load the ${ap.doc_type}: ${e.message}`)));
+  return box;
 }
 
 // The requisition a PO was made from, in full, inside the PO (no need to open it).

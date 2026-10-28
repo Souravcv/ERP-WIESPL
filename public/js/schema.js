@@ -1365,7 +1365,7 @@ export const ENTITIES = {
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'remark', label: 'Remark', type: 'text', width: 160 },
         { key: 'site', label: 'Site / Hospital', type: 'text', width: 170 },
-        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)' },
+        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)', split: true },
         { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       { key: 'approved_by', label: 'Approved By (Purchase Head)', type: 'text', readonly: true },
@@ -1410,7 +1410,7 @@ export const ENTITIES = {
         { key: 'rate', label: 'Rate', type: 'money', width: 100 },
         { key: 'gst', label: 'GST %', type: 'number', width: 60 },
         { key: 'site', label: 'Site / Hospital', type: 'text', width: 150 },
-        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)' },
+        { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)', split: true },
         { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
       ] },
       // Charges are part of the taxable value (before GST), each shown on the PO.

@@ -331,6 +331,7 @@ export function beforeSave(name, row, existing, user) {
     case 'requisitions': {
       if (!existing && !row.req_no) row.req_no = docNo('requisition', date, (n, fy) => `REQ-${n}/20${fy}`);
       const sites = siteLines(row, existing);
+      if ('lines' in row && (!existing || ['Draft', 'Rejected'].includes(existing.status))) row.lines = JSON.stringify(mergeProjects(parse(row.lines, [])));
       if (sites?.length > 1) { row.project_id = null; row.project_name = `Multiple sites: ${siteNames(sites)}`; }
       else if (sites?.length === 1 && !(row.project_id ?? existing?.project_id)) row.project_id = sites[0];
       if ((row.project_id ?? existing?.project_id) && !(row.project_name ?? existing?.project_name)) {
