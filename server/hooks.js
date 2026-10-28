@@ -602,7 +602,7 @@ export function refreshBillNotes(poId) {
   const one = sql => db.prepare(sql).get(po.id).v || 0;
   const billed = one('SELECT COALESCE(SUM(amount),0) v FROM vendor_bills WHERE po_id = ?');
   if (!billed) return;
-  const received = one("SELECT COALESCE(SUM(qty * COALESCE(rate,0)),0) v FROM stock_moves WHERE type = 'INWARD' AND po_id = ?") * (po.subtotal > 0 ? po.total / po.subtotal : 1);
+  const received = one("SELECT COALESCE(SUM((qty - COALESCE(qc_rejected, 0)) * COALESCE(rate,0)),0) v FROM stock_moves WHERE type = 'INWARD' AND po_id = ?") * (po.subtotal > 0 ? po.total / po.subtotal : 1);
   const net = billed - one('SELECT COALESCE(SUM(amount),0) v FROM debit_notes WHERE po_id = ?');
   const tol = Number(getSettings().bill_tolerance_pct ?? 2) || 0;
   const rs = n => `₹${Math.round(n).toLocaleString('en-IN')}`;

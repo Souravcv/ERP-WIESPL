@@ -27,7 +27,7 @@ const EXTRA_LINKS = {
   'Sales & Projects': [['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -36,6 +36,7 @@ const ADMIN_LINKS = [
   ['#/roles', '🛡️', 'Roles & Permissions', 'admin'],
   ['#/settings', '⚙️', 'Company & Quotation Settings', 'admin'],
   ['#/audit', '🕘', 'Activity Log', 'view_audit'],
+  ['#/health', '🩺', 'System Health', 'view_audit'],
 ];
 
 let tasksOpen = 0;
@@ -106,6 +107,8 @@ async function route() {
       case 'planner-print': { $('app').classList.add('hidden'); const { plannerPrint } = await import('./views/planner.js'); await plannerPrint($('print-root'), a); break; }
       case 'payables': { const { payablesView } = await import('./views/payables.js'); await payablesView(view, a || 'due', b); break; }
       case 'taskboard': { const { taskBoardView } = await import('./views/taskboard.js'); await taskBoardView(view); break; }
+      case 'lots': { const { lotsView } = await import('./views/lots.js'); await lotsView(view); break; }
+      case 'health': { const { healthView } = await import('./views/lots.js'); await healthView(view); break; }
       case 'drafts': { const { draftsView } = await import('./views/drafts.js'); await draftsView(view); break; }
       case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
       case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }

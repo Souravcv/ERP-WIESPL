@@ -33,6 +33,7 @@ import * as hr from './hr.js';
 import * as wt from './worktasks.js';
 import * as planner from './schedule.js';
 import * as planning from './planning.js';
+import * as lots from './lots.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -47,6 +48,7 @@ seed();
 roles.seedRoles();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
+lots.setupLots();
 importer.linkInwardPOs();
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'reg_address_v2'").get()) {
   setSettings({ reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033' });
@@ -433,6 +435,15 @@ api.get('/my-drafts', wrap(req => {
   }
   return out.sort((a, b) => String(b.updated_at || b.created_at).localeCompare(String(a.updated_at || a.created_at)));
 }));
+// Lot-wise stores, incoming inspection and the system health page.
+const lotView = req => { if (!canView('stock_moves', req.user.role)) throw new HttpError(403, 'No access to stock'); };
+api.get('/lots', wrap(req => { lotView(req); return lots.lotRegister(req.query); }));
+api.get('/lots/consumption', wrap(req => { lotView(req); return lots.projectConsumption(req.query); }));
+api.get('/lots/for-doc', wrap(req => { lotView(req); return lots.lotsForDoc(req.query.type, req.query.doc); }));
+api.get('/lots/:item/:lot', wrap(req => { lotView(req); return lots.lotTrail(req.params.lot, req.params.item); }));
+api.get('/iqc', wrap(req => { lotView(req); return lots.iqcPending(); }));
+api.post('/iqc', wrap(req => lots.inspect(req.body, req.user)));
+api.get('/health', wrap(req => lots.health(req.user)));
 api.get('/planner/portfolio', wrap(req => planner.portfolio(req.user)));
 api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
 api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));

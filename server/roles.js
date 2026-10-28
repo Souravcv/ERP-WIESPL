@@ -141,6 +141,14 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_planning_v1', '\"1\"')").run();
   }
+  // Incoming inspection (once): the store, technical manager, purchase head and GM record IQC.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_iqc_v1'").get()) {
+    for (const name of ['store', 'technical', 'purchase_head', 'manager']) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'iqc_inspect'])]; db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name); }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_iqc_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

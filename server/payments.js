@@ -22,7 +22,7 @@ export function poMoney(poId, exceptPaymentId = 0) {
   const po = db.prepare('SELECT id, po_no, status, total, subtotal, payment_schedule FROM purchase_orders WHERE id = ?').get(Number(poId));
   if (!po) return null;
   const factor = po.subtotal > 0 ? po.total / po.subtotal : 1;
-  const received = db.prepare("SELECT COALESCE(SUM(qty * COALESCE(rate, 0)), 0) v FROM stock_moves WHERE type = 'INWARD' AND po_id = ?").get(po.id).v;
+  const received = db.prepare("SELECT COALESCE(SUM((qty - COALESCE(qc_rejected, 0)) * COALESCE(rate, 0)), 0) v FROM stock_moves WHERE type = 'INWARD' AND po_id = ?").get(po.id).v;
   const billed = db.prepare('SELECT COALESCE(SUM(amount), 0) v FROM vendor_bills WHERE po_id = ?').get(po.id).v;
   const debited = db.prepare('SELECT COALESCE(SUM(amount), 0) v FROM debit_notes WHERE po_id = ?').get(po.id).v;
   const paid = db.prepare("SELECT COALESCE(SUM(amount), 0) v FROM vendor_payments WHERE po_id = ? AND status = 'Paid'").get(po.id).v;

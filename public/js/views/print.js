@@ -424,8 +424,8 @@ function challanDoc(c, project, s) {
 }
 
 const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE (MTN)', PRODUCED: 'PRODUCTION NOTE (FINISHED GOODS MADE)', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
-function stockSlipDoc(type, docNo, moves, s) {
-  if (!['INWARD', 'OPENING'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s);
+function stockSlipDoc(type, docNo, moves, s, lotsOf) {
+  if (!['INWARD', 'OPENING'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s, lotsOf);
   const m0 = moves[0] || {};
   const total = moves.reduce((a, m) => a + (Number(m.value) || 0), 0);
   const info = [
@@ -448,7 +448,7 @@ function stockSlipDoc(type, docNo, moves, s) {
     footer()));
 }
 
-function stockSlipNoPrice(type, docNo, moves, s) {
+function stockSlipNoPrice(type, docNo, moves, s, lotsOf = {}) {
   const m0 = moves[0] || {};
   const info = [['No', docNo], ['Date', fmtDate(m0.date)], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
     type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
@@ -458,7 +458,8 @@ function stockSlipNoPrice(type, docNo, moves, s) {
     h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
     h('table', { style: { marginTop: '8px' } },
       h('thead', h('tr', ['Sr', 'Item Code', 'Item Name', 'Qty', 'UOM', 'Remark'].map((x, i) => h('th' + (i === 3 ? '.num' : ''), x)))),
-      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]), h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · ')),
+      h('tbody', moves.map((m, i) => h('tr', h('td', i + 1), h('td', (m.item_id_label || '').split(' · ')[0]),
+        h('td', (m.item_id_label || '').split(' · ').slice(1).join(' · '), lotsOf[m.id]?.length ? h('div', { style: { fontSize: '10px', color: '#555' } }, 'from ' + lotsOf[m.id].map(a => `${a.lot} (${a.qty})`).join(', ')) : null),
         h('td.num', m.qty), h('td', m.uom || ''), h('td', m.remarks || '')))),
       h('tfoot', h('tr', h('td', { colspan: 3 }, `Total items: ${moves.length}`), h('td.num', round2(moves.reduce((a, m) => a + (Number(m.qty) || 0), 0))), h('td', { colspan: 2 })))),
     h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
@@ -543,7 +544,8 @@ export async function printView(root, kind, id) {
     if (!moves.length) throw new Error(`No ${id} entries with number ${docNo}`);
     moves.sort((a, b) => a.id - b.id);
     title = `${SLIP_TITLES[id] || id} ${docNo}`;
-    doc = stockSlipDoc(id, docNo, moves, s);
+    const lotsOf = ['OUTWARD', 'TRANSFER', 'SCRAP'].includes(id) ? await api(`/lots/for-doc?type=${encodeURIComponent(id)}&doc=${encodeURIComponent(docNo)}`).catch(() => ({})) : {};
+    doc = stockSlipDoc(id, docNo, moves, s, lotsOf);
   } else throw new Error('Unknown document');
   document.title = title;
   root.replaceChildren(bar(title), doc);

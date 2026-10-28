@@ -91,6 +91,7 @@ export function stockEntry(body, user) {
           rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
           remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
           hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: part.project_id, po_line: idx >= 0 ? idx : null,
+          batch_no: String(l.batch_no || '').trim() || null, rack: String(l.rack || '').trim() || null, qc_status: type === 'INWARD' ? 'Pending' : null,
         }, user, { system: true });
         created.push(row.id);
       }
