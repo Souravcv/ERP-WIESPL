@@ -348,7 +348,7 @@ export function beforeSave(name, row, existing, user) {
       break;
     case 'leave_requests':
       if (!existing && !row.leave_no) row.leave_no = docNo('leave', date, (n, fy) => `LV-${n}/20${fy}`);
-      prepLeave(row, existing);
+      prepLeave(row, existing, user);
       break;
     case 'material_requests':
       if (!existing && !row.mr_no) row.mr_no = docNo('material_request', date, (n, fy) => `MR-${n}/20${fy}`);

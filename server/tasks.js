@@ -107,8 +107,8 @@ export function myTasks(user) {
   }
 
   // Approvals this person may give
-  const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id").all()
-    .filter(a => canApprove(a.doc_type, a.stage, user));
+  const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at, also_by FROM approvals WHERE status = 'Pending' ORDER BY id").all()
+    .filter(a => canApprove(a.doc_type, a.stage, user, a));
   group('approve', '✅', 'Approvals waiting for you', aps.map(a => ({ title: `${a.doc_type} ${a.doc_ref || ''} – ${a.stage || 'approval'}`, sub: `${a.title || ''} · by ${a.requested_by} ${a.requested_at || ''}`, link: `#/view/approvals/${a.id}` })));
 
   // Material to order (order-by date within a week or past) for Final BOQs

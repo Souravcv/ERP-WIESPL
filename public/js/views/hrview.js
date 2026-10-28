@@ -1,13 +1,16 @@
-// HR dashboard: who is working where today, the month register (one code per day), and the days HR has to review.
+// HR dashboard: who is working where today, the month register (one code per day, with the HR Policy's late marks and
+// sandwich rule), leave balances, and the days HR has to review.
 import { h, api, fmtDate, today, toast, fail, modal, busy, state } from '../ui.js';
 import { hasFunction } from '../schema.js';
 import { inr } from '../calc.js';
 
-const TABS = [['today', '🕘 Today'], ['month', '📅 Month register'], ['review', '🔎 To review']];
+const TABS = [['today', '🕘 Today'], ['month', '📅 Month register'], ['balances', '🌴 Leave balances'], ['review', '🔎 To review']];
 const kpi = (l, v, sub, c) => h('div.kpi', h('div.label', l), h('div.value', { style: c ? { color: c } : {} }, String(v)), sub ? h('div.sub', sub) : null);
 const dist = m => (m == null ? '' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
 const STATE_COLOR = { Working: 'var(--good)', 'Clocked out': 'var(--text)', 'Not in': 'var(--bad)', 'On leave': 'var(--warn)' };
-const CODE_COLOR = { P: 'var(--good)', H: 'var(--warn)', A: 'var(--bad)', L: 'var(--info)', HO: 'var(--muted)', WO: 'var(--muted)' };
+const CODE_COLOR = { P: 'var(--good)', 'P*': 'var(--good)', H: 'var(--warn)', 'H*': 'var(--warn)', A: 'var(--bad)', L: 'var(--info)', HL: 'var(--info)', CO: 'var(--info)', OD: 'var(--info)', LWP: 'var(--bad)',
+  S: 'var(--bad)', W: 'var(--accent, var(--info))', HO: 'var(--muted)', WO: 'var(--muted)' };
+const LEGEND = 'P present · P* late mark (free) · H* late mark after the free ones = ½ day · H half day (1½–4 h late / early) · A absent (or over 4 h late / early) · L paid leave · HL half-day leave · CO comp-off · OD on duty · LWP leave without pay · HO holiday · WO weekly off · W worked on an off day (comp-off) · S off day between absences / leave = unpaid (sandwich) · ? HR still to review';
 
 export async function hrView(root, tab = 'today') {
   const head = h('div.page-head', h('h1', '👥 HR & Attendance'), h('div.actions',
@@ -18,6 +21,7 @@ export async function hrView(root, tab = 'today') {
   root.replaceChildren(head, tabs, box);
   if (tab === 'month') return month(box);
   if (tab === 'review') return reviewList(box, root);
+  if (tab === 'balances') return balancesTab(box);
   return todayTab(box);
 }
 
@@ -47,20 +51,58 @@ async function todayTab(box) {
 async function month(box) {
   const pick = h('input', { type: 'month', value: today().slice(0, 7) });
   const out = h('div');
+  let d = null;
+  const COLS = [['present', 'Present'], ['late_marks', 'Late marks'], ['half', '½ days'], ['absent', 'Absent'], ['leave', 'Paid leave'], ['lwp', 'LWP'], ['sandwich', 'Sandwich'], ['off_worked', 'Off days worked'], ['pay_extra', 'Pay extra (comp-off not taken)'], ['paid_days', 'Paid days']];
+  const csv = () => {
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = [['Code', 'Employee', 'Department', ...d.days.map(x => x.slice(8)), ...COLS.map(c => c[1]), 'To review'].map(q).join(',')]
+      .concat(d.rows.map(r => [r.code, r.name, r.department, ...r.codes, ...COLS.map(c => r[c[0]]), r.to_review].map(q).join(',')));
+    const a = h('a', { href: URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' })), download: `attendance-${d.month}.csv` });
+    document.body.append(a); a.click(); a.remove();
+  };
   const load = async () => {
-    const d = await api(`/hr/month?month=${pick.value}`);
+    d = await api(`/hr/month?month=${pick.value}`);
     out.replaceChildren(
-      h('p.muted', 'P present · H half day · A absent · L leave · HO holiday · WO weekly off · ? = HR still to review. Paid days = P + ½ H + L + HO + WO.'),
+      h('p.muted', { style: { fontSize: '12px' } }, LEGEND, `. First ${d.late_free} late marks a month are free. Paid days = P + P* + ½ (H, H*, HL) + L + CO + OD + HO + WO + W.`),
       h('div.card.flush', h('div.table-wrap', h('table.data', { style: { fontSize: '11.5px' } },
         h('thead', h('tr', h('th', 'Employee'), d.days.map(x => h('th', { style: { padding: '4px 3px', textAlign: 'center', color: d.holidays[x] ? 'var(--warn)' : '' }, title: d.holidays[x] || '' }, Number(x.slice(8)))),
-          ['P', 'H', 'A', 'L', 'Paid', '?'].map(x => h('th.num', x)))),
+          ['P', 'Late', '½', 'A', 'L', 'LWP', 'S', 'W', 'Pay+', 'Paid', '?'].map(x => h('th.num', x)))),
         h('tbody', d.rows.map(r => h('tr', h('td.nowrap', r.name),
           r.codes.map(c => h('td', { style: { padding: '4px 3px', textAlign: 'center', fontWeight: 600, color: CODE_COLOR[c.replace('?', '')] || '' } }, c)),
-          h('td.num', r.present), h('td.num', r.half), h('td.num', r.absent), h('td.num', r.leave), h('td.num', h('b', inr(r.paid_days, 1))), h('td.num', { style: { color: r.to_review ? 'var(--warn)' : '' } }, r.to_review || ''))))))),
-      h('button.btn', { style: { marginTop: '8px' }, onclick: () => window.print() }, '🖨 Print'));
+          h('td.num', r.present), h('td.num', { style: { color: r.late_marks > d.late_free ? 'var(--bad)' : '' } }, r.late_marks || ''), h('td.num', r.half || ''), h('td.num', r.absent || ''), h('td.num', r.leave || ''),
+          h('td.num', r.lwp || ''), h('td.num', r.sandwich || ''), h('td.num', r.off_worked || ''), h('td.num', r.pay_extra || ''), h('td.num', h('b', inr(r.paid_days, 1))),
+          h('td.num', { style: { color: r.to_review ? 'var(--warn)' : '' } }, r.to_review || ''))))))),
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } }, h('button.btn', { onclick: () => window.print() }, '🖨 Print'), h('button.btn', { onclick: csv }, '⬇ Excel (CSV) for salary')));
   };
   pick.onchange = () => load().catch(fail);
   box.replaceChildren(h('div.toolbar', h('span.muted', 'Month'), pick), out);
+  await load();
+}
+
+// Leave position of everyone: PL credited by quarter after confirmation, taken, waiting, available; comp-off of the
+// month; leave without pay against the yearly limit; short leaves and late marks this month.
+async function balancesTab(box) {
+  const date = h('input', { type: 'date', value: today() });
+  const out = h('div');
+  const load = async () => {
+    const d = await api(`/hr/balances?date=${date.value}`);
+    const unset = d.rows.filter(r => !r.employment_type).length;
+    out.replaceChildren(
+      unset ? h('p', { style: { color: 'var(--warn)' } }, `${unset} employee(s) have no Employment set (Probation / Confirmed): PL needs Confirmed and a confirmation date. Open the employee to set it.`) : null,
+      h('div.card.flush', h('div.table-wrap', h('table.data',
+        h('thead', h('tr', ['Employee', 'Employment', 'Service (yrs)', 'PL credited', 'PL taken', 'PL waiting', 'PL available', 'PL by 31 Mar (unused = encash)', 'Comp-off left (this month)', 'LWP this year', 'Short leaves (month)', 'Late marks (month)']
+          .map((x, i) => h(i > 1 ? 'th.num' : 'th', x)))),
+        h('tbody', d.rows.map(r => h('tr.clickable', { onclick: () => (location.hash = `#/view/employees/${r.employee_id}`) },
+          h('td', r.name, h('div.muted', { style: { fontSize: '11px' } }, `${r.code || ''} · ${r.department || ''}`)),
+          h('td', r.employment_type || h('span', { style: { color: 'var(--warn)' } }, 'not set'), r.confirmation_date ? h('div.muted', { style: { fontSize: '11px' } }, `confirmed ${fmtDate(r.confirmation_date)}`) : null),
+          h('td.num', r.service_years || ''), h('td.num', r.pl_credit), h('td.num', r.pl_taken || ''), h('td.num', r.pl_pending || ''),
+          h('td.num', h('b', { style: { color: r.pl_available > 0 ? 'var(--good)' : '' } }, r.pl_available)), h('td.num', r.pl_year_end || ''),
+          h('td.num', r.comp_off_earned ? `${r.comp_off_left} of ${r.comp_off_earned}` : ''), h('td.num', { style: { color: r.lwp >= r.lwp_max ? 'var(--bad)' : '' } }, r.lwp ? `${r.lwp} / ${r.lwp_max}` : ''),
+          h('td.num', r.short_leaves ? `${r.short_leaves} / ${r.short_max}` : ''), h('td.num', { style: { color: r.late_marks > r.late_free ? 'var(--bad)' : '' } }, r.late_marks || ''))))))),
+      h('p.muted', { style: { fontSize: '12px' } }, `Leave year ${fmtDate(d.year.from)} – ${fmtDate(d.year.to)}. PL: ${d.policy.plYear} days a year, ${d.policy.plYear / 4} at the start of each quarter once confirmed (pro-rata in the quarter of confirmation), not carried forward; unused PL is encashed at year end (Basic/DA). Comp-off: an off day worked (approved by HR) is taken in the same month, or paid. Maternity (16 weeks), paternity / adoption (4 days) and marriage (10 days, once) need confirmation and 3 years' service.`));
+  };
+  date.onchange = () => load().catch(fail);
+  box.replaceChildren(h('div.toolbar', h('span.muted', 'As on'), date), out);
   await load();
 }
 

@@ -1,6 +1,7 @@
 // My Attendance (phone): clock in / out at the work location with GPS + selfie, presence checks during the day
 // (automatic while the app is open, and a photo check every few hours), leave requests, my month.
 import { h, api, toast, fail, fmtDate, today, busy } from '../ui.js';
+import { LEAVE_TYPES } from '../schema.js';
 
 let timer = null, wakeLock = null;
 const stop = () => { clearInterval(timer); timer = null; try { wakeLock?.release(); } catch { /* none */ } wakeLock = null; };
@@ -148,18 +149,22 @@ export async function attendView(root) {
 
   const sites = h('div.card', h('h2', '📍 Where you can clock in today'), me.sites.length ? h('table.data', h('tbody', me.sites.map(s => h('tr', h('td', s.name, h('div.muted', { style: { fontSize: '11px' } }, `${s.kind} · within ${s.radius_m || 200} m`)), h('td', h('a', { href: maps(s.lat, s.lng), target: '_blank' }, 'Map')))))) : h('p.muted', 'No site is set for you today: ask HR / the service coordinator to assign your site.'));
 
-  const lt = h('select', ['Casual', 'Sick', 'Earned', 'Comp-off', 'Unpaid', 'On duty (outside)'].map(x => h('option', x)));
+  const lt = h('select', LEAVE_TYPES.map(x => h('option', x)));
+  const B = me.balance;
   const lf = h('input', { type: 'date', value: today() }), lto = h('input', { type: 'date', value: today() });
   const half = h('input', { type: 'checkbox', style: { width: 'auto' } }), why = h('input', { placeholder: 'Reason' });
   const leave = h('div.card', h('h2', '🌴 Leave'),
+    B ? h('div.kpis', { style: { marginBottom: '10px' } }, ...[['PL available', B.pl_available, B.employment_type === 'Confirmed' ? `${B.pl_credit} credited this year` : 'after confirmation'],
+      ['Comp-off', B.comp_off_left, 'take this month'], ['Short leaves', `${B.short_leaves} / ${B.short_max}`, 'this month'], ['Late marks', `${B.late_marks} / ${B.late_free}`, 'free this month']]
+      .map(([l, v, s]) => h('div.kpi', h('div.label', l), h('div.value', String(v)), h('div.sub', s)))) : null,
     h('div.form-grid', h('label', 'Type', lt), h('label', 'From', lf), h('label', 'To', lto), h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, half, 'Half day'), h('label.span-2', 'Reason', why)),
     h('button.btn.primary', { style: { marginTop: '8px' }, onclick: busy(async () => {
       try { const r = await api('/hr/leave', { method: 'POST', body: { type: lt.value, from_date: lf.value, to_date: lto.value, half_day: half.checked ? 'Yes' : 'No', reason: why.value } }); toast(`${r.leave_no} sent for approval`); reload(); } catch (e) { fail(e); }
     }) }, '📤 Apply for leave'),
-    me.leaves.length ? h('table.data', { style: { marginTop: '10px' } }, h('tbody', me.leaves.map(l => h('tr', h('td', l.leave_no), h('td', l.type), h('td', `${fmtDate(l.from_date)}${l.to_date !== l.from_date ? ' – ' + fmtDate(l.to_date) : ''}`), h('td.num', l.days), h('td', l.status))))) : null);
+    me.leaves.length ? h('table.data', { style: { marginTop: '10px' } }, h('tbody', me.leaves.map(l => h('tr', h('td', l.leave_no), h('td', l.type), h('td', `${fmtDate(l.from_date)}${l.to_date !== l.from_date ? ' – ' + fmtDate(l.to_date) : ''}`), h('td.num', l.days), h('td', l.status, l.balance_note ? h('div.muted', { style: { fontSize: '11px' } }, l.balance_note) : null))))) : null);
 
   const month = h('div.card', h('h2', '📅 This month'), me.month.length ? h('table.data', h('thead', h('tr', ['Date', 'Status', 'In', 'Out', 'Hours'].map(x => h('th', x)))),
-    h('tbody', me.month.map(d => h('tr', h('td.nowrap', fmtDate(d.date)), h('td', d.status, d.review === 'To review' ? h('span.muted', ' (HR checking)') : null), h('td', hm(d.check_in)), h('td', hm(d.check_out)), h('td.num', d.hours || ''))))) : h('p.muted', 'Nothing yet this month'));
+    h('tbody', me.month.map(d => h('tr', h('td.nowrap', fmtDate(d.date)), h('td', d.status, d.timing && !['On time', ''].includes(d.timing) ? h('div.muted', { style: { fontSize: '11px' } }, d.timing) : null, d.review === 'To review' ? h('span.muted', ' (HR checking)') : null), h('td', hm(d.check_in)), h('td', hm(d.check_out)), h('td.num', d.hours || ''))))) : h('p.muted', 'Nothing yet this month'));
 
   root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, sites, leave, month);
   if (working && !app) autoCheck();

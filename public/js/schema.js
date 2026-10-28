@@ -173,6 +173,10 @@ export const DEFAULT_FUNCTIONS = {
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
 // Approval steps; who may approve is the role's function list.
+// Leave types of the WIESPL HR Policy. Paid = the day counts for salary; PL comes from the quarterly credit.
+export const LEAVE_TYPES = ['Privilege Leave (PL)', 'Comp-off', 'Short leave (up to 1½ h)', 'Leave without pay', 'Maternity', 'Paternity', 'Adoption', 'Marriage', 'Special (declared closure)', 'On duty (outside)'];
+export const UNPAID_LEAVE = ['Leave without pay', 'Unpaid'];
+export const EMPLOYMENT_TYPES = ['Probation', 'Confirmed', 'Fixed-term', 'Trainee', 'Contract'];
 export const APPROVAL_FLOWS = {
   Quotation: [{ stage: 'Approval', fn: 'approve_quotation' }],
   'Sales Order': [{ stage: 'GM', fn: 'approve_sales_order' }],
@@ -413,6 +417,7 @@ export const ENTITIES = {
     list: ['requested_at', 'doc_type', 'doc_ref', 'stage', 'title', 'amount', 'requested_by', 'status', 'decided_by'],
     statusField: 'status',
     fields: [
+      { key: 'also_by', label: 'Can Also Approve', type: 'text', readonly: true, hint: 'The reporting manager (leave)' },
       { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
@@ -1191,10 +1196,15 @@ export const ENTITIES = {
       { key: 'mobile', label: 'Mobile', type: 'tel' },
       { key: 'email', label: 'Email', type: 'email' },
       { key: 'joining_date', label: 'Joining Date', type: 'date' },
-      { key: 'reporting_to', label: 'Reports To', type: 'person' },
+      { key: 'reporting_to', label: 'Reports To', type: 'person', hint: 'Approves this person\'s leave (with HR)' },
+      { key: 'employment_type', label: 'Employment', type: 'select', options: EMPLOYMENT_TYPES, default: 'Probation', hint: 'Privilege leave (PL) only after confirmation' },
+      { key: 'confirmation_date', label: 'Confirmation Date', type: 'date', hint: 'PL is credited from this date (pro-rata for the quarter)' },
+      { key: 'gender', label: 'Gender', type: 'select', options: ['', 'Male', 'Female', 'Other'] },
+      { key: 'date_of_birth', label: 'Date of Birth', type: 'date' },
+      { key: 'married_at_joining', label: 'Married at Joining', type: 'yn', default: 'No', hint: 'Marriage leave is only for those unmarried at joining' },
       { key: 'field_staff', label: 'Field / Site Staff', type: 'yn', default: 'No', hint: 'Yes = selfie at clock-in / out and a presence check every few hours' },
       { key: 'default_location_id', label: 'Usual Work Location', type: 'ref', ref: 'work_locations', hint: 'e.g. Office or Works; sites come from Site Assignments' },
-      { key: 'shift_start', label: 'Shift Start (HH:MM)', type: 'text', default: '09:30' },
+      { key: 'shift_start', label: 'Shift Start (HH:MM)', type: 'text', default: '09:00' },
       { key: 'shift_end', label: 'Shift End (HH:MM)', type: 'text', default: '18:00' },
       { key: 'weekly_off', label: 'Weekly Off', type: 'select', options: ['Sunday', 'Saturday', 'Saturday + Sunday', 'None'], default: 'Sunday' },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'Left'], default: 'Active' },
@@ -1242,7 +1252,7 @@ export const ENTITIES = {
     label: 'Attendance Register', singular: 'Attendance', group: 'HR', icon: '🕘', write: HR_ROLES,
     display: "{t}.date",
     search: ['flags', 'note', 'remarks'],
-    list: ['date', 'employee_id', 'location_id', 'mode', 'check_in', 'check_out', 'hours', 'checks_inside', 'checks', 'status', 'review'],
+    list: ['date', 'employee_id', 'location_id', 'mode', 'check_in', 'check_out', 'hours', 'timing', 'checks_inside', 'status', 'review'],
     statusField: 'status',
     fields: [
       { key: 'date', label: 'Date', type: 'date', required: true },
@@ -1254,6 +1264,8 @@ export const ENTITIES = {
       { key: 'check_out', label: 'Clock Out', type: 'text', readonly: true },
       { key: 'out_distance_m', label: 'Distance at Clock Out (m)', type: 'number', readonly: true },
       { key: 'hours', label: 'Hours', type: 'number', readonly: true },
+      { key: 'short_min', label: 'Late In + Early Out (min)', type: 'number', readonly: true },
+      { key: 'timing', label: 'Timing (policy)', type: 'select', options: ['', 'On time', 'Late mark', 'Half day (late / early)', 'Full day cut (over 4 h late / early)', 'Worked on off day (comp-off)'], readonly: true },
       { key: 'checks', label: 'Location Checks', type: 'number', readonly: true },
       { key: 'checks_inside', label: 'Checks Inside', type: 'number', readonly: true },
       { key: 'photo_checks', label: 'Photo Checks', type: 'number', readonly: true },
@@ -1294,17 +1306,19 @@ export const ENTITIES = {
     label: 'Leave Requests', singular: 'Leave Request', group: 'HR', icon: '🌴', write: HR_ROLES,
     display: "{t}.leave_no",
     search: ['leave_no', 'reason'],
-    list: ['leave_no', 'employee_id', 'type', 'from_date', 'to_date', 'days', 'status', 'approved_by'],
+    list: ['leave_no', 'employee_id', 'type', 'from_date', 'to_date', 'days', 'balance_note', 'status', 'approved_by'],
     statusField: 'status',
     fields: [
       { key: 'leave_no', label: 'Leave No', type: 'text', readonly: true, hint: 'Auto: LV-001/2026-27' },
       { key: 'employee_id', label: 'Employee', type: 'ref', ref: 'employees', required: true },
-      { key: 'type', label: 'Leave Type', type: 'select', options: ['Casual', 'Sick', 'Earned', 'Comp-off', 'Unpaid', 'On duty (outside)'], default: 'Casual' },
+      { key: 'type', label: 'Leave Type', type: 'select', options: LEAVE_TYPES, default: 'Privilege Leave (PL)' },
       { key: 'from_date', label: 'From', type: 'date', required: true },
       { key: 'to_date', label: 'To', type: 'date', required: true },
       { key: 'half_day', label: 'Half Day', type: 'yn', default: 'No' },
-      { key: 'days', label: 'Days', type: 'number', readonly: true },
+      { key: 'days', label: 'Days', type: 'number', readonly: true, hint: 'Working days (weekly offs and holidays inside are not counted; maternity counts every day)' },
       { key: 'reason', label: 'Reason', type: 'textarea', span: 2, required: true },
+      { key: 'balance_note', label: 'Balance', type: 'text', span: 2, readonly: true },
+      { key: 'hr_exception', label: 'HR Exception (reason)', type: 'textarea', span: 2, hint: 'HR only: allows a leave the policy would not (e.g. no balance); the reason is kept' },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Cancelled'], default: 'Draft', readonly: true },
       { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
       { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },

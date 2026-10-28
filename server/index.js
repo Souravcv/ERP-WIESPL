@@ -35,6 +35,7 @@ import * as planner from './schedule.js';
 import * as planning from './planning.js';
 import * as lots from './lots.js';
 import * as vend from './vendors.js';
+import * as hrp from './hrpolicy.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -51,6 +52,7 @@ dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 lots.setupLots();
 vend.setupVendors();
+hrp.setupHrPolicy();
 importer.linkInwardPOs();
 if (!db.prepare("SELECT 1 FROM settings WHERE key = 'reg_address_v2'").get()) {
   setSettings({ reg_address: 'Plot No.31, City S. No. 4415, Sr. No. 270, Dnyanaai, PCMC Link Road, Deoghar Society, Chinchwad, Pimpri Chinchwad, Pune, Maharashtra - 411033' });
@@ -578,6 +580,7 @@ api.post('/hr/leave', wrap(req => hr.applyLeave(req.user, req.body)));
 const hrView = req => { if (!canView('attendance', req.user.role)) throw new HttpError(403, 'No access to attendance'); };
 api.get('/hr/today', wrap(req => { hrView(req); return hr.todayBoard(req.query.date || undefined); }));
 api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.query.month); }));
+api.get('/hr/balances', wrap(req => { hrView(req); return hrp.balances(req.query.date || undefined); }));
 api.get('/hr/attendance/:id/pings', wrap(req => { hrView(req); return hr.pingsOf(req.params.id); }));
 api.post('/attendance/:id/review', wrap(req => hr.review(req.params.id, req.body, req.user)));
 
@@ -956,7 +959,10 @@ app.use((err, req, res, next) => {
 setTimeout(() => flow.dailyTick(), 60 * 1000);
 setInterval(() => flow.dailyTick(), 30 * 60 * 1000);
 // Attendance days left without a clock-out are closed and flagged for HR.
-setInterval(() => { try { hr.closeOpenDays(); } catch (e) { console.error('attendance close', e.message); } }, 60 * 60 * 1000);
+setInterval(() => {
+  try { hr.closeOpenDays(); } catch (e) { console.error('attendance close', e.message); }
+  try { if (new Date().getHours() >= 11) hrp.absenceAlerts(); } catch (e) { console.error('absence alerts', e.message); }
+}, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);

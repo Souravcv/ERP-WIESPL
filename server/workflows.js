@@ -2,7 +2,7 @@ import { db, tx, getSettings, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
 import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
-import { notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
+import { notify, notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
@@ -14,7 +14,10 @@ const DOCS = {
   Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
     title: r => `Pay ${r.vendor_id_label || ''} – PO ${r.po_id_label || ''}${r.off_terms === 'Yes' ? ' – OUTSIDE PO TERMS' : ''}` },
   Expense: { entity: 'expenses', ref: 'voucher_no', amount: 'amount', noLines: true, title: r => `${r.category}: ${r.payee} – ${String(r.description || '').slice(0, 60)}` },
-  Leave: { entity: 'leave_requests', ref: 'leave_no', amount: null, noLines: true, title: r => `${r.type} leave – ${r.employee_id_label || ''} – ${r.days} day(s) from ${r.from_date}` },
+  Leave: { entity: 'leave_requests', ref: 'leave_no', amount: null, noLines: true,
+    title: r => `${r.type} – ${r.employee_id_label || ''} – ${r.days} day(s), ${r.from_date}${r.to_date && r.to_date !== r.from_date ? ' to ' + r.to_date : ''}${r.half_day === 'Yes' ? ' (half day)' : ''}${r.balance_note ? ' · ' + r.balance_note : ''} · ${String(r.reason || '').slice(0, 80)}`,
+    // HR Policy: the reporting manager approves leave (HR, with the leave approval right, can too).
+    alsoBy: r => db.prepare('SELECT reporting_to FROM employees WHERE id = ?').get(r.employee_id)?.reporting_to || null },
   'Schedule Baseline': { entity: 'schedule_baselines', ref: 'rev', amount: null, noLines: true, title: r => `Project schedule baseline ${r.rev} – ${r.project_id_label || ''}${r.finish ? ' – finish ' + r.finish : ''}` },
   'Credit Note': { entity: 'credit_notes', ref: 'cn_no', amount: 'total', noLines: true, title: r => `Credit note to ${r.customer_id_label || ''} on ${r.invoice_id_label || ''} – ${r.reason}` },
 };
@@ -25,19 +28,21 @@ const gmNeeded = (docType, row) => {
 };
 const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines'];
 
-export function canApprove(docType, stage, user) {
+export function canApprove(docType, stage, user, ap = null) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
-  return !!step && hasFunction(user.role, step.fn);
+  return !!step && (hasFunction(user.role, step.fn) || (!!ap?.also_by && ap.also_by === user.name));
 }
 
 function openStep(docType, docId, row, stepIndex, user, requestedBy = user.name) {
   const d = DOCS[docType];
   const step = APPROVAL_FLOWS[docType][stepIndex];
+  const alsoBy = d.alsoBy?.(row) || null;
   const ap = insertRow('approvals', {
     doc_type: docType, doc_id: Number(docId), doc_ref: row[d.ref] || `draft #${docId}`, stage: step.stage, title: d.title(row),
-    amount: d.amount ? row[d.amount] : null, requested_by: requestedBy, requested_at: stamp(), status: 'Pending',
+    amount: d.amount ? row[d.amount] : null, requested_by: requestedBy, requested_at: stamp(), status: 'Pending', also_by: alsoBy !== requestedBy ? alsoBy : null,
   }, user, { system: true });
   notifyApprovalRequest(ap, user);
+  if (ap.also_by) notify({ userNames: [ap.also_by], kind: 'approval', title: `Approval needed: ${docType} ${ap.doc_ref || ''}`, body: `${ap.title} · requested by ${requestedBy}`, link: `#/view/approvals/${ap.id}` }, user);
   return step;
 }
 
@@ -71,7 +76,7 @@ export function decide(approvalId, decision, comments, user) {
   if (!['Approved', 'Rejected'].includes(decision)) throw new HttpError(400, 'Decision must be Approved or Rejected');
   const ap = getRow('approvals', approvalId);
   if (ap.status !== 'Pending') throw new HttpError(400, `Already ${ap.status}`);
-  if (!canApprove(ap.doc_type, ap.stage, user)) {
+  if (!canApprove(ap.doc_type, ap.stage, user, ap)) {
     const step = (APPROVAL_FLOWS[ap.doc_type] || []).find(s => s.stage === ap.stage) || (APPROVAL_FLOWS[ap.doc_type] || [])[0];
     throw new HttpError(403, `Your role is not allowed to give “${ap.stage || 'this'}” approval (${FUNCTIONS[step?.fn] || 'approval'}). An admin can allow it under Roles & Permissions.`);
   }

@@ -41,7 +41,7 @@ export async function quickItem(preset = {}) {
   return it;
 }
 const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
-export const canApprove = (docType, stage) => !!stepOf(docType, stage) && hasFunction(state.user.role, stepOf(docType, stage).fn);
+export const canApprove = (docType, stage, ap = null) => !!stepOf(docType, stage) && (hasFunction(state.user.role, stepOf(docType, stage).fn) || (!!ap?.also_by && ap.also_by === state.user.name));
 export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
   : typeof d === 'string' && d.startsWith('setting:') ? state.settings[d.slice(8)] ?? '' : d;
 
@@ -462,7 +462,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       const docEnt = APPROVAL_DOCS[row.doc_type];
       if (docEnt && ENTITIES[docEnt].print) A.push(h('a.btn', { href: `#/print/${ENTITIES[docEnt].print}/${row.doc_id}${docEnt === 'purchase_orders' ? '?internal=1' : ''}`, target: '_blank' }, `🖨 Print ${row.doc_type}`));
       if (docEnt) A.push(h('a.btn', { href: recordHref(docEnt, row.doc_id), title: 'Open the document itself (to edit it)' }, `Open ${row.doc_type} ›`));
-      if (row.status === 'Pending' && canApprove(row.doc_type, row.stage)) {
+      if (row.status === 'Pending' && canApprove(row.doc_type, row.stage, row)) {
         const decide = decision => go(async () => {
           const c = h('textarea', { placeholder: 'Comments (optional)' });
           const ok = await modal(`${decision === 'Approved' ? 'Approve' : 'Reject'} ${row.doc_ref}${row.stage ? ' – ' + row.stage : ''}`, h('label', 'Comments', c),
@@ -1159,7 +1159,7 @@ function approvalDoc(ap, reload) {
       extra.push(commercialPanel(doc, reload));
     }
     box.after(...extra.filter(Boolean), attachments(entity, doc.id, false));
-  }).catch(e => box.replaceChildren(h('p', `Could not load the ${ap.doc_type}: ${e.message}`)));
+  }).catch(e => box.replaceChildren(h('p', ap.title || ''), h('p.muted', `(The ${ap.doc_type} itself is not open to your role: ${e.message})`)));
   return box;
 }
 
