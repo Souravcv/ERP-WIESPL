@@ -180,6 +180,17 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_production_v1', '\"1\"')").run();
   }
+  // Quality (once): production and technical inspect; the GM and the technical manager close NCRs.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_quality_v1'").get()) {
+    for (const [name, fns] of [['manager', ['qc_inspect', 'ncr_close']], ['production', ['qc_inspect']], ['technical', ['qc_inspect', 'ncr_close']]]) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (!r) continue;
+      const p = parse(r.perms);
+      p.functions = [...new Set([...(p.functions || []), ...fns])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_quality_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

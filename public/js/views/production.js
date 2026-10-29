@@ -7,7 +7,7 @@ import { inr } from '../calc.js';
 import { newRecord } from './list.js';
 
 const TABS = [['orders', '🧾 Orders', 'production_orders'], ['plan', '🗓️ Plan vs actual', 'production_orders'], ['day', '📋 Daily review', 'production_orders'], ['delays', '⏱ Delay analysis', 'production_orders'],
-  ['daily', '📅 Finished goods output', 'production_entries'], ['stock', '📦 Production stock', 'production_entries']];
+  ['quality', '🔍 Quality', 'qc_inspections'], ['daily', '📅 Finished goods output', 'production_entries'], ['stock', '📦 Production stock', 'production_entries']];
 const kpi = (l, v, sub, c) => h('div.kpi', h('div.label', l), h('div.value', { style: c ? { color: c } : {} }, String(v ?? '–')), sub ? h('div.sub', sub) : null);
 const q = v => (v == null || v === '' ? '' : inr(v, Number(v) % 1 ? 2 : 0));
 const param = k => new URLSearchParams(location.hash.split('?')[1] || '').get(k);
@@ -54,6 +54,7 @@ export async function productionView(root, tab) {
   if (tab === 'plan') return plan(box);
   if (tab === 'day') return day(box);
   if (tab === 'delays') return delays(box);
+  if (tab === 'quality') return quality(box);
   if (tab === 'stock') return stock(box);
   return daily(box);
 }
@@ -171,6 +172,45 @@ async function delays(box) {
   };
   from.onchange = to.onchange = () => { load().catch(fail); };
   box.replaceChildren(h('div.toolbar', h('span.muted', 'From'), from, h('span.muted', 'to'), to), out);
+  await load();
+}
+
+// ---------------------------------------------------------------- quality (QEMS dashboard: rejection, rework, NCR / CAPA)
+async function quality(box) {
+  const from = h('input', { type: 'date', value: today().slice(0, 8) + '01' }), to = h('input', { type: 'date', value: today() });
+  const out = h('div');
+  const low = (v, target) => (v == null ? null : v <= target ? 'var(--good)' : v <= target * 2 ? 'var(--warn)' : 'var(--bad)');
+  const p = v => (v == null ? '–' : v + '%');
+  const load = async () => {
+    const d = await api(`/production/quality?from=${from.value}&to=${to.value}`);
+    const t = d.totals, max = Math.max(1, ...d.pareto.map(x => x.count));
+    out.replaceChildren(
+      h('div.kpis', kpi('Incoming rejection', p(t.incoming_rejection_pct), `IQC, ${t.incoming_lots} GRN line(s) · target < 2%`, low(t.incoming_rejection_pct, 2)),
+        kpi('Internal rejection', p(t.internal_rejection_pct), 'in-process + final · target < 2%', low(t.internal_rejection_pct, 2)), kpi('Rework', p(t.rework_pct), 'target < 1%', low(t.rework_pct, 1)),
+        kpi('First-pass yield', p(t.fpy), 'accepted first time', pct(t.fpy)), kpi('NCR open', t.ncr_open, `${t.ncr_raised} raised in the period`, t.ncr_open ? 'var(--warn)' : null),
+        kpi('CAPA overdue', t.ncr_overdue, 'past 30 days', t.ncr_overdue ? 'var(--bad)' : null), kpi('CAPA closed on time', p(t.capa_on_time_pct), `${t.capa_closed} closed · target > 95%`, pct(t.capa_on_time_pct)),
+        kpi('Cost of poor quality', `₹ ${inr(t.rework_cost + t.scrap_value, 0)}`, `rework ₹ ${inr(t.rework_cost, 0)} (${q(t.rework_hours)} h) + scrap ₹ ${inr(t.scrap_value, 0)}`),
+        kpi('Inspection compliance', p(t.inspection_compliance_pct), `${t.completed_orders} order(s) completed · with final QC`, pct(t.inspection_compliance_pct, 100, 90))),
+      h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px' } },
+        card('By inspection', h('table.data', h('thead', h('tr', ['Inspection', 'Count', 'Inspected', 'Rework', 'Rejected', 'FPY'].map(x => h('th', x)))),
+          h('tbody', d.kinds.map(k => h('tr', h('td', k.kind), h('td.num', k.inspections), h('td.num', q(k.inspected)), h('td.num', q(k.rework)), h('td.num', q(k.rejected)), h('td.num', p(k.fpy))))))),
+        card('NCR by category (Pareto)', d.pareto.length ? h('div', { style: { display: 'grid', gap: '6px' } }, d.pareto.map(x => h('div.bar-row', { style: { gridTemplateColumns: '150px 1fr 40px' } },
+          h('span.name', x.category), h('div.track', h('div.fill', { style: { width: `${(100 * x.count) / max}%` } })), h('span.val', x.count))))
+          : h('p.muted', 'No NCR in this period.')),
+        d.stages.length ? card('In-process by stage', h('table.data', h('thead', h('tr', ['Stage', 'Inspected', 'Rework', 'Rejected', 'FPY'].map(x => h('th', x)))),
+          h('tbody', d.stages.map(x => h('tr', h('td', x.stage), h('td.num', q(x.inspected)), h('td.num', q(x.rework)), h('td.num', q(x.rejected)), h('td.num', p(x.fpy))))))) : null),
+      d.open.length ? h('div.card.flush', h('div', { style: { padding: '10px 16px' } }, h('h2', { style: { margin: 0 } }, `Open NCR / CAPA (${d.open.length})`)),
+        tableOf(['NCR', 'Date', 'Found at', 'Category', 'Order', 'Non-conformance', 'Qty', 'Disposition', 'Responsible', 'Target', 'Status'], d.open.map(n => h('tr',
+          h('td.nowrap', h('a', { href: `#/view/ncrs/${n.id}` }, n.ncr_no)), h('td.nowrap', fmtDate(n.date)), h('td', n.source), h('td', n.category), h('td.nowrap', n.order_no || ''),
+          h('td', { style: { maxWidth: '320px' } }, String(n.description || '').split('\n')[0]), h('td.num', q(n.qty)), h('td', n.disposition || ''), h('td', n.responsible || ''),
+          h('td.nowrap', { style: { color: n.overdue ? 'var(--bad)' : '' } }, fmtDate(n.target_date), n.overdue ? ' ⚠' : ''), h('td', badge(n.status)))))) : null,
+      d.inspections.length ? h('div.card.flush', h('div', { style: { padding: '10px 16px' } }, h('h2', { style: { margin: 0 } }, 'Inspections')),
+        tableOf(['QC No', 'Date', 'Inspection', 'Stage', 'Order', 'Inspected', 'Accepted', 'Rework', 'Rejected', 'Result', 'Inspector'], d.inspections.map(r => h('tr',
+          h('td.nowrap', h('a', { href: `#/view/qc_inspections/${r.id}` }, r.qc_no)), h('td.nowrap', fmtDate(r.date)), h('td', r.kind), h('td', r.stage || ''), h('td.nowrap', orderLink(r.order_id, r.order_no)),
+          h('td.num', q(r.inspected)), h('td.num', q(r.accepted)), h('td.num', q(r.rework)), h('td.num', q(r.rejected)), h('td', badge(r.result)), h('td', r.inspector || ''))))) : h('p.muted', 'No inspections recorded in this period.'));
+  };
+  from.onchange = to.onchange = () => { load().catch(fail); };
+  box.replaceChildren(h('div.toolbar', h('span.muted', 'From'), from, h('span.muted', 'to'), to, h('a.btn', { href: '#/list/qc_inspections' }, '🔍 All inspections'), h('a.btn', { href: '#/list/ncrs' }, '🚩 All NCRs')), out);
   await load();
 }
 

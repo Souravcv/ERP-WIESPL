@@ -38,6 +38,7 @@ import * as vend from './vendors.js';
 import * as hrp from './hrpolicy.js';
 import * as hrf from './hrfile.js';
 import * as prod from './production.js';
+import * as qa from './quality.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -201,6 +202,8 @@ const DOC_SERIES = [
   { key: 'production', label: 'Production Entry', table: 'production_entries', col: 'entry_no', fmt: (n, fy) => `PRD-${n}/20${fy}` },
   { key: 'production_order', label: 'Production Order', table: 'production_orders', col: 'order_no', fmt: (n, fy) => `PRO-${n}/20${fy}` },
   { key: 'production_report', label: 'Daily Production Report', table: 'production_reports', col: 'report_no', fmt: (n, fy) => `DPR-${n}/20${fy}` },
+  { key: 'qc_inspection', label: 'QC Inspection', table: 'qc_inspections', col: 'qc_no', fmt: (n, fy) => `QC-${n}/20${fy}` },
+  { key: 'ncr', label: 'NCR / CAPA', table: 'ncrs', col: 'ncr_no', fmt: (n, fy) => `NCR-${n}/20${fy}` },
   { key: 'swo', label: 'Service Work Order', table: 'service_work_orders', col: 'swo_no', fmt: (n, fy) => `SW/${n}/20${fy}` },
   { key: 'service_report', label: 'Service Report', table: 'service_reports', col: 'report_no', fmt: (n, fy) => `SR-${n}/20${fy}` },
   { key: 'rca', label: 'Root Cause Analysis', table: 'rca_reports', col: 'rca_no', fmt: (n, fy) => `RCA-${n}/20${fy}` },
@@ -589,6 +592,9 @@ api.post('/production_orders/:id/act/:action', need('production_orders'), wrap(r
 api.post('/production_plans/:id/submit', need('production_plans'), wrap(req => wf.submitForApproval('Production Plan', req.params.id, req.user)));
 api.post('/production_plans/:id/act/:action', need('production_plans'), wrap(req => prod.planAction(req.params.id, req.params.action, req.user)));
 api.post('/production_reports/:id/submit', need('production_reports'), wrap(req => prod.submitReport(req.params.id, req.user)));
+api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.user.role)) throw new HttpError(403, 'No access to quality'); return qa.qualityReview(req.query); }));
+api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
+api.post('/ncrs/:id/act/:action', need('ncrs'), wrap(req => qa.ncrAction(req.params.id, req.params.action, req.body, req.user)));
 api.post('/production_reports/:id/reopen', need('production_reports'), wrap(req => prod.reopenReport(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- attendance (phone) and HR
@@ -890,6 +896,8 @@ const LOCKED = {
   production_plans: ['Pending Approval', 'Approved'],
   production_reports: ['Submitted'],
   production_orders: ['Completed', 'Cancelled'],
+  qc_inspections: ['Done'],
+  ncrs: ['Closed', 'Cancelled'],
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
   probation_reviews: ['Pending Approval', 'Approved'],
   schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
@@ -964,6 +972,8 @@ api.delete('/:entity/:id', wrap(req => {
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
   if ((entity === 'attendance' && row.check_in) || entity === 'attendance_pings') throw new HttpError(409, 'Attendance with a clock-in is evidence: it cannot be deleted; HR reviews and corrects the day instead');
   if (entity === 'production_entries' && row.status === 'Posted') throw new HttpError(409, 'A posted production entry cannot be deleted');
+  if (entity === 'qc_inspections' && row.status === 'Done') throw new HttpError(409, 'A recorded QC inspection is evidence: it cannot be deleted');
+  if (entity === 'ncrs' && row.status !== 'Open') throw new HttpError(409, 'An NCR under investigation is cancelled (with a reason), not deleted');
   if (entity === 'production_reports' && row.status === 'Submitted') throw new HttpError(409, 'A submitted daily report cannot be deleted; reopen it first');
   if (entity === 'production_orders' && db.prepare("SELECT 1 FROM production_reports r, json_each(COALESCE(NULLIF(r.lines, ''), '[]')) j WHERE CAST(json_extract(j.value, '$.order_id') AS INTEGER) = ? LIMIT 1").get(row.id)) throw new HttpError(409, 'This order is on daily production reports; cancel it instead');
   if (entity === 'material_requests' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} material request cannot be deleted`);

@@ -112,8 +112,9 @@ for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].pus
 for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
 for (const r of ['purchase', 'purchase_head', 'accounts', 'technical', 'planning']) ROLE_SEES[r].push('vendor_evaluations', 'vendor_complaints', 'vendor_audits');
 ROLE_SEES.store.push('vendor_complaints');
-ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports');
-ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports');
+ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs');
+ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs');
+ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs');
 ROLE_SEES.store.push('production_orders');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
@@ -135,6 +136,8 @@ export const FUNCTIONS = {
   production_post: 'Post production entries (finished goods into stock)',
   production_release: 'Production – release production orders (drawing, BOM and material checked), hold / cancel / close them, reopen daily reports',
   production_plan_approve: 'Production head – approve the monthly production plan',
+  qc_inspect: 'Quality – record in-process, final and dispatch QC inspections; raise NCRs',
+  ncr_close: 'Quality head – verify and close NCR / CAPA',
   hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
   hr_confirm: 'Management – approve confirmation / extension of probation',
   leave_approve: 'Approve leave requests',
@@ -165,13 +168,13 @@ export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', 
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
   purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
-  technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline'],
+  technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
   accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
   store: ['iqc_inspect', 'stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
-  production: ['production_post', 'production_release'],
+  production: ['production_post', 'production_release', 'qc_inspect'],
   hr: ['hr_manage', 'leave_approve', 'task_assign'],
   service: ['import', 'task_assign'],
   planning: ['task_assign', 'notify_work_order', 'notify_po', 'production_release'],
@@ -218,6 +221,25 @@ export const PROD_STAGES = ['Material preparation', 'Laser cutting', 'Shearing',
 export const PROD_FINISHED = 'Finished (final QC passed)';
 export const PROD_DELAY_CODES = ['', 'M01 Material shortage', 'M02 Material quality issue', 'D01 Drawing pending', 'D02 Design change', 'P01 Machine breakdown', 'P02 Labour shortage',
   'P03 Low productivity', 'Q01 QC rejection', 'Q02 Rework', 'C01 Client scope change', 'C02 Client approval pending', 'X01 Other (write in remark)'];
+// Quality (QEMS Vol 3): what is checked at each in-process stage, at final QC (all products + per product) and before
+// dispatch; NCR categories and dispositions. An inspection starts with these checks filled in.
+export const QC_KINDS = ['In-process (IPQC)', 'Final (FQC)', 'Dispatch QC'];
+export const QC_STAGE_CHECKS = {
+  'Laser cutting': ['Dimensions', 'Hole accuracy', 'Burrs', 'Edge finish'],
+  Shearing: ['Dimensions', 'Squareness', 'Burrs'],
+  'CNC bending': ['Bend angle', 'Dimensions', 'Surface quality'],
+  'Fabrication / welding': ['Weld quality', 'Alignment', 'Squareness', 'Structural integrity'],
+  'PUF foaming': ['Thickness', 'Density', 'Adhesion', 'Straightness', 'Surface finish'],
+  'Powder coating': ['DFT (dry film thickness)', 'Adhesion', 'Appearance', 'Uniformity'],
+  Assembly: ['Dimensions', 'Alignment', 'Fitment of accessories', 'Finish'],
+};
+export const QC_ELECTRICAL_CHECKS = ['Wiring', 'Ferruling', 'Labeling', 'Testing'];
+export const QC_FINAL_CHECKS = ['Dimensions', 'Functionality', 'Finish', 'Accessories', 'Packing readiness', 'Documentation'];
+export const QC_PRODUCT_CHECKS = { 'PUF panels': ['Flatness', 'Surface finish', 'Alignment'], 'View panels / windows': ['Flatness', 'Surface finish', 'Alignment'], Doors: ['Movement', 'Sealing', 'Finish'],
+  AHU: ['Fan', 'Coil', 'Wiring'], 'Electrical panel': ['Functional test', 'Continuity test', 'Insulation test'] };
+export const QC_DISPATCH_CHECKS = ['QC release', 'Quantity verification', 'Packing verification', 'Identification labels', 'Dispatch clearance'];
+export const NCR_CATEGORIES = ['Material', 'Process', 'Dimensional', 'Functional', 'Documentation', 'Customer complaint'];
+export const NCR_DISPOSITIONS = ['', 'Rework', 'Reject / scrap', 'Use as is (concession)', 'Return to vendor', 'Replace'];
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
 const BILL_OWN = `(COALESCE({t}.amount,0) - ${BILL_DN} - ${BILL_DIRECT})`;
@@ -2011,7 +2033,7 @@ export const ENTITIES = {
     label: 'Production Orders', singular: 'Production Order', group: 'Production', icon: '🧾', write: ['admin', 'manager', 'production', 'planning'], print: 'prodorder',
     display: "{t}.order_no || ' · ' || substr(COALESCE({t}.description, ''), 1, 60)",
     search: ['order_no', 'description', 'drawing_no', 'responsible', 'remarks'],
-    list: ['order_no', 'project_id', 'category', 'description', 'qty', 'qty_done', 'progress', 'target_date', 'stage', 'late', 'status'],
+    list: ['order_no', 'project_id', 'category', 'description', 'qty', 'qty_done', 'qc_passed', 'progress', 'target_date', 'stage', 'late', 'status'],
     statusField: 'status',
     fields: [
       { key: 'order_no', label: 'Production Order No', type: 'text', readonly: true, hint: 'Auto: PRO-001/2026-27' },
@@ -2041,6 +2063,7 @@ export const ENTITIES = {
       { key: 'released_on', label: 'Released On', type: 'date', readonly: true },
       { key: 'stage', label: 'Furthest Stage', type: 'text', readonly: true },
       { key: 'qty_done', label: 'Finished Qty', type: 'number', readonly: true, hint: `Made at “${PROD_FINISHED}” on submitted daily reports` },
+      { key: 'qc_passed', label: 'Passed Final QC', type: 'number', computed: "(SELECT COALESCE(SUM(q.qty_accepted), 0) FROM qc_inspections q WHERE q.order_id = {t}.id AND q.kind = 'Final (FQC)' AND q.status = 'Done')" },
       { key: 'progress', label: 'Progress %', type: 'number', readonly: true },
       { key: 'hours_used', label: 'Labour Hours Used', type: 'number', readonly: true },
       { key: 'stage_summary', label: 'Done per Stage', type: 'textarea', span: 2, readonly: true },
@@ -2118,6 +2141,89 @@ export const ENTITIES = {
       { key: 'delays', label: 'Delays', type: 'number', computed: "(SELECT COUNT(*) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j WHERE COALESCE(json_extract(j.value, '$.delay_code'), '') <> '')" },
       { key: 'submitted_by', label: 'Submitted By', type: 'text', readonly: true },
       { key: 'remarks', label: 'Remarks / issues', type: 'textarea', span: 2 },
+    ],
+  },
+  // QC inspection (QEMS Vol 3): in-process at each stage, final (product release) and before dispatch. No stage moves on
+  // without QC; what is reworked or rejected raises an NCR. Final QC's accepted qty is what the daily reports may count
+  // as finished.
+  qc_inspections: {
+    label: 'QC Inspections', singular: 'QC Inspection', group: 'Production', icon: '🔍', write: ['admin', 'manager', 'production', 'technical'], print: 'qcreport',
+    display: "{t}.qc_no || ' · ' || COALESCE({t}.kind, '')",
+    search: ['qc_no', 'inspector', 'material_batch', 'production_batch', 'defect', 'remarks'],
+    list: ['qc_no', 'date', 'kind', 'order_id', 'stage', 'qty_inspected', 'qty_accepted', 'qty_rework', 'qty_rejected', 'result', 'ncr_id', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'qc_no', label: 'QC No', type: 'text', readonly: true, hint: 'Auto: QC-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'Inspection', type: 'select', options: QC_KINDS, required: true },
+      { key: 'order_id', label: 'Production Order', type: 'ref', ref: 'production_orders', required: true },
+      { key: 'stage', label: 'Stage (in-process)', type: 'select', options: ['', ...PROD_STAGES], hint: 'The stage just finished' },
+      { key: 'inspector', label: 'Inspector', type: 'person', default: 'me' },
+      { key: 'drawing_rev', label: 'Drawing / Revision checked against', type: 'text' },
+      { key: 'material_batch', label: 'Material Batch / Heat No', type: 'text', hint: 'Traceability' },
+      { key: 'production_batch', label: 'Production Batch / Lot', type: 'text', hint: 'Traceability' },
+      { key: 'qty_inspected', label: 'Qty Inspected', type: 'number' },
+      { key: 'qty_accepted', label: 'Accepted', type: 'number' },
+      { key: 'qty_rework', label: 'Sent for Rework', type: 'number' },
+      { key: 'qty_rejected', label: 'Rejected', type: 'number' },
+      { key: 'checks', label: 'Checks', type: 'lines', span: 2, amounts: false, hint: 'Each check: OK, Not OK or NA. A “Not OK” needs rework / rejection or a remark', columns: [
+        { key: 'check', label: 'Check', type: 'text', width: 200 },
+        { key: 'standard', label: 'Standard / tolerance', type: 'text', width: 170 },
+        { key: 'measured', label: 'Measured / observed', type: 'text', width: 150 },
+        { key: 'result', label: 'Result', type: 'select', options: ['', 'OK', 'Not OK', 'NA'], width: 90 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+      ] },
+      { key: 'defect_category', label: 'Defect Category', type: 'select', options: ['', ...NCR_CATEGORIES], hint: 'When something is reworked or rejected' },
+      { key: 'defect', label: 'Defect / Reason', type: 'textarea', span: 2 },
+      { key: 'result', label: 'Result', type: 'select', options: ['', 'Accepted', 'Partly accepted', 'Rejected', 'Hold'], readonly: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Done'], default: 'Draft', readonly: true },
+      { key: 'ncr_id', label: 'NCR', type: 'ref', ref: 'ncrs', readonly: true },
+      { key: 'done_by', label: 'Recorded By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Non-conformance report with CAPA (QEMS Vol 3 G–K): detection → segregation → investigation (root cause) →
+  // disposition → corrective & preventive action (closed within 30 days) → verification → closure. Rework / rejection
+  // cost is recorded here.
+  ncrs: {
+    label: 'NCR / CAPA', singular: 'NCR', group: 'Production', icon: '🚩', write: ['admin', 'manager', 'production', 'technical'], print: 'ncr',
+    display: "{t}.ncr_no || ' · ' || substr(COALESCE({t}.description, ''), 1, 60)",
+    search: ['ncr_no', 'description', 'root_cause', 'corrective_action', 'responsible'],
+    list: ['ncr_no', 'date', 'source', 'category', 'order_id', 'qty', 'disposition', 'responsible', 'target_date', 'overdue', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'ncr_no', label: 'NCR No', type: 'text', readonly: true, hint: 'Auto: NCR-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'source', label: 'Found At', type: 'select', options: ['In-process (IPQC)', 'Final (FQC)', 'Dispatch QC', 'Incoming (IQC)', 'Customer complaint', 'Site'], required: true },
+      { key: 'category', label: 'Category', type: 'select', options: NCR_CATEGORIES, required: true },
+      { key: 'order_id', label: 'Production Order', type: 'ref', ref: 'production_orders' },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
+      { key: 'inspection_id', label: 'From QC Inspection', type: 'ref', ref: 'qc_inspections', readonly: true },
+      { key: 'description', label: 'Non-conformance', type: 'textarea', span: 2, required: true },
+      { key: 'qty', label: 'Qty Affected', type: 'number' },
+      { key: 'uom', label: 'UOM', type: 'text' },
+      { key: 'segregated', label: 'Segregated / tagged', type: 'yn', default: 'No' },
+      { key: 'disposition', label: 'Disposition', type: 'select', options: NCR_DISPOSITIONS },
+      { key: 'rca_method', label: 'Root Cause Method', type: 'select', options: ['', '5 Why', 'Fishbone', 'Pareto', 'Process mapping', 'FMEA'] },
+      { key: 'whys', label: 'Why–why', type: 'lines', span: 2, amounts: false, columns: [
+        { key: 'why', label: 'Why?', type: 'text', width: 300 },
+        { key: 'because', label: 'Because', type: 'text', width: 360 },
+      ] },
+      { key: 'root_cause', label: 'Root Cause', type: 'textarea', span: 2 },
+      { key: 'correction', label: 'Correction (immediate)', type: 'textarea', span: 2 },
+      { key: 'corrective_action', label: 'Corrective Action (remove the cause)', type: 'textarea', span: 2 },
+      { key: 'preventive_action', label: 'Preventive Action (stop it happening elsewhere)', type: 'textarea', span: 2 },
+      { key: 'responsible', label: 'Responsible', type: 'person' },
+      { key: 'target_date', label: 'CAPA Target Date', type: 'date', hint: 'Within 30 days of the NCR (Quality policy)' },
+      { key: 'rework_hours', label: 'Rework Man-hours', type: 'number' },
+      { key: 'rework_cost', label: 'Rework Cost (₹)', type: 'money' },
+      { key: 'scrap_value', label: 'Scrap / Rejection Value (₹)', type: 'money' },
+      { key: 'verification', label: 'Verification of Effectiveness', type: 'textarea', span: 2, hint: 'What was checked to show the action worked' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Under investigation', 'Action in progress', 'Closed', 'Cancelled'], default: 'Open', readonly: true },
+      { key: 'closed_by', label: 'Closed By', type: 'text', readonly: true },
+      { key: 'closed_on', label: 'Closed On', type: 'date', readonly: true },
+      { key: 'overdue', label: 'Overdue', type: 'text', computed: "CASE WHEN {t}.status NOT IN ('Closed', 'Cancelled') AND {t}.target_date < date('now', 'localtime') THEN 'Yes' WHEN {t}.status = 'Closed' AND {t}.closed_on > {t}.target_date THEN 'Closed late' ELSE '' END" },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
   // Outward (issue slip / dispatch challan) and transfers are prepared as drafts: nothing leaves the stock until someone

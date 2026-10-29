@@ -70,5 +70,32 @@ export async function prodDoc(kind, id, s) {
         : h('p', 'No delays reported.'),
       signRow(['Production Head', ''], ['Planning', ''], ['GM Operations', ''])))};
   }
+  if (kind === 'qcreport') {
+    const q = await api(`/qc_inspections/${id}`);
+    const o = await api(`/production_orders/${q.order_id}`);
+    return { title: `${q.qc_no} QC inspection report`, doc: h('div.doc', page(companyHead(s, `QC INSPECTION REPORT – ${String(q.kind || '').toUpperCase()}`),
+      grid([['QC No', q.qc_no], ['Date', fmtDate(q.date)], ['Production Order', o.order_no], ['Project (code)', o.project_id_label], ['Product', `${o.description} (${o.category})`], ['Stage', q.stage],
+        ['Drawing / Rev', q.drawing_rev], ['Material Batch', q.material_batch], ['Production Batch', q.production_batch], ['Inspector', q.inspector],
+        ['Inspected', `${n(q.qty_inspected)} ${o.uom || ''}`], ['Accepted', n(q.qty_accepted)], ['Rework', n(q.qty_rework)], ['Rejected', n(q.qty_rejected)], ['Result', q.result], ['Status', `${q.status}${q.done_by ? ' – ' + q.done_by : ''}`]]),
+      tbl(q.checks || [], [['check', 'Check'], ['standard', 'Standard / tolerance'], ['measured', 'Measured / observed'], ['result', 'Result', r => (r.result === 'Not OK' ? '✘ Not OK' : r.result === 'OK' ? '✔ OK' : r.result || '')], ['remark', 'Remark']]),
+      q.defect ? h('p', h('b', `Defect${q.defect_category ? ' (' + q.defect_category + ')' : ''}: `), q.defect) : null,
+      q.ncr_id ? h('p', h('b', 'NCR raised: '), q.ncr_id_label || `#${q.ncr_id}`) : null,
+      q.remarks ? h('p', h('b', 'Remarks: '), q.remarks) : null,
+      signRow(['Inspector (QC)', ''], ['Production Supervisor', ''], ['Quality Head', ''])))};
+  }
+  if (kind === 'ncr') {
+    const r = await api(`/ncrs/${id}`);
+    const box = (title, text) => [h('h3', { style: { margin: '10px 0 4px', fontSize: '12px' } }, title), h('div', { style: { border: '1px solid #999', padding: '6px', minHeight: '34px', whiteSpace: 'pre-wrap', fontSize: '11px' } }, text || '')];
+    return { title: `${r.ncr_no} NCR / CAPA`, doc: h('div.doc', page(companyHead(s, 'NON-CONFORMANCE REPORT & CAPA'),
+      grid([['NCR No', r.ncr_no], ['Date', fmtDate(r.date)], ['Found At', r.source], ['Category', r.category], ['Production Order', r.order_id_label], ['Project', r.project_id_label],
+        ['Qty Affected', `${n(r.qty)} ${r.uom || ''}`], ['Segregated', r.segregated], ['Disposition', r.disposition], ['Status', r.status], ['Responsible', r.responsible], ['CAPA Target', fmtDate(r.target_date)]]),
+      box('1. Non-conformance', r.description),
+      h('h3', { style: { margin: '10px 0 4px', fontSize: '12px' } }, `2. Root cause analysis${r.rca_method ? ' (' + r.rca_method + ')' : ''}`),
+      (r.whys || []).length ? tbl(r.whys, [['why', 'Why?'], ['because', 'Because']]) : null,
+      box('Root cause', r.root_cause), box('3. Correction (immediate)', r.correction), box('4. Corrective action', r.corrective_action), box('5. Preventive action', r.preventive_action),
+      grid([['Rework man-hours', n(r.rework_hours)], ['Rework cost (₹)', n(r.rework_cost)], ['Scrap / rejection value (₹)', n(r.scrap_value)], ['Closed', r.closed_by ? `${r.closed_by}` : '']]),
+      box('6. Verification of effectiveness', r.verification),
+      signRow(['Raised By (QC)', ''], ['Responsible', ''], ['Quality Head (closure)', ''])))};
+  }
   throw new Error('Unknown document');
 }

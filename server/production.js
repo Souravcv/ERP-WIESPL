@@ -7,6 +7,7 @@ import { getRow, updateRow, HttpError } from './crud.js';
 import { hasFunction, PROD_STAGES, PROD_FINISHED } from '../public/js/schema.js';
 import { notify } from './notify.js';
 import { isOffDay } from './hrpolicy.js';
+import { fqcAccepted, overdueNcrs } from './quality.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
@@ -233,6 +234,16 @@ export function submitReport(id, user) {
     const o = st.get(Number(l.order_id));
     if (o && !['Released', 'In production', 'Completed'].includes(o.status) && Number(l.done) > 0) bad.push(`${o.order_no} is ${o.status}: production starts only after release`);
   }
+  // Quality policy: nothing counts as finished before final QC has accepted it.
+  const fin = new Map();
+  for (const l of lines.filter(l => l.stage === PROD_FINISHED && Number(l.done) > 0)) fin.set(Number(l.order_id), (fin.get(Number(l.order_id)) || 0) + Number(l.done));
+  for (const [oid, q] of fin) {
+    const o = st.get(oid);
+    const before = db.prepare(`SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.done') AS REAL)), 0) q FROM production_reports r, json_each(COALESCE(NULLIF(r.lines, ''), '[]')) j
+      WHERE r.status = 'Submitted' AND r.id <> ? AND CAST(json_extract(j.value, '$.order_id') AS INTEGER) = ? AND json_extract(j.value, '$.stage') = ?`).get(r.id, oid, PROD_FINISHED).q;
+    const ok = fqcAccepted(oid);
+    if (before + q > ok + 1e-9) bad.push(`${o?.order_no || '#' + oid}: final QC has accepted ${r2(ok)}; with this report ${r2(before + q)} would be finished. Record the final QC inspection first.`);
+  }
   if (bad.length) throw new HttpError(400, [...new Set(bad)].join('\n'));
   const out = updateRow('production_reports', id, { status: 'Submitted', submitted_by: `${user.name} (${stamp()})`, lines }, user, { system: true });
   const delays = lines.filter(l => l.delay_code);
@@ -360,6 +371,8 @@ export function dailyProduction() {
   const notes = [];
   if (working(t) && running && !b.last_day_reported) notes.push(`No submitted daily production report for ${b.last_working_day}.`);
   if (b.kpi.late) notes.push(`${b.kpi.late} production order(s) past the target date: ${b.orders.filter(o => o.late).slice(0, 6).map(o => o.order_no).join(', ')}`);
+  const late = overdueNcrs();
+  if (late.length) notes.push(`${late.length} NCR / CAPA past the 30-day target: ${late.slice(0, 6).join(', ')}`);
   const dom = Number(t.slice(8, 10));
   const planDue = dom >= 20 && b.next_plan?.status !== 'Approved' && (!b.next_plan || b.next_plan.status !== 'Pending Approval' || dom >= 25);
   const planKey = `${b.next_month}:${dom >= 25 ? 25 : 20}`;

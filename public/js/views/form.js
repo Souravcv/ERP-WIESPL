@@ -18,11 +18,13 @@ const LOCKED = {
   production_plans: ['Pending Approval', 'Approved'],
   production_reports: ['Submitted'],
   production_orders: ['Completed', 'Cancelled'],
+  qc_inspections: ['Done'],
+  ncrs: ['Closed', 'Cancelled'],
 };
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
   vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status),
-  production_reports: r => r.status === 'Submitted' };
+  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open' };
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
   || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
@@ -727,6 +729,14 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (rel && ['Released', 'In production'].includes(st)) A.push(h('button.btn', { onclick: go(async () => { const r = await why(`Close ${row.order_no} at ${row.qty_done || 0} of ${row.qty}`, 'Close short'); if (r) await act('close', { reason: r }); }) }, '⏹ Close short'));
       if (rel && !['Completed', 'Cancelled'].includes(st)) A.push(h('button.btn.danger', { onclick: go(async () => { const r = await why(`Cancel ${row.order_no}`, 'Cancel order'); if (r) await act('cancel', { reason: r }); }) }, 'Cancel order'));
       if (can('production_reports') && ['Released', 'In production'].includes(st)) A.push(h('button.btn', { onclick: () => { location.hash = '#/production/day'; } }, '📋 Daily report'));
+      if (can('qc_inspections') && ['Released', 'In production', 'Completed'].includes(st)) A.push(h('button.btn', { onclick: go(async () => {
+        const kind = h('select', ['In-process (IPQC)', 'Final (FQC)', 'Dispatch QC'].map(k => h('option', k))), stage = h('select', ['', 'Laser cutting', 'Shearing', 'CNC bending', 'Fabrication / welding', 'PUF foaming', 'Powder coating', 'Assembly'].map(k => h('option', k)));
+        if (row.stage && [...stage.options].some(o => o.value === row.stage)) stage.value = row.stage;
+        const qty = h('input', { type: 'number', step: 'any', placeholder: 'Qty to inspect' });
+        if (!(await modal(`QC inspection – ${row.order_no}`, h('div.form-grid', h('label', 'Inspection', kind), h('label', 'Stage (in-process)', stage), h('label', 'Qty inspected', qty)), [{ label: 'Cancel', value: false }, { label: 'Start', cls: 'primary', value: true }]))) return;
+        const q = await api('/qc_inspections', { method: 'POST', body: { order_id: id, kind: kind.value, stage: kind.value.startsWith('In-process') ? stage.value : '', qty_inspected: qty.value === '' ? null : Number(qty.value) } });
+        location.hash = `#/view/qc_inspections/${q.id}`;
+      }) }, '🔍 QC inspection'));
       A.push(h('a.btn', { href: `#/print/prodorder/${id}`, target: '_blank' }, '🖨 Production release note'));
       break;
     }
@@ -772,6 +782,40 @@ function actionsFor(entity, row, reload, ctx = {}) {
         await post(`/production_reports/${id}/reopen`, { reason: r.value.trim() }); reload();
       }) }, '↺ Reopen'));
       A.push(h('a.btn', { href: `#/production/day?date=${row.date}` }, '📊 Day review'), h('a.btn', { href: `#/print/prodday/${id}`, target: '_blank' }, '🖨 Print'));
+      break;
+    }
+    case 'qc_inspections':
+      if (row.status === 'Draft' && hasFunction(state.user.role, 'qc_inspect')) {
+        A.push(h('button.btn', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const q = await api(`/qc_inspections/${id}`);
+          await api(`/qc_inspections/${id}`, { method: 'PUT', body: { checks: (q.checks || []).map(c => ({ ...c, result: c.result || 'OK' })) } });
+          toast('Unanswered checks set to OK'); reload();
+        }) }, '✔ Rest OK'));
+        A.push(h('button.btn.primary', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const rw = Number(row.qty_rework) || 0, rj = Number(row.qty_rejected) || 0;
+          if (!(await confirmBox(`Record ${row.qc_no}: ${row.qty_accepted ?? '?'} accepted${rw ? ', ' + rw + ' rework' : ''}${rj ? ', ' + rj + ' rejected' : ''}?${rw + rj ? ' An NCR is raised.' : ''} It cannot be changed afterwards.`, 'Record'))) return;
+          const r = await post(`/qc_inspections/${id}/done`);
+          toast(r.ncr_id ? 'Recorded – NCR raised' : 'Inspection recorded'); reload();
+        }) }, '📝 Record inspection'));
+      }
+      if (row.ncr_id) A.push(h('a.btn', { href: `#/view/ncrs/${row.ncr_id}` }, `🚩 ${String(row.ncr_id_label || 'NCR').split(' · ')[0]}`));
+      A.push(h('a.btn', { href: `#/print/qcreport/${id}`, target: '_blank' }, '🖨 QC report'));
+      break;
+    case 'ncrs': {
+      const st = row.status, head = hasFunction(state.user.role, 'ncr_close');
+      const act = async (action, body) => { if (ctx.save) await ctx.save({ quiet: true }); await post(`/ncrs/${id}/act/${action}`, body); reload(); };
+      if (can(entity) && st === 'Open') A.push(h('button.btn', { onclick: go(() => act('investigate')) }, '🔎 Start investigation'));
+      if (can(entity) && ['Open', 'Under investigation'].includes(st)) A.push(h('button.btn.primary', { onclick: go(() => act('action')) }, '🛠 CAPA decided – start action'));
+      if (head && st === 'Action in progress') A.push(h('button.btn.good', { onclick: go(async () => { if (!(await confirmBox(`Close ${row.ncr_no}? The action has been verified as effective.`, 'Close NCR'))) return; await act('close'); toast('NCR closed'); }) }, '✔ Verify & close'));
+      if (head && !['Closed', 'Cancelled'].includes(st)) A.push(h('button.btn.danger', { onclick: go(async () => {
+        const r = h('input', { placeholder: 'Reason' });
+        if (!(await modal(`Cancel ${row.ncr_no}`, h('label', 'Why (e.g. raised in error)', r), [{ label: 'Back', value: false }, { label: 'Cancel NCR', cls: 'danger solid', value: true }])) || !r.value.trim()) return;
+        await act('cancel', { reason: r.value.trim() });
+      }) }, 'Cancel NCR'));
+      if (row.inspection_id) A.push(h('a.btn', { href: `#/view/qc_inspections/${row.inspection_id}` }, '🔍 Inspection'));
+      A.push(h('a.btn', { href: `#/print/ncr/${id}`, target: '_blank' }, '🖨 NCR / CAPA report'));
       break;
     }
     case 'production_entries':
@@ -1211,7 +1255,7 @@ export async function recordView(root, entity, id) {
   grid.addEventListener('input', keep.touch);
   grid.addEventListener('change', keep.touch);
   const r = row;
-  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.order_no || r.plan_no || r.report_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
+  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.order_no || r.plan_no || r.report_no || r.qc_no || r.ncr_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
     h('div.page-head',

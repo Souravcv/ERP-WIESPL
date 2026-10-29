@@ -10,6 +10,7 @@ import { applyBaseline } from './schedule.js';
 import { afterDispatchPlan, challanToPlan } from './planning.js';
 import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
 import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './production.js';
+import { prepInspection, prepNcr } from './quality.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -393,6 +394,14 @@ export function beforeSave(name, row, existing, user) {
       if (!existing && !row.report_no) row.report_no = docNo('production_report', date, (n, fy) => `DPR-${n}/20${fy}`);
       prepReport(row, existing);
       beforeReport(existing);
+      break;
+    case 'qc_inspections':
+      if (!existing && !row.qc_no) row.qc_no = docNo('qc_inspection', date, (n, fy) => `QC-${n}/20${fy}`);
+      prepInspection(row, existing);
+      break;
+    case 'ncrs':
+      if (!existing && !row.ncr_no) row.ncr_no = docNo('ncr', date, (n, fy) => `NCR-${n}/20${fy}`);
+      prepNcr(row, existing);
       break;
     case 'production_entries': {
       if (!existing && !row.entry_no) row.entry_no = docNo('production', date, (n, fy) => `PRD-${n}/20${fy}`);
