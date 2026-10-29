@@ -5,7 +5,7 @@
 // quality.
 import { db, tx, audit } from './db.js';
 import { getRow, insertRow, updateRow, HttpError } from './crud.js';
-import { hasFunction, QC_STAGE_CHECKS, QC_ELECTRICAL_CHECKS, QC_FINAL_CHECKS, QC_PRODUCT_CHECKS, QC_DISPATCH_CHECKS, NCR_CATEGORIES } from '../public/js/schema.js';
+import { hasFunction, QC_STAGE_CHECKS, QC_ELECTRICAL_CHECKS, QC_FINAL_CHECKS, QC_PRODUCT_CHECKS, QC_DISPATCH_CHECKS, NCR_CATEGORIES, RCA_METHODS, FMEA_ACTION_RPN } from '../public/js/schema.js';
 import { notify } from './notify.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
@@ -95,12 +95,68 @@ export function completeInspection(id, user) {
   });
 }
 
+// ---------------------------------------------------------------- root cause analysis (5 Why, Fishbone, Pareto, Process mapping, FMEA)
+const score = v => (v === '' || v == null ? null : Number(v));
+const okScore = v => Number.isInteger(v) && v >= 1 && v <= 10;
+const filled = v => String(v ?? '').trim() !== '';
+export const fmeaNeedsAction = r => (okScore(score(r.s)) && score(r.s) >= 9) || n0(r.rpn) >= FMEA_ACTION_RPN;
+
+// Which methods the NCR uses, and what each still lacks (every method used must be complete; the main one is required).
+export function rcaCheck(n) {
+  const whys = parse(n.whys, []).filter(w => filled(w.why) || filled(w.because));
+  const fish = parse(n.fishbone, []).filter(c => filled(c.cause));
+  const steps = parse(n.process_steps, []).filter(p => filled(p.step));
+  const fmea = parse(n.fmea, []).filter(r => filled(r.mode));
+  const used = { '5 Why': whys.length > 0, Fishbone: fish.length > 0, Pareto: filled(n.pareto_note), 'Process mapping': steps.length > 0, FMEA: fmea.length > 0 };
+  const miss = [];
+  const need = m => used[m] || n.rca_method === m;
+  if (need('5 Why')) {
+    const done = whys.filter(w => filled(w.why) && filled(w.because)).length;
+    if (done < 3) miss.push(`5 Why: ${done} of at least 3 why / because rows answered`);
+  }
+  if (need('Fishbone')) {
+    if (fish.some(c => !c.category)) miss.push('Fishbone: choose the 6M heading for every cause');
+    const cats = new Set(fish.map(c => c.category).filter(Boolean));
+    if (cats.size < 3) miss.push(`Fishbone: causes under at least 3 of the 6M headings (now ${cats.size})`);
+    const open = fish.filter(c => !['Confirmed', 'Ruled out'].includes(c.check)).length;
+    if (open) miss.push(`Fishbone: ${open} cause(s) not checked yet (Confirmed / Ruled out)`);
+    if (!fish.some(c => c.check === 'Confirmed')) miss.push('Fishbone: confirm at least one cause, with the evidence');
+  }
+  if (need('Pareto') && !used.Pareto) miss.push('Pareto: write the conclusion (open 📊 Pareto)');
+  if (need('Process mapping')) {
+    if (steps.length < 3) miss.push(`Process mapping: at least 3 steps (now ${steps.length})`);
+    if (!steps.some(p => /entered|Escaped/.test(p.finding || ''))) miss.push('Process mapping: mark the step where the defect got in or escaped');
+  }
+  if (need('FMEA')) {
+    if (!fmea.length) miss.push('FMEA: add the failure modes');
+    fmea.forEach((r, i) => {
+      if (![r.s, r.o, r.d].map(score).every(okScore)) miss.push(`FMEA row ${i + 1}: S, O and D from 1 to 10`);
+      else if (fmeaNeedsAction(r) && (!filled(r.action) || !filled(r.owner))) miss.push(`FMEA row ${i + 1} (RPN ${r.rpn}${score(r.s) >= 9 ? ', severity ' + r.s : ''}): an action and who does it`);
+    });
+  }
+  const methods = RCA_METHODS.filter(m => used[m]);
+  return { methods, missing: miss, status: !methods.length ? 'No method used yet' : miss.length ? miss.join('\n') : 'Complete' };
+}
+
 export function prepNcr(row, existing) {
   const date = row.date || existing?.date || today();
   if (!existing && !row.target_date) row.target_date = addDays(date, CAPA_DAYS);
   const orderId = row.order_id ?? existing?.order_id;
   if (orderId && !(row.project_id ?? existing?.project_id)) row.project_id = db.prepare('SELECT project_id FROM production_orders WHERE id = ?').get(Number(orderId))?.project_id || null;
-  if ('whys' in row) row.whys = JSON.stringify(parse(row.whys, []).filter(w => w.why || w.because));
+  if ('whys' in row) row.whys = JSON.stringify(parse(row.whys, []).filter(w => filled(w.why) || filled(w.because)));
+  if ('fishbone' in row) row.fishbone = JSON.stringify(parse(row.fishbone, []).filter(c => filled(c.cause)));
+  if ('process_steps' in row) row.process_steps = JSON.stringify(parse(row.process_steps, []).filter(p => filled(p.step)));
+  if ('fmea' in row) {
+    const rpn = (s, o, d) => ([s, o, d].map(score).every(okScore) ? score(s) * score(o) * score(d) : null);
+    row.fmea = JSON.stringify(parse(row.fmea, []).filter(r => filled(r.mode)).map(r => ({ ...r, rpn: rpn(r.s, r.o, r.d), rpn2: rpn(r.s2, r.o2, r.d2) })));
+  }
+  const m = { ...(existing || {}), ...row };
+  // Root cause left blank: the last 5 Why answer.
+  const whys = parse(m.whys, []);
+  if (!filled(m.root_cause) && whys.length && filled(whys.at(-1).because) && ('whys' in row || 'root_cause' in row)) row.root_cause = whys.at(-1).because;
+  const c = rcaCheck(m);
+  row.rca_methods = c.methods.join(', ') || null;
+  row.rca_status = c.status;
 }
 
 export function ncrAction(id, action, body = {}, user) {
@@ -122,12 +178,20 @@ export function ncrAction(id, action, body = {}, user) {
     if (!n.responsible) miss.push('who is responsible');
     if (!n.target_date) miss.push('the CAPA target date');
     if (miss.length) throw new HttpError(400, `Fill in ${miss.join(', ')} first`);
-    return updateRow('ncrs', id, { status: 'Action in progress' }, user, { system: true });
+    if (!n.rca_method) throw new HttpError(400, `Choose the main root cause method (${RCA_METHODS.join(', ')})`);
+    const c = rcaCheck(n);
+    if (c.missing.length) throw new HttpError(400, `The root cause analysis is not complete:\n• ${c.missing.join('\n• ')}`);
+    return tx(() => {
+      const tasks = capaTasks(n, user);
+      return updateRow('ncrs', id, { status: 'Action in progress', capa_tasks: JSON.stringify(tasks) }, user, { system: true });
+    });
   }
   if (action === 'close') {
     if (!head) throw new HttpError(403, 'Only the quality head closes an NCR (verifies the CAPA)');
     if (n.status !== 'Action in progress') throw new HttpError(409, 'Record the root cause and CAPA first (Action in progress)');
     if (!String(n.verification || '').trim()) throw new HttpError(400, 'Write how the action was verified as effective');
+    const open = taskRows(n).filter(t => !['Done', 'Cancelled'].includes(t.status));
+    if (open.length) throw new HttpError(409, `CAPA tasks not done yet:\n${open.map(t => `• ${t.task_no} – ${t.assigned_to}: ${t.title}`).join('\n')}`);
     const out = updateRow('ncrs', id, { status: 'Closed', closed_by: `${user.name} (${stamp()})`, closed_on: today() }, user, { system: true });
     audit(user.name, 'ncrs', n.id, 'closed', n.ncr_no);
     return out;
@@ -137,9 +201,91 @@ export function ncrAction(id, action, body = {}, user) {
     if (['Closed', 'Cancelled'].includes(n.status)) throw new HttpError(409, `This NCR is ${n.status}`);
     const why = String(body.reason || '').trim();
     if (!why) throw new HttpError(400, 'Write why the NCR is cancelled');
-    return updateRow('ncrs', id, { status: 'Cancelled', remarks: [n.remarks, `${today()}: cancelled by ${user.name} – ${why}`].filter(Boolean).join('\n') }, user, { system: true });
+    return tx(() => {
+      for (const t of taskRows(n).filter(t => !['Done', 'Cancelled'].includes(t.status))) updateRow('work_tasks', t.id, { status: 'Cancelled', progress_note: `NCR ${n.ncr_no} cancelled: ${why}` }, user, { system: true });
+      return updateRow('ncrs', id, { status: 'Cancelled', remarks: [n.remarks, `${today()}: cancelled by ${user.name} – ${why}`].filter(Boolean).join('\n') }, user, { system: true });
+    });
   }
   throw new HttpError(400, 'Unknown action');
+}
+
+// CAPA tasks (Task Scheduler): one for the NCR's responsible person with the corrective and preventive action, and
+// one for each other FMEA action owner. The NCR closes only when they are done.
+const taskRows = n => { const ids = parse(n.capa_tasks, []).map(Number).filter(Boolean); return ids.length ? db.prepare(`SELECT id, task_no, title, assigned_to, status FROM work_tasks WHERE id IN (${ids.map(() => '?').join(',')})`).all(...ids) : []; };
+function capaTasks(n, user) {
+  const by = { name: user.name, username: user.username, role: 'admin' }; // tasks given on the NCR's behalf
+  const first = s => String(s || '').split('\n')[0].slice(0, 90);
+  const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+  const fmea = parse(n.fmea, []).filter(r => filled(r.action));
+  const mine = fmea.filter(r => !filled(r.owner) || same(r.owner, n.responsible));
+  const base = { assigned_by: user.name, priority: 'High', category: 'Production', start_date: today(), due_date: n.target_date, status: 'To do' };
+  const ids = [];
+  const main = insertRow('work_tasks', { ...base, assigned_to: n.responsible, title: `CAPA ${n.ncr_no}: ${first(n.corrective_action)}`,
+    description: `${first(n.description)}\nRoot cause: ${n.root_cause}\nCorrective action: ${n.corrective_action}\nPreventive action: ${n.preventive_action}\nOpen the NCR: #/view/ncrs/${n.id}`,
+    checklist: [{ item: `Corrective action: ${first(n.corrective_action)}`, done: '' }, { item: `Preventive action: ${first(n.preventive_action)}`, done: '' },
+      ...mine.map(r => ({ item: `FMEA – ${r.mode}: ${r.action}`, done: '' })), { item: 'Evidence for the verification (photo / measurement / record)', done: '' }] }, by, { system: true });
+  ids.push(main.id);
+  const owners = new Map();
+  for (const r of fmea.filter(r => !mine.includes(r))) owners.set(r.owner.trim(), [...(owners.get(r.owner.trim()) || []), r]);
+  for (const [owner, rows] of owners) {
+    const t = insertRow('work_tasks', { ...base, assigned_to: owner, title: `CAPA ${n.ncr_no} (FMEA): ${first(rows[0].action)}${rows.length > 1 ? ` + ${rows.length - 1} more` : ''}`,
+      description: `FMEA actions from ${n.ncr_no}: ${first(n.description)}\nOpen the NCR: #/view/ncrs/${n.id}`,
+      checklist: rows.map(r => ({ item: `${r.mode} (RPN ${r.rpn ?? '?'}): ${r.action}`, done: '' })) }, by, { system: true });
+    ids.push(t.id);
+  }
+  return ids;
+}
+export const capaTaskList = id => taskRows(getRow('ncrs', id));
+
+// ---------------------------------------------------------------- Pareto (vital few) over NCRs and failed checks
+export const PARETO_BY = { category: 'NCR category', cause: 'Confirmed cause (6M)', stage: 'Stage / where found', product: 'Product category', check: 'Failed QC check', source: 'Found at' };
+export function paretoAnalysis({ from, to, by = 'category', measure = 'count' } = {}) {
+  const f = from || addDays(today(), -180), t = to || today();
+  if (!PARETO_BY[by]) throw new HttpError(400, 'Unknown Pareto basis');
+  const sums = new Map();
+  const add = (k, v) => sums.set(k || '(not given)', (sums.get(k || '(not given)') || 0) + v);
+  let n = 0;
+  if (by === 'check') {
+    const ins = db.prepare("SELECT checks, qty_rework, qty_rejected FROM qc_inspections WHERE status = 'Done' AND date BETWEEN ? AND ?").all(f, t);
+    for (const q of ins) for (const c of parse(q.checks, []).filter(c => c.result === 'Not OK')) { n++; add(c.check, measure === 'qty' ? n0(q.qty_rework) + n0(q.qty_rejected) : 1); }
+  } else {
+    const rows = db.prepare(`SELECT n.*, o.category product, q.stage FROM ncrs n LEFT JOIN production_orders o ON o.id = n.order_id LEFT JOIN qc_inspections q ON q.id = n.inspection_id
+      WHERE n.status <> 'Cancelled' AND n.date BETWEEN ? AND ?`).all(f, t);
+    for (const r of rows) {
+      n++;
+      const v = measure === 'qty' ? n0(r.qty) : measure === 'cost' ? n0(r.rework_cost) + n0(r.scrap_value) : 1;
+      if (by === 'cause') { const cs = parse(r.fishbone, []).filter(c => c.check === 'Confirmed'); for (const c of cs) add(c.category, v / cs.length); }
+      else add(by === 'category' ? r.category : by === 'stage' ? r.stage || r.source : by === 'product' ? r.product : r.source, v);
+    }
+  }
+  const total = [...sums.values()].reduce((s, v) => s + v, 0);
+  let cum = 0, vital = true;
+  const out = [...sums.entries()].map(([key, value]) => ({ key, value: r2(value) })).filter(r => r.value > 0).sort((a, b) => b.value - a.value).map(r => {
+    const was = cum; cum += r.value;
+    const row = { ...r, share: pct(r.value, total), cum: pct(cum, total), vital: vital || was === 0 };
+    if (pct(cum, total) >= 80) vital = false;
+    return row;
+  });
+  return { from: f, to: t, by, by_label: PARETO_BY[by], measure, total: r2(total), records: n, rows: out };
+}
+// For one NCR: where its category, product and confirmed causes stand in the last 6 months.
+export function ncrPareto(id) {
+  const n = getRow('ncrs', id);
+  const product = n.order_id ? db.prepare('SELECT category FROM production_orders WHERE id = ?').get(n.order_id)?.category : null;
+  const causes = (n.fishbone || []).filter(c => c.check === 'Confirmed').map(c => c.category);
+  const from = addDays(n.date, -180), to = today();
+  return { ncr_no: n.ncr_no, from, to, mine: { category: n.category, product, causes },
+    category: paretoAnalysis({ from, to, by: 'category' }), product: paretoAnalysis({ from, to, by: 'product' }), cause: paretoAnalysis({ from, to, by: 'cause' }), check: paretoAnalysis({ from, to, by: 'check' }) };
+}
+
+// FMEA register: every failure mode from every NCR, highest risk first, with the actions still open.
+export function fmeaRegister() {
+  const rows = [];
+  for (const n of db.prepare(`SELECT n.id, n.ncr_no, n.date, n.status, n.fmea, o.category product FROM ncrs n LEFT JOIN production_orders o ON o.id = n.order_id WHERE n.status <> 'Cancelled' AND n.fmea IS NOT NULL AND n.fmea NOT IN ('', '[]')`).all()) {
+    for (const r of parse(n.fmea, [])) rows.push({ ...r, ncr_id: n.id, ncr_no: n.ncr_no, date: n.date, ncr_status: n.status, product: n.product,
+      risk: r.rpn2 ?? r.rpn, open: fmeaNeedsAction(r) && (r.rpn2 == null || r.rpn2 >= FMEA_ACTION_RPN) });
+  }
+  return rows.sort((a, b) => (b.risk ?? 0) - (a.risk ?? 0));
 }
 
 // ---------------------------------------------------------------- quality review (dashboard: daily / weekly / monthly)
@@ -182,10 +328,12 @@ export function qualityReview({ from, to } = {}) {
       capa_on_time_pct: pct(closed.filter(n => !n.target_date || n.closed_on <= n.target_date).length, closed.length),
       rework_hours: r2(inPeriod.reduce((s, n) => s + n0(n.rework_hours), 0)), rework_cost: r2(inPeriod.reduce((s, n) => s + n0(n.rework_cost), 0)), scrap_value: r2(inPeriod.reduce((s, n) => s + n0(n.scrap_value), 0)),
       completed_orders: done.length, inspection_compliance_pct: pct(withFqc.length, done.length),
+      rca_complete_pct: pct(inPeriod.filter(n => n.rca_status === 'Complete').length, inPeriod.filter(n => ['Action in progress', 'Closed'].includes(n.status) || n.rca_methods).length),
+      fmea_open: fmeaRegister().filter(r => r.open).length,
     },
-    pareto,
+    pareto, methods: RCA_METHODS.map(m => ({ method: m, main: inPeriod.filter(n => n.rca_method === m).length, used: inPeriod.filter(n => String(n.rca_methods || '').split(', ').includes(m)).length })),
     open: open.map(n => ({ id: n.id, ncr_no: n.ncr_no, date: n.date, source: n.source, category: n.category, order_no: n.order_no, description: n.description, qty: n.qty, disposition: n.disposition,
-      responsible: n.responsible, target_date: n.target_date, status: n.status, overdue: !!(n.target_date && n.target_date < today()) })),
+      responsible: n.responsible, target_date: n.target_date, status: n.status, overdue: !!(n.target_date && n.target_date < today()), rca_method: n.rca_method, rca_ok: n.rca_status === 'Complete' })),
     inspections: ins.slice(0, 200).map(r => ({ id: r.id, qc_no: r.qc_no, date: r.date, kind: r.kind, stage: r.stage, order_id: r.order_id, order_no: r.order_no, description: r.description,
       inspected: r.qty_inspected, accepted: r.qty_accepted, rework: r.qty_rework, rejected: r.qty_rejected, result: r.result, inspector: r.inspector, ncr_id: r.ncr_id })),
   };

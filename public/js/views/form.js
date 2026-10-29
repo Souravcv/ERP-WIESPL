@@ -815,6 +815,26 @@ function actionsFor(entity, row, reload, ctx = {}) {
         await act('cancel', { reason: r.value.trim() });
       }) }, 'Cancel NCR'));
       if (row.inspection_id) A.push(h('a.btn', { href: `#/view/qc_inspections/${row.inspection_id}` }, '🔍 Inspection'));
+      // Root cause pictures from what is on the form now (saved first).
+      const fresh = async () => { if (ctx.save) await ctx.save({ quiet: true }); return api(`/ncrs/${id}`); };
+      const show = (title, body) => modal(title, body, [{ label: 'Close', value: true }], { wide: true });
+      A.push(h('button.btn', { onclick: go(async () => { const n = await fresh(); const { fishbone } = await import('./rca.js'); await show(`Fishbone – ${n.ncr_no}`, fishbone(String(n.description || '').split('\n')[0].replace(/^QC-\S+\s*(·[^:]*)?:\s*/, ''), n.fishbone || [])); }) }, '🐟 Fishbone'));
+      A.push(h('button.btn', { onclick: go(async () => { const n = await fresh(); const { processMap } = await import('./rca.js'); await show(`Process map – ${n.ncr_no}`, (n.process_steps || []).length ? processMap(n.process_steps) : h('p.muted', 'Add the process steps first (section 4).')); }) }, '🗺 Process map'));
+      A.push(h('button.btn', { onclick: go(async () => {
+        await fresh();
+        const [p, { pareto }] = await Promise.all([api(`/ncrs/${id}/pareto`), import('./rca.js')]);
+        const views = [['category', 'NCR category', [p.mine.category]], ['cause', 'Confirmed cause (6M)', p.mine.causes], ['product', 'Product', [p.mine.product]], ['check', 'Failed QC check', []]];
+        const box = h('div'), tabs = h('div.tabs');
+        const pick = k => { const v = views.find(x => x[0] === k); tabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.k === k)); box.replaceChildren(pareto(p[k], v[2])); };
+        tabs.append(...views.map(([k, l]) => h('button', { 'data-k': k, onclick: () => pick(k) }, l)));
+        pick('category');
+        await show(`Pareto – ${p.ncr_no} (since ${fmtDate(p.from)})`, h('div', h('p.muted', 'This NCR is outlined in red. Dark bars are the vital few that make up 80%. Write what it shows in “Pareto conclusion”.'), tabs, box));
+      }) }, '📊 Pareto'));
+      if ((row.capa_tasks || []).length) A.push(h('button.btn', { onclick: go(async () => {
+        const ts = await api(`/ncrs/${id}/tasks`);
+        await show(`CAPA tasks – ${row.ncr_no}`, h('table.data', h('thead', h('tr', ['Task', 'Assigned to', 'Status'].map(x => h('th', x)))),
+          h('tbody', ts.map(t => h('tr', h('td', h('a', { href: `#/view/work_tasks/${t.id}` }, `${t.task_no} · ${t.title}`)), h('td', t.assigned_to), h('td', badge(t.status)))))));
+      }) }, '📋 CAPA tasks'));
       A.push(h('a.btn', { href: `#/print/ncr/${id}`, target: '_blank' }, '🖨 NCR / CAPA report'));
       break;
     }
@@ -1131,6 +1151,7 @@ export async function recordView(root, entity, id) {
   const grid = h('div.form-grid');
   for (const f of ent.fields) {
     if (f.hidden || f.type === 'json') continue;
+    if (f.type === 'section') { grid.append(h('div.span-all', { style: { borderTop: '1px solid var(--border)', marginTop: '10px', paddingTop: '10px' } }, h('div', { style: { fontWeight: 700, fontSize: '15px' } }, f.label), f.hint ? h('div.muted', { style: { fontSize: '12.5px', marginTop: '2px' } }, f.hint) : null)); continue; }
     if (isNew && (f.readonly || f.computed) && row[f.key] == null) continue;
     if (f.type === 'lines') {
       const ed = linesEditor(f, row[f.key], {

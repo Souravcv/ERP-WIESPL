@@ -190,28 +190,54 @@ async function quality(box) {
         kpi('First-pass yield', p(t.fpy), 'accepted first time', pct(t.fpy)), kpi('NCR open', t.ncr_open, `${t.ncr_raised} raised in the period`, t.ncr_open ? 'var(--warn)' : null),
         kpi('CAPA overdue', t.ncr_overdue, 'past 30 days', t.ncr_overdue ? 'var(--bad)' : null), kpi('CAPA closed on time', p(t.capa_on_time_pct), `${t.capa_closed} closed · target > 95%`, pct(t.capa_on_time_pct)),
         kpi('Cost of poor quality', `₹ ${inr(t.rework_cost + t.scrap_value, 0)}`, `rework ₹ ${inr(t.rework_cost, 0)} (${q(t.rework_hours)} h) + scrap ₹ ${inr(t.scrap_value, 0)}`),
-        kpi('Inspection compliance', p(t.inspection_compliance_pct), `${t.completed_orders} order(s) completed · with final QC`, pct(t.inspection_compliance_pct, 100, 90))),
+        kpi('Inspection compliance', p(t.inspection_compliance_pct), `${t.completed_orders} order(s) completed · with final QC`, pct(t.inspection_compliance_pct, 100, 90)),
+        kpi('Root cause analysis complete', p(t.rca_complete_pct), 'NCRs analysed with every method used complete', pct(t.rca_complete_pct, 100, 80)),
+        kpi('FMEA actions open', t.fmea_open, `RPN ≥ 100 or severity 9–10`, t.fmea_open ? 'var(--warn)' : null)),
+      paretoCard(),
       h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px' } },
         card('By inspection', h('table.data', h('thead', h('tr', ['Inspection', 'Count', 'Inspected', 'Rework', 'Rejected', 'FPY'].map(x => h('th', x)))),
           h('tbody', d.kinds.map(k => h('tr', h('td', k.kind), h('td.num', k.inspections), h('td.num', q(k.inspected)), h('td.num', q(k.rework)), h('td.num', q(k.rejected)), h('td.num', p(k.fpy))))))),
-        card('NCR by category (Pareto)', d.pareto.length ? h('div', { style: { display: 'grid', gap: '6px' } }, d.pareto.map(x => h('div.bar-row', { style: { gridTemplateColumns: '150px 1fr 40px' } },
-          h('span.name', x.category), h('div.track', h('div.fill', { style: { width: `${(100 * x.count) / max}%` } })), h('span.val', x.count))))
-          : h('p.muted', 'No NCR in this period.')),
+        card('Root cause methods used', h('table.data', h('thead', h('tr', ['Method', 'Main method', 'Used'].map(x => h('th', x)))),
+          h('tbody', d.methods.map(m => h('tr', h('td', m.method), h('td.num', m.main), h('td.num', m.used)))))),
         d.stages.length ? card('In-process by stage', h('table.data', h('thead', h('tr', ['Stage', 'Inspected', 'Rework', 'Rejected', 'FPY'].map(x => h('th', x)))),
           h('tbody', d.stages.map(x => h('tr', h('td', x.stage), h('td.num', q(x.inspected)), h('td.num', q(x.rework)), h('td.num', q(x.rejected)), h('td.num', p(x.fpy))))))) : null),
       d.open.length ? h('div.card.flush', h('div', { style: { padding: '10px 16px' } }, h('h2', { style: { margin: 0 } }, `Open NCR / CAPA (${d.open.length})`)),
-        tableOf(['NCR', 'Date', 'Found at', 'Category', 'Order', 'Non-conformance', 'Qty', 'Disposition', 'Responsible', 'Target', 'Status'], d.open.map(n => h('tr',
+        tableOf(['NCR', 'Date', 'Found at', 'Category', 'Order', 'Non-conformance', 'Qty', 'Method', 'Analysis', 'Responsible', 'Target', 'Status'], d.open.map(n => h('tr',
           h('td.nowrap', h('a', { href: `#/view/ncrs/${n.id}` }, n.ncr_no)), h('td.nowrap', fmtDate(n.date)), h('td', n.source), h('td', n.category), h('td.nowrap', n.order_no || ''),
-          h('td', { style: { maxWidth: '320px' } }, String(n.description || '').split('\n')[0]), h('td.num', q(n.qty)), h('td', n.disposition || ''), h('td', n.responsible || ''),
+          h('td', { style: { maxWidth: '320px' } }, String(n.description || '').split('\n')[0]), h('td.num', q(n.qty)), h('td', n.rca_method || '—'),
+          h('td', { style: { color: n.rca_ok ? 'var(--good)' : 'var(--warn)' } }, n.rca_ok ? '✔ complete' : 'incomplete'), h('td', n.responsible || ''),
           h('td.nowrap', { style: { color: n.overdue ? 'var(--bad)' : '' } }, fmtDate(n.target_date), n.overdue ? ' ⚠' : ''), h('td', badge(n.status)))))) : null,
       d.inspections.length ? h('div.card.flush', h('div', { style: { padding: '10px 16px' } }, h('h2', { style: { margin: 0 } }, 'Inspections')),
         tableOf(['QC No', 'Date', 'Inspection', 'Stage', 'Order', 'Inspected', 'Accepted', 'Rework', 'Rejected', 'Result', 'Inspector'], d.inspections.map(r => h('tr',
           h('td.nowrap', h('a', { href: `#/view/qc_inspections/${r.id}` }, r.qc_no)), h('td.nowrap', fmtDate(r.date)), h('td', r.kind), h('td', r.stage || ''), h('td.nowrap', orderLink(r.order_id, r.order_no)),
           h('td.num', q(r.inspected)), h('td.num', q(r.accepted)), h('td.num', q(r.rework)), h('td.num', q(r.rejected)), h('td', badge(r.result)), h('td', r.inspector || ''))))) : h('p.muted', 'No inspections recorded in this period.'));
   };
-  from.onchange = to.onchange = () => { load().catch(fail); };
+  // Pareto analysis (QEMS: find the vital few): basis and measure chosen here, the period from the toolbar.
+  function paretoCard() {
+    const by = h('select', [['category', 'NCR category'], ['cause', 'Confirmed cause (6M)'], ['stage', 'Stage / where found'], ['product', 'Product category'], ['check', 'Failed QC check'], ['source', 'Found at']].map(([v, l]) => h('option', { value: v }, l)));
+    const measure = h('select', [['count', 'Count'], ['qty', 'Quantity'], ['cost', 'Cost (rework + scrap)']].map(([v, l]) => h('option', { value: v }, l)));
+    const chart = h('div', h('div.muted', 'Loading…'));
+    const draw = async () => {
+      const [a, { pareto }] = await Promise.all([api(`/production/pareto?from=${from.value}&to=${to.value}&by=${by.value}&measure=${measure.value}`), import('./rca.js')]);
+      const vital = a.rows.filter(r => r.vital);
+      chart.replaceChildren(pareto(a), a.rows.length ? h('p', { style: { margin: '6px 0 0' } }, h('b', 'Vital few: '), `${vital.map(r => r.key).join(', ')} – ${vital.at(-1).cum}% of the total from ${vital.length} of ${a.rows.length}.`) : null);
+    };
+    by.onchange = measure.onchange = () => { draw().catch(fail); };
+    draw().catch(fail);
+    return card('Pareto analysis', h('div.toolbar', h('span.muted', 'By'), by, h('span.muted', 'measure'), measure), chart);
+  }
+  async function fmeaCard() {
+    const rows = (await api('/production/fmea')).slice(0, 15);
+    return rows.length ? h('div.card.flush', h('div', { style: { padding: '10px 16px' } }, h('h2', { style: { margin: 0 } }, 'FMEA register – highest risk first'), h('div.muted', { style: { fontSize: '12px' } }, 'All failure modes from the NCRs; risk = RPN after the action when re-scored')),
+      tableOf(['NCR', 'Product', 'Step', 'Failure mode', 'Effect', 'Cause', 'S', 'O', 'D', 'RPN', 'Action', 'Who', 'RPN after', ''], rows.map(r => h('tr',
+        h('td.nowrap', h('a', { href: `#/view/ncrs/${r.ncr_id}` }, r.ncr_no)), h('td', r.product || ''), h('td', r.step || ''), h('td', r.mode), h('td', r.effect || ''), h('td', r.cause || ''),
+        h('td.num', r.s ?? ''), h('td.num', r.o ?? ''), h('td.num', r.d ?? ''), h('td.num', { style: { fontWeight: 600 } }, r.rpn ?? ''), h('td', r.action || ''), h('td', r.owner || ''),
+        h('td.num', r.rpn2 ?? ''), h('td', r.open ? h('span', { style: { color: 'var(--bad)' } }, 'open') : ''))))) : null;
+  }
+  const loadAll = async () => { await load(); const f = await fmeaCard(); if (f) out.append(f); };
+  from.onchange = to.onchange = () => { loadAll().catch(fail); };
   box.replaceChildren(h('div.toolbar', h('span.muted', 'From'), from, h('span.muted', 'to'), to, h('a.btn', { href: '#/list/qc_inspections' }, '🔍 All inspections'), h('a.btn', { href: '#/list/ncrs' }, '🚩 All NCRs')), out);
-  await load();
+  await loadAll();
 }
 
 // ---------------------------------------------------------------- finished goods output and production stock

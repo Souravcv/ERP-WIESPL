@@ -9,6 +9,26 @@ const tbl = (rows, cols, foot) => h('table', { style: { marginTop: '6px', fontSi
   h('tbody', rows.map((r, i) => h('tr', h('td', i + 1), cols.map(c => h('td', { style: { whiteSpace: 'pre-wrap', textAlign: c[3] ? 'right' : '' } }, c[2] ? c[2](r) : r[c[0]] ?? ''))))),
   foot ? h('tfoot', h('tr', h('th', ''), foot.map(f => h('th', { style: { textAlign: 'right' } }, f ?? '')))) : null);
 const yn = v => (v === 'Yes' ? '✔ Yes' : '✘ No');
+const sub = t => h('h4', { style: { margin: '10px 0 4px', fontSize: '12px' } }, t);
+
+// The NCR's root cause methods as printed: each method used, with its picture where it has one.
+async function rcaParts(r) {
+  const used = String(r.rca_methods || '').split(', ').filter(Boolean);
+  if (!used.length) return [];
+  const { fishbone, processMap, pareto } = await import('./rca.js');
+  const out = [];
+  if (used.includes('5 Why')) out.push(sub('5 Why'), tbl(r.whys || [], [['why', 'Why?'], ['because', 'Because']]));
+  if (used.includes('Fishbone')) out.push(sub('Fishbone (6M)'), fishbone(String(r.description || '').split('\n')[0].replace(/^QC-\S+\s*(·[^:]*)?:\s*/, ''), r.fishbone || []),
+    tbl(r.fishbone || [], [['category', '6M'], ['cause', 'Possible cause'], ['check', 'Checked'], ['evidence', 'Evidence']]));
+  if (used.includes('Pareto')) {
+    const p = await api(`/ncrs/${r.id}/pareto`).catch(() => null);
+    out.push(sub('Pareto'), p ? pareto(p.category, [p.mine.category]) : null, h('p', { style: { margin: '4px 0', fontSize: '11px' } }, h('b', 'Conclusion: '), r.pareto_note || ''));
+  }
+  if (used.includes('Process mapping')) out.push(sub('Process mapping'), processMap(r.process_steps || []));
+  if (used.includes('FMEA')) out.push(sub('FMEA'), tbl([...(r.fmea || [])].sort((a, b) => (b.rpn ?? 0) - (a.rpn ?? 0)), [['step', 'Step'], ['mode', 'Failure mode'], ['effect', 'Effect'], ['cause', 'Cause'], ['control', 'Control'],
+    ['s', 'S', x => x.s ?? '', 1], ['o', 'O', x => x.o ?? '', 1], ['d', 'D', x => x.d ?? '', 1], ['rpn', 'RPN', x => x.rpn ?? '', 1], ['action', 'Action'], ['owner', 'Who'], ['rpn2', 'RPN after', x => x.rpn2 ?? '', 1]]));
+  return out;
+}
 
 export async function prodDoc(kind, id, s) {
   if (kind === 'prodorder') {
@@ -90,9 +110,11 @@ export async function prodDoc(kind, id, s) {
       grid([['NCR No', r.ncr_no], ['Date', fmtDate(r.date)], ['Found At', r.source], ['Category', r.category], ['Production Order', r.order_id_label], ['Project', r.project_id_label],
         ['Qty Affected', `${n(r.qty)} ${r.uom || ''}`], ['Segregated', r.segregated], ['Disposition', r.disposition], ['Status', r.status], ['Responsible', r.responsible], ['CAPA Target', fmtDate(r.target_date)]]),
       box('1. Non-conformance', r.description),
-      h('h3', { style: { margin: '10px 0 4px', fontSize: '12px' } }, `2. Root cause analysis${r.rca_method ? ' (' + r.rca_method + ')' : ''}`),
-      (r.whys || []).length ? tbl(r.whys, [['why', 'Why?'], ['because', 'Because']]) : null,
+      h('h3', { style: { margin: '10px 0 4px', fontSize: '12px' } }, '2. Root cause analysis'),
+      grid([['Main method', r.rca_method], ['Methods used', r.rca_methods], ['Analysis check', r.rca_status]]),
+      ...(await rcaParts(r)),
       box('Root cause', r.root_cause), box('3. Correction (immediate)', r.correction), box('4. Corrective action', r.corrective_action), box('5. Preventive action', r.preventive_action),
+      (r.capa_tasks || []).length ? [h('h3', { style: { margin: '10px 0 4px', fontSize: '12px' } }, 'CAPA tasks'), tbl(await api(`/ncrs/${id}/tasks`), [['task_no', 'Task'], ['title', 'What'], ['assigned_to', 'Who'], ['status', 'Status']])] : null,
       grid([['Rework man-hours', n(r.rework_hours)], ['Rework cost (₹)', n(r.rework_cost)], ['Scrap / rejection value (₹)', n(r.scrap_value)], ['Closed', r.closed_by ? `${r.closed_by}` : '']]),
       box('6. Verification of effectiveness', r.verification),
       signRow(['Raised By (QC)', ''], ['Responsible', ''], ['Quality Head (closure)', ''])))};

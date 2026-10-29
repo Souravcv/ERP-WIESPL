@@ -240,6 +240,10 @@ export const QC_PRODUCT_CHECKS = { 'PUF panels': ['Flatness', 'Surface finish', 
 export const QC_DISPATCH_CHECKS = ['QC release', 'Quantity verification', 'Packing verification', 'Identification labels', 'Dispatch clearance'];
 export const NCR_CATEGORIES = ['Material', 'Process', 'Dimensional', 'Functional', 'Documentation', 'Customer complaint'];
 export const NCR_DISPOSITIONS = ['', 'Rework', 'Reject / scrap', 'Use as is (concession)', 'Return to vendor', 'Replace'];
+// Root cause analysis (QEMS Vol 3 part I): the five methods an NCR can use, alone or together.
+export const RCA_METHODS = ['5 Why', 'Fishbone', 'Pareto', 'Process mapping', 'FMEA'];
+export const FISHBONE_6M = ['Man', 'Machine', 'Method', 'Material', 'Measurement', 'Environment'];
+export const FMEA_ACTION_RPN = 100;
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
 const BILL_OWN = `(COALESCE({t}.amount,0) - ${BILL_DN} - ${BILL_DIRECT})`;
@@ -2189,7 +2193,7 @@ export const ENTITIES = {
     label: 'NCR / CAPA', singular: 'NCR', group: 'Production', icon: '🚩', write: ['admin', 'manager', 'production', 'technical'], print: 'ncr',
     display: "{t}.ncr_no || ' · ' || substr(COALESCE({t}.description, ''), 1, 60)",
     search: ['ncr_no', 'description', 'root_cause', 'corrective_action', 'responsible'],
-    list: ['ncr_no', 'date', 'source', 'category', 'order_id', 'qty', 'disposition', 'responsible', 'target_date', 'overdue', 'status'],
+    list: ['ncr_no', 'date', 'source', 'category', 'order_id', 'qty', 'rca_method', 'rca_status', 'responsible', 'target_date', 'overdue', 'status'],
     statusField: 'status',
     fields: [
       { key: 'ncr_no', label: 'NCR No', type: 'text', readonly: true, hint: 'Auto: NCR-001/2026-27' },
@@ -2204,12 +2208,52 @@ export const ENTITIES = {
       { key: 'uom', label: 'UOM', type: 'text' },
       { key: 'segregated', label: 'Segregated / tagged', type: 'yn', default: 'No' },
       { key: 'disposition', label: 'Disposition', type: 'select', options: NCR_DISPOSITIONS },
-      { key: 'rca_method', label: 'Root Cause Method', type: 'select', options: ['', '5 Why', 'Fishbone', 'Pareto', 'Process mapping', 'FMEA'] },
+      { key: 'sec_rca', label: 'Root cause analysis', type: 'section', computed: "''", hint: 'Use one method or several. Every method you use must be complete, and the main method is required, before the CAPA starts.' },
+      { key: 'rca_method', label: 'Main Method', type: 'select', options: ['', ...RCA_METHODS] },
+      { key: 'rca_methods', label: 'Methods Used', type: 'text', readonly: true },
+      { key: 'rca_status', label: 'Analysis Check', type: 'textarea', span: 2, readonly: true, hint: 'Worked out on every save: "Complete", or what is still missing' },
+      { key: 'sec_why', label: '1 · 5 Why', type: 'section', computed: "''", hint: 'Ask “why?” until the answer is something the process can fix. At least 3 rows; the last answer is the root cause.' },
       { key: 'whys', label: 'Why–why', type: 'lines', span: 2, amounts: false, columns: [
         { key: 'why', label: 'Why?', type: 'text', width: 300 },
         { key: 'because', label: 'Because', type: 'text', width: 360 },
       ] },
-      { key: 'root_cause', label: 'Root Cause', type: 'textarea', span: 2 },
+      { key: 'sec_fish', label: '2 · Fishbone (6M)', type: 'section', computed: "''", hint: 'Possible causes under Man, Machine, Method, Material, Measurement, Environment. Look at 3 or more of the 6; check each cause: at least one Confirmed, none left “To check”. 🐟 shows the diagram.' },
+      { key: 'fishbone', label: 'Possible causes', type: 'lines', span: 2, amounts: false, columns: [
+        { key: 'category', label: '6M', type: 'select', options: ['', ...FISHBONE_6M], width: 120 },
+        { key: 'cause', label: 'Possible cause', type: 'text', width: 280 },
+        { key: 'check', label: 'Checked', type: 'select', options: ['', 'To check', 'Confirmed', 'Ruled out'], width: 110 },
+        { key: 'evidence', label: 'Evidence / how checked', type: 'text', width: 220 },
+      ] },
+      { key: 'sec_pareto', label: '3 · Pareto', type: 'section', computed: "''", hint: '📊 Pareto shows how often this kind of NCR happened (by category, 6M cause, stage, product, failed check). Write what it shows: is this one of the vital few?' },
+      { key: 'pareto_note', label: 'Pareto conclusion', type: 'textarea', span: 2 },
+      { key: 'sec_map', label: '4 · Process mapping', type: 'section', computed: "''", hint: 'The steps in order, with the check at each. Mark where the defect got in and where a check let it through. 🗺 shows the map.' },
+      { key: 'process_steps', label: 'Process steps', type: 'lines', span: 2, amounts: false, columns: [
+        { key: 'step', label: 'Step', type: 'text', width: 220 },
+        { key: 'owner', label: 'Who', type: 'text', width: 120 },
+        { key: 'control', label: 'Check at this step', type: 'select', options: ['', 'Check in place', 'No check'], width: 130 },
+        { key: 'finding', label: 'Finding', type: 'select', options: ['', 'OK', 'Defect entered here', 'Escaped here (check missed)'], width: 190 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+      ] },
+      { key: 'sec_fmea', label: '5 · FMEA', type: 'section', computed: "''", hint: `Severity, Occurrence, Detection 1–10 (10 = worst / hardest to detect). RPN = S × O × D. RPN ${FMEA_ACTION_RPN} or more, or severity 9–10, needs an action and who does it; score again after the action.` },
+      { key: 'fmea', label: 'Failure modes', type: 'lines', span: 2, amounts: false, columns: [
+        { key: 'step', label: 'Process step', type: 'text', width: 130 },
+        { key: 'mode', label: 'Failure mode', type: 'text', width: 150 },
+        { key: 'effect', label: 'Effect', type: 'text', width: 140 },
+        { key: 'cause', label: 'Cause', type: 'text', width: 140 },
+        { key: 'control', label: 'Current control', type: 'text', width: 130 },
+        { key: 's', label: 'S', type: 'number', width: 48 },
+        { key: 'o', label: 'O', type: 'number', width: 48 },
+        { key: 'd', label: 'D', type: 'number', width: 48 },
+        { key: 'rpn', label: 'RPN', type: 'number', width: 60 },
+        { key: 'action', label: 'Action', type: 'text', width: 180 },
+        { key: 'owner', label: 'Who', type: 'text', width: 110 },
+        { key: 's2', label: 'S after', type: 'number', width: 56 },
+        { key: 'o2', label: 'O after', type: 'number', width: 56 },
+        { key: 'd2', label: 'D after', type: 'number', width: 56 },
+        { key: 'rpn2', label: 'RPN after', type: 'number', width: 70 },
+      ] },
+      { key: 'sec_capa', label: 'Root cause and CAPA', type: 'section', computed: "''", hint: 'Starting the action gives the responsible person a CAPA task (and each FMEA action owner theirs); the NCR closes only when those tasks are done.' },
+      { key: 'root_cause', label: 'Root Cause', type: 'textarea', span: 2, hint: 'Blank: taken from the last 5 Why answer' },
       { key: 'correction', label: 'Correction (immediate)', type: 'textarea', span: 2 },
       { key: 'corrective_action', label: 'Corrective Action (remove the cause)', type: 'textarea', span: 2 },
       { key: 'preventive_action', label: 'Preventive Action (stop it happening elsewhere)', type: 'textarea', span: 2 },
@@ -2219,6 +2263,7 @@ export const ENTITIES = {
       { key: 'rework_cost', label: 'Rework Cost (₹)', type: 'money' },
       { key: 'scrap_value', label: 'Scrap / Rejection Value (₹)', type: 'money' },
       { key: 'verification', label: 'Verification of Effectiveness', type: 'textarea', span: 2, hint: 'What was checked to show the action worked' },
+      { key: 'capa_tasks', label: 'CAPA Tasks', type: 'json', hidden: true },
       { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Under investigation', 'Action in progress', 'Closed', 'Cancelled'], default: 'Open', readonly: true },
       { key: 'closed_by', label: 'Closed By', type: 'text', readonly: true },
       { key: 'closed_on', label: 'Closed On', type: 'date', readonly: true },

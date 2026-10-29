@@ -594,6 +594,11 @@ api.post('/production_plans/:id/act/:action', need('production_plans'), wrap(req
 api.post('/production_reports/:id/submit', need('production_reports'), wrap(req => prod.submitReport(req.params.id, req.user)));
 api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.user.role)) throw new HttpError(403, 'No access to quality'); return qa.qualityReview(req.query); }));
 api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
+const qaView = req => { if (!canView('ncrs', req.user.role)) throw new HttpError(403, 'No access to NCRs'); };
+api.get('/production/pareto', wrap(req => { qaView(req); return qa.paretoAnalysis(req.query); }));
+api.get('/production/fmea', wrap(req => { qaView(req); return qa.fmeaRegister(); }));
+api.get('/ncrs/:id/pareto', wrap(req => { qaView(req); return qa.ncrPareto(req.params.id); }));
+api.get('/ncrs/:id/tasks', wrap(req => { qaView(req); return qa.capaTaskList(req.params.id); }));
 api.post('/ncrs/:id/act/:action', need('ncrs'), wrap(req => qa.ncrAction(req.params.id, req.params.action, req.body, req.user)));
 api.post('/production_reports/:id/reopen', need('production_reports'), wrap(req => prod.reopenReport(req.params.id, req.body, req.user)));
 
