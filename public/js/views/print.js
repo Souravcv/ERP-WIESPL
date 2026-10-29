@@ -382,8 +382,11 @@ function techSheetDoc(e, brief, files, s) {
     h('div', { style: { textAlign: 'center', fontSize: '17px', fontWeight: 700, margin: '10px 0 2px' } }, 'TECHNO-COMMERCIAL REQUIREMENT SHEET'),
     h('div', { style: { textAlign: 'center', marginBottom: '8px' } }, `Enquiry ${e.enquiry_no || ''} · ${fmtDate(e.date) || ''}${brief?.submitted_at ? ` · detailed form received ${brief.submitted_at}${brief.submitted_by ? ` from ${brief.submitted_by}` : ''}` : ' · detailed form not received yet'}`),
     h('table', h('tbody',
-      sec('Client & project', row('Hospital / client', e.hospital_name || P.hospital), row('Place', [e.place, e.district].filter(Boolean).join(', ') || P.city), row('Doctor / contact', [e.doctor_name || P.doctor, e.doctor_phone || P.phone, e.email].filter(Boolean).join(' · ')),
-        row('Type of work', e.type_of_work), row('Capacity', e.capacity), row('Source', e.source), fieldsOf(PROJECT.filter(f => !['hospital', 'city', 'doctor', 'phone'].includes(f.key)), P)),
+      sec('Client & project', row('Hospital / client', e.hospital_name || P.hospital), row('Place', [e.place, e.state, e.pin_code].filter(Boolean).join(', ') || P.city), row('Client / contact', [e.client_name || P.doctor, e.client_phone || P.phone, e.email].filter(Boolean).join(' · ')),
+        row('Type of work', (e.type_of_work || []).join(', ')), row('Hospital capacity (approx.)', [e.capacity, e.icu_beds != null && `ICU beds ${e.icu_beds}`, e.nicu_beds != null && `NICU beds ${e.nicu_beds}`].filter(Boolean).join(' · ')),
+        row('AHU by area', (e.ahu_areas || []).map(a => `${a.area}: ${a.ahu_count ?? 0} AHU${a.cfm ? ` · ${a.cfm} cfm` : ''}${a.notes ? ` (${a.notes})` : ''}`).join('\n')),
+        row('Relative humidity (RH)', e.rh_min != null || e.rh_max != null ? `${e.rh_min ?? ''}–${e.rh_max ?? ''} %` : null),
+        row('Source', e.source), row('Salesperson', e.enquiry_by), fieldsOf(PROJECT.filter(f => !['hospital', 'city', 'doctor', 'phone'].includes(f.key)), P)),
       sec('Site & scope of work', fieldsOf(SITE, S), row('Remarks', S.remarks)),
       otRows(),
       sec('Drawings & photos received', files.length ? files.map(a => row(a.filename, a.note || '')) : [row('—', 'None yet: ask for the architectural / structural drawing')]),
@@ -393,7 +396,14 @@ function techSheetDoc(e, brief, files, s) {
   ));
 }
 
-function challanDoc(c, project, s) {
+// The challan is a delivery document only: what goes, how it goes and who receives it. No prices and nothing from the
+// BOQ / work order (those stay in the CRM). Lines made from a BOQ before 29 Oct 2026 carry "(BOQ <section> <sr>)" in the
+// description: it is cut off here.
+export const challanText = d => {
+  const s = String(d || '').trimEnd(), i = s.lastIndexOf('(BOQ ');
+  return i > 0 && s.endsWith(')') ? s.slice(0, i).trimEnd() : s; // the section name may have brackets of its own
+};
+function challanDoc(c, s, codes = {}) {
   const lines = (c.lines || []).filter(l => l.description || Number(l.qty));
   const blanks = Math.max(0, 8 - lines.length);
   const cellInfo = (k, v) => [h('th', { style: { width: '17%' } }, k), h('td', v || '')];
@@ -402,19 +412,17 @@ function challanDoc(c, project, s) {
     h('div', { style: { textAlign: 'center', fontSize: '11px', marginBottom: '6px' } }, `GSTIN : ${s.gstin || ''}   ·   PAN : ${s.pan || ''}`),
     h('table', h('tbody',
       h('tr', ...cellInfo('Challan No', h('b', c.challan_no)), ...cellInfo('Date', fmtDate(c.date))),
-      h('tr', ...cellInfo('Work Order', project?.project_no || ''), ...cellInfo('Project', project?.name || c.project_id_label)),
-      c.bom_id || c.boq_id ? h('tr', ...cellInfo('BOQ', c.bom_id_label || ''), ...cellInfo('Client Work Order', c.boq_id_label || '')) : null,
-      c.issue_no || c.vendor_id_label ? h('tr', ...cellInfo('Store Issue No', c.issue_no || ''), ...cellInfo('Vendor', c.vendor_id_label || '')) : null,
-      h('tr', h('th', 'Consignee / Ship To'), h('td', { colspan: 3 }, ...multiline(c.ship_to || ''))),
+      h('tr', h('th', 'Receiver / Ship To'), h('td', { colspan: 3 }, c.vendor_id_label ? h('div', h('b', c.vendor_id_label)) : null, ...multiline(c.ship_to || ''))),
+      c.site_contact ? h('tr', ...cellInfo('Receiver contact', c.site_contact), h('th'), h('td')) : null,
       h('tr', ...cellInfo('Vehicle No', c.vehicle_no), ...cellInfo('Transporter', c.transporter)),
-      c.driver ? h('tr', ...cellInfo('Driver', c.driver), h('th'), h('td')) : null)),
+      c.driver || c.lr_no ? h('tr', ...cellInfo('Driver', c.driver), ...cellInfo('LR / Docket No', c.lr_no)) : null)),
     h('table', { style: { marginTop: '8px' } },
-      h('thead', h('tr', ['Sr.', 'Description of Material', 'UOM', 'Qty', 'Remark'].map((x, i) => h('th' + (i === 3 ? '.num' : ''), x)))),
-      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td.spec', l.description || ''), h('td', l.uom || ''), h('td.num', h('b', l.qty ?? '')), h('td', l.remark || ''))),
-        Array.from({ length: blanks }, () => h('tr', Array.from({ length: 5 }, () => h('td', { style: { height: '20px' } }, ''))))),
-      h('tfoot', h('tr', h('td', { colspan: 3 }, h('b', `Total items: ${lines.length}`)), h('td.num', h('b', round2(lines.reduce((a, l) => a + (Number(l.qty) || 0), 0)))), h('td')))),
+      h('thead', h('tr', ['Sr.', 'Item', 'Description of Material', 'Qty', 'Unit', 'Remark'].map((x, i) => h('th' + (i === 3 ? '.num' : ''), x)))),
+      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td.nowrap', codes[l.item_id] || ''), h('td.spec', challanText(l.description)), h('td.num', h('b', l.qty ?? '')), h('td', l.uom || ''), h('td', l.remark || ''))),
+        Array.from({ length: blanks }, () => h('tr', Array.from({ length: 6 }, () => h('td', { style: { height: '20px' } }, ''))))),
+      h('tfoot', h('tr', h('td', { colspan: 3 }, h('b', `Total items: ${lines.length}`)), h('td.num', h('b', round2(lines.reduce((a, l) => a + (Number(l.qty) || 0), 0)))), h('td', { colspan: 2 })))),
     c.remarks ? h('p', h('b', 'Remarks: '), c.remarks) : null,
-    h('p', { style: { fontSize: '11px' } }, 'Material dispatched against the above work order for supply / installation at site. Please check the material on receipt and sign with date and stamp.'),
+    h('p', { style: { fontSize: '11px' } }, 'Material sent as listed above. Please check the material on receipt and sign with date and stamp.'),
     h('table', { style: { marginTop: '18px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By', 'Checked By (Store)', 'Driver / Transporter', "Receiver's Sign, Date & Stamp"].map(x => h('th', { style: { width: '25%' } }, x))),
       h('tr', [plainName(c.dispatched_by) || c.created_by, '', '', c.received_by ? `${c.received_by}${c.delivered_date ? ' · ' + fmtDate(c.delivered_date) : ''}` : ''].map((x, i) => h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, i === 0 && c.dispatched_by ? [stampImg(), sigImg(c.dispatched_by)] : null, x || ''))))),
@@ -503,9 +511,11 @@ export async function printView(root, kind, id) {
     doc = poDoc(po, v, s, internal);
   } else if (kind === 'challan') {
     const c = await api(`/challans/${id}`);
-    const project = c.project_id ? await api(`/projects/${c.project_id}`).catch(() => null) : null;
+    // item code of each store item on the challan
+    const ids = [...new Set((c.lines || []).map(l => l.item_id).filter(Boolean))];
+    const codes = Object.fromEntries(await Promise.all(ids.map(i => api(`/items/${i}`).then(it => [i, it.code || ''], () => [i, '']))));
     title = c.challan_no;
-    doc = challanDoc(c, project, s);
+    doc = challanDoc(c, s, codes);
   } else if (kind === 'bom') {
     const bom = await api(`/boms/${id}`);
     const rows = bomRows(await api(`/bom_items?bom_id=${id}&limit=20000`));

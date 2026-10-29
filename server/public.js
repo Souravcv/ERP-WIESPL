@@ -3,7 +3,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { db, getSettings } from './db.js';
-import { insertRow, HttpError } from './crud.js';
+import { insertRow, HttpError, toList } from './crud.js';
 import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
 import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
@@ -174,9 +174,12 @@ export function publicRouter() {
     const types = d.types.map(t => (t === 'other' && d.other_type ? d.other_type : PROJECT_TYPES[t]));
     const enq = insertRow('enquiries', {
       date: today(), status: 'New', source: 'Website', enquiry_by: 'Website',
-      hospital_name: d.hospital || null, place: d.city || null, district: d.city || null,
-      doctor_name: d.name, doctor_phone: d.phone, email: d.email || null, whatsapp: d.whatsapp ? 'Yes' : 'No', best_time: d.best_time || null,
-      type_of_work: types.join(', '), capacity: [d.ots && `${d.ots} OT`, d.beds && `${d.beds} beds`, d.area && `${d.area} sq ft`].filter(Boolean).join(', ') || null,
+      hospital_name: d.hospital || null, place: d.city || null,
+      client_name: d.name, client_phone: d.phone, email: d.email || null, whatsapp: d.whatsapp ? 'Yes' : 'No', best_time: d.best_time || null,
+      // the website asks one bed count: it goes to ICU or NICU beds only when the project is clearly one of them
+      ...(d.beds && d.types.includes('nicu') && !d.types.some(t => ['icu', 'picu'].includes(t)) ? { nicu_beds: Number(d.beds) } : {}),
+      ...(d.beds && d.types.some(t => ['icu', 'picu'].includes(t)) && !d.types.includes('nicu') ? { icu_beds: Number(d.beds) } : {}),
+      type_of_work: types, capacity: [d.ots && `${d.ots} OT`, d.beds && `${d.beds} beds`, d.area && `${d.area} sq ft`].filter(Boolean).join(', ') || null,
       lead_score: score, lead_grade: grade(score), web_summary: summaryText(d), next_followup: today(),
       remarks: d.notes || null,
     }, SYSTEM_USER, { system: true });
@@ -206,9 +209,9 @@ export function publicRouter() {
   r.get('/brief', wrap(req => {
     limit(req, 'brief', 120, 10);
     const b = briefRow(req);
-    const e = db.prepare('SELECT enquiry_no, hospital_name, place, doctor_name, doctor_phone, type_of_work FROM enquiries WHERE id = ?').get(b.enquiry_id) || {};
+    const e = db.prepare('SELECT enquiry_no, hospital_name, place, client_name, client_phone, type_of_work FROM enquiries WHERE id = ?').get(b.enquiry_id) || {};
     let data = null; try { data = JSON.parse(b.data || 'null'); } catch { /* start again */ }
-    return { ref: e.enquiry_no, enquiry: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, types: e.type_of_work }, data, submitted_at: b.submitted_at, files: db.prepare("SELECT filename FROM attachments WHERE entity = 'enquiries' AND record_id = ? AND uploaded_by = 'Website form' ORDER BY id").all(b.enquiry_id) };
+    return { ref: e.enquiry_no, enquiry: { hospital: e.hospital_name, city: e.place, doctor: e.client_name, phone: e.client_phone, types: toList(e.type_of_work).join(', ') }, data, submitted_at: b.submitted_at, files: db.prepare("SELECT filename FROM attachments WHERE entity = 'enquiries' AND record_id = ? AND uploaded_by = 'Website form' ORDER BY id").all(b.enquiry_id) };
   }));
   r.post('/brief', express.json({ limit: '120kb' }), wrap(req => {
     limit(req, 'brief-save', 240, 10);
@@ -248,7 +251,7 @@ export function briefFor(enquiryId, d) {
   const old = db.prepare('SELECT token FROM design_briefs WHERE enquiry_id = ?').get(enquiryId);
   if (old) return old.token;
   const token = crypto.randomBytes(18).toString('base64url');
-  const e = db.prepare('SELECT hospital_name, place, doctor_name, doctor_phone, capacity FROM enquiries WHERE id = ?').get(enquiryId) || {};
+  const e = db.prepare('SELECT hospital_name, place, client_name, client_phone, capacity FROM enquiries WHERE id = ?').get(enquiryId) || {};
   const n = Math.max(1, Math.min(12, Number(d?.ots) || Number(String(e.capacity || '').match(/(\d+)\s*OT/i)?.[1]) || 1));
   const specs = (d?.specialties || []).filter(s => SPEC_OK.includes(s));
   const rooms = Array.from({ length: n }, (_, i) => {
@@ -274,7 +277,7 @@ export function briefFor(enquiryId, d) {
     if (d?.features?.includes('SHRM – Smart Heat Recovery (WIESPL patent)')) r.shrm = 'Yes';
     return r;
   });
-  const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.doctor_name, phone: e.doctor_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build] }, rooms });
+  const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.client_name, phone: e.client_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build] }, rooms });
   db.prepare('INSERT INTO design_briefs (token, enquiry_id, data) VALUES (?, ?, ?)').run(token, enquiryId, JSON.stringify(data));
   return token;
 }

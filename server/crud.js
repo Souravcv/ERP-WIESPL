@@ -30,9 +30,20 @@ function selectSql(name) {
   return `SELECT ${cols.join(', ')} FROM ${name} t ${joins.join(' ')}`;
 }
 
+// Several choices (type 'checks', e.g. an enquiry's types of work) are stored as a JSON array. Older values were text
+// such as "MOT" or "NICU, ICU": they are read as a list.
+export function toList(v) {
+  if (Array.isArray(v)) return v.map(x => String(x).trim()).filter(Boolean);
+  if (v == null || v === '') return [];
+  const s = String(v).trim();
+  if (s.startsWith('[')) { try { const a = JSON.parse(s); if (Array.isArray(a)) return toList(a); } catch { /* plain text */ } }
+  return s.split(/\s*,\s*|\n/).map(x => x.trim()).filter(Boolean);
+}
+
 function decode(name, row) {
   if (!row) return row;
   for (const f of ENTITIES[name].fields) {
+    if (f.type === 'checks') { row[f.key] = toList(row[f.key]); continue; }
     if ((f.type === 'json' || f.type === 'lines') && typeof row[f.key] === 'string') {
       try { row[f.key] = JSON.parse(row[f.key]); } catch { row[f.key] = f.type === 'lines' ? [] : {}; }
     }
@@ -100,6 +111,7 @@ function coerce(f, v) {
     }
     case 'yn': return v === true || v === 'Yes' ? 'Yes' : v === false || v === 'No' ? 'No' : null;
     case 'json': case 'lines': return typeof v === 'string' ? v : JSON.stringify(v);
+    case 'checks': { const a = toList(v); return a.length ? JSON.stringify(a) : null; }
     case 'date': {
       const s = String(v).slice(0, 10);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new HttpError(400, `${f.label} must be a date`);

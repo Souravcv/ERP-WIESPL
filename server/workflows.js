@@ -160,7 +160,7 @@ export function quotationFromEnquiry(enquiryId, user) {
   const e = getRow('enquiries', enquiryId);
   const s = getSettings();
   const cust = e.customer_id ? getRow('customers', e.customer_id) : null;
-  const toAddress = [e.doctor_name, e.hospital_name || cust?.name, cust?.address, [e.place, e.district].filter(Boolean).join(', ')].filter(Boolean).join('\n');
+  const toAddress = [e.client_name, e.hospital_name || cust?.name, cust?.address, [e.place, e.state, e.pin_code].filter(Boolean).join(', ')].filter(Boolean).join('\n');
   return tx(() => {
     const q = insertRow('quotations', {
       enquiry_id: e.id, customer_id: e.customer_id, to_address: toAddress, subject: s.default_subject,

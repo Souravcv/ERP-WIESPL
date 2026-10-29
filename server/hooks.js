@@ -11,6 +11,8 @@ import { afterDispatchPlan, challanToPlan } from './planning.js';
 import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
 import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './production.js';
 import { prepInspection, prepNcr } from './quality.js';
+import { nextEnquiryNo } from './enquiryreview.js';
+import { HttpError } from './crud.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -31,11 +33,15 @@ function mmyy(date) {
   return { mm: m, yy: y.slice(2) };
 }
 
-// Enquiry register numbering: 01/04/25-26 and WIESPL/01/0425 share one running number per FY.
-export function enquiryNumbers(date) {
+// Quotation reference WIESPL/01/0425: a running number per FY. Enquiries had 01/04/25-26 on the same number; since
+// 29 Oct 2026 the enquiry number is ENQ-0001 without a date (nextEnquiryNo), old numbers stay as they are.
+export function quoteRef(date) {
   const { seq, fy } = nextSeq('enquiry', date);
   const { mm, yy } = mmyy(date);
-  return { seq, fy, enquiry_no: `${pad(seq)}/${mm}/${fy}`, quote_ref: `${prefix()}/${pad(seq)}/${mm}${yy}` };
+  return { seq, fy, quote_ref: `${prefix()}/${pad(seq)}/${mm}${yy}` };
+}
+export function enquiryNumbers(date) {
+  return { ...quoteRef(date), enquiry_no: nextEnquiryNo() };
 }
 
 // "22+22" → 44, "36" → 36, text without numbers → null
@@ -128,19 +134,45 @@ export function beforeSave(name, row, existing, user) {
       if (!existing && !row.enquiry_no) Object.assign(row, enquiryNumbers(date));
       const custId = row.customer_id ?? existing?.customer_id;
       if (custId && !(row.hospital_name ?? existing?.hospital_name)) {
-        const c = db.prepare('SELECT name, place, district FROM customers WHERE id = ?').get(custId);
+        const c = db.prepare('SELECT name, place, state, pincode FROM customers WHERE id = ?').get(custId);
         if (c) {
           row.hospital_name = c.name;
           if (!(row.place ?? existing?.place)) row.place = c.place;
-          if (!(row.district ?? existing?.district)) row.district = c.district;
+          if (!(row.state ?? existing?.state)) row.state = c.state;
+          if (!(row.pin_code ?? existing?.pin_code) && /^\d{6}$/.test(String(c.pincode || '').trim())) row.pin_code = String(c.pincode).trim();
         }
       }
+      // One "Hospital Name" field: a customer with exactly this name is linked to the enquiry.
+      if (!custId && row.hospital_name) {
+        const c = db.prepare('SELECT id FROM customers WHERE lower(trim(name)) = lower(trim(?))').all(row.hospital_name);
+        if (c.length === 1) row.customer_id = c[0].id;
+      }
+      if (row.pin_code != null) {
+        row.pin_code = String(row.pin_code).replace(/\s/g, '') || null;
+        if (row.pin_code && !/^\d{6}$/.test(row.pin_code)) throw new HttpError(400, 'PIN Code: use 6 digits (for example 411033).');
+      }
+      const rh = k => (row[k] !== undefined ? row[k] : existing?.[k]);
+      for (const k of ['rh_min', 'rh_max']) {
+        if (row[k] != null && (row[k] < 40 || row[k] > 60)) throw new HttpError(400, `${k === 'rh_min' ? 'RH Minimum' : 'RH Maximum'}: use a value from 40 % to 60 %.`);
+      }
+      if (rh('rh_min') != null && rh('rh_max') != null && rh('rh_min') > rh('rh_max')) throw new HttpError(400, 'RH: the minimum must not be more than the maximum.');
+      for (const k of ['icu_beds', 'nicu_beds']) if (row[k] != null && (row[k] < 0 || !Number.isInteger(row[k]))) throw new HttpError(400, `${k === 'icu_beds' ? 'ICU Beds' : 'NICU Beds'}: use a whole number, 0 or more.`);
+      // AHU by area: the totals for the register, the export and the costing sheet.
+      if ('ahu_areas' in row) {
+        const areas = parse(row.ahu_areas, []).filter(a => String(a.area || '').trim() || Number(a.ahu_count) || Number(a.cfm));
+        if (areas.some(a => !String(a.area || '').trim())) throw new HttpError(400, 'AHU by Area: write the name of the area on each row.');
+        if (areas.some(a => [a.ahu_count, a.cfm].some(v => v != null && v !== '' && !(Number(v) >= 0)))) throw new HttpError(400, 'AHU by Area: the AHU quantity and the airflow must be 0 or more.');
+        row.ahu_areas = JSON.stringify(areas);
+        row.ahu_total = areas.length ? areas.reduce((s, a) => s + (Number(a.ahu_count) || 0), 0) : null;
+        row.cfm_total = areas.length ? areas.reduce((s, a) => s + (Number(a.cfm) || 0), 0) : null;
+      }
+      if ('actions' in row) row.actions = JSON.stringify(parse(row.actions, []).filter(a => String(a.action || '').trim()));
       break;
     }
     case 'quotations': {
       if (!existing && !row.quote_no) {
         const enq = row.enquiry_id && db.prepare('SELECT quote_ref FROM enquiries WHERE id = ?').get(row.enquiry_id);
-        const base = enq?.quote_ref || enquiryNumbers(date).quote_ref;
+        const base = enq?.quote_ref || quoteRef(date).quote_ref;
         row.revision = row.revision || 0;
         row.quote_no = row.revision ? `${base}-R${row.revision}` : base;
       }

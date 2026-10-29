@@ -138,7 +138,7 @@ export async function createBoqFromFile({ title, project_id, filename, mime }, b
 const sentSql = `(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.qty') AS REAL)), 0) FROM challans c, json_each(c.lines) j
   WHERE c.status IN ('Dispatched','Delivered') AND CAST(json_extract(j.value, '$.boq_item_id') AS INTEGER) = b.id)`;
 const boqLine = id => db.prepare(`SELECT b.*, ${sentSql} AS sent FROM boq_items b WHERE b.id = ?`).get(Number(id));
-const lineText = b => [b.heading, firstLine(b.description)].filter(Boolean).join(' – ') + (b.sr_no ? ` (BOQ ${b.section} ${b.sr_no})` : ` (BOQ ${b.section})`);
+const lineText = b => [b.heading, firstLine(b.description)].filter(Boolean).join(' – ');
 
 // Check quantities against the work order and build challan lines.
 function challanLines(boq, picks, user, force) {
@@ -154,7 +154,7 @@ function challanLines(boq, picks, user, force) {
     if (b.qty != null && b.sent + need[b.id] > b.qty + 1e-9) over.push(`${b.sr_no || ''} ${firstLine(b.description).slice(0, 60)}: WO ${b.qty}, already sent ${b.sent}, now ${need[b.id]}`);
     const itemId = p.item_id ? Number(p.item_id) : b.item_id || null;
     if (p.item_id && !b.item_id) db.prepare('UPDATE boq_items SET item_id = ? WHERE id = ?').run(itemId, b.id); // remember the store item for next time
-    lines.push({ boq_item_id: b.id, item_id: itemId, description: lineText(b), uom: b.uom || 'Nos', qty, remark: p.remark || '' });
+    lines.push({ boq_item_id: b.id, item_id: itemId, description: lineText(b), boq_ref: [b.section, b.sr_no].filter(Boolean).join(' ') || undefined, uom: b.uom || 'Nos', qty, remark: p.remark || '' });
   }
   if (!lines.length) throw new HttpError(400, 'Pick at least one BOQ line with a quantity to send');
   if (over.length && !(force && hasFunction(user.role, 'allow_negative'))) throw new HttpError(409, `More than the work order quantity:\n${over.join('\n')}`);
@@ -426,7 +426,8 @@ function bomChallanLines(bom, picks, user, force) {
     if (b.sent + need[b.id] > (b.qty || 0) + 1e-9) over.push(`${b.sr_no || ''} ${bomLineText(b).slice(0, 60)}: BOQ ${b.qty ?? 0}, already sent ${b.sent}, now ${need[b.id]}`);
     const itemId = p.item_id ? Number(p.item_id) : b.item_id || null;
     if (p.item_id && !b.item_id) db.prepare('UPDATE bom_items SET item_id = ? WHERE id = ?').run(itemId, b.id); // remembered for next time
-    lines.push({ bom_item_id: b.id, item_id: itemId, description: `${bomLineText(b)}${b.section ? ` (BOQ ${b.section}${b.sr_no ? ' ' + b.sr_no : ''})` : ''}`, uom: b.uom || 'Nos', qty, remark: p.remark || '' });
+    // The BOQ section / Sr. No. stays on the line for the CRM (boq_ref), not in the description printed on the challan.
+    lines.push({ bom_item_id: b.id, item_id: itemId, description: bomLineText(b), boq_ref: [b.section, b.sr_no].filter(Boolean).join(' ') || undefined, uom: b.uom || 'Nos', qty, remark: p.remark || '' });
   }
   if (!lines.length) throw new HttpError(400, 'Pick at least one BOQ component with a quantity to send');
   if (over.length && !(force && hasFunction(user.role, 'allow_negative'))) throw new HttpError(409, `More than the BOQ quantity:\n${over.join('\n')}`);

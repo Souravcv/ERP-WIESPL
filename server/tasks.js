@@ -126,7 +126,7 @@ export function myTasks(user) {
 
   // Follow-ups due
   if (canView('enquiries', role)) {
-    group('follow', '📞', 'Follow-ups due', db.prepare(`SELECT 'e' k, id, enquiry_no ref, COALESCE(hospital_name, doctor_name, place) who, next_followup due FROM enquiries
+    group('follow', '📞', 'Follow-ups due', db.prepare(`SELECT 'e' k, id, enquiry_no ref, COALESCE(hospital_name, client_name, place) who, next_followup due FROM enquiries
         WHERE next_followup IS NOT NULL AND next_followup <= ? AND enquiry_by = ? AND status NOT IN ('Won', 'Lost', 'Regret', 'Closed')
       UNION ALL SELECT 'f', f.id, e.enquiry_no, f.notes, f.next_date FROM followups f LEFT JOIN enquiries e ON e.id = f.enquiry_id
         WHERE f.status = 'Open' AND f.next_date IS NOT NULL AND f.next_date <= ? AND f.assigned_to = ? ORDER BY due LIMIT 40`).all(t, user.name, t, user.name)

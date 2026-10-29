@@ -4,15 +4,19 @@ import { ENTITIES } from '../public/js/schema.js';
 import { listRows, insertRow } from './crud.js';
 import { fyOf } from '../public/js/calc.js';
 
-// Column order of the WIESPL "Sales Enquiry Register" sheet.
+// Column order of the WIESPL "Sales Enquiry Register" sheet (29 Oct 2026: Client Name, State, PIN Code, ICU / NICU beds,
+// AHU by area, RH range, Salesperson, referral details, review status and required actions; no District / Verified By).
 const REGISTER = [
-  ['Sr. No.', null], ['Enquiry  No.', 'enquiry_no'], ['Quotation Ref No', 'quote_ref'], ['Date', 'date'], ['Place', 'place'],
-  ['District', 'district'], ['Name of the Doctor', 'doctor_name'], ['Contact No.', 'doctor_phone'], ['Name of the Hospital', 'hospital_name'],
+  ['Sr. No.', null], ['Enquiry  No.', 'enquiry_no'], ['Quotation Ref No', 'quote_ref'], ['Date', 'date'], ['Name of the Hospital', 'hospital_name'],
+  ['Client Name', 'client_name'], ['Contact No.', 'client_phone'], ['Client Email', 'email'], ['Place', 'place'], ['State', 'state'], ['PIN Code', 'pin_code'],
   ['Name of the consultant/architect', 'consultant_name'], ['Contact No.', 'consultant_phone'], ['Type of work', 'type_of_work'],
-  ['Hospital capacity', 'capacity'], ['Enquiry By', 'enquiry_by'], ['Supported By', 'supported_by'], ['Quoted by', 'quoted_by'],
-  ['Drawing received Y/N', 'drawing_received'], ['Quotation Status', 'status'], ['Remarks/ Feedback', 'remarks'],
-  ['Kick back involved Y/N', 'kickback'], ['Verified By & date', 'verified'],
+  ['Hospital capacity (approx.)', 'capacity'], ['ICU Beds', 'icu_beds'], ['NICU Beds', 'nicu_beds'], ['AHU by area', 'ahu_areas'], ['Total AHUs', 'ahu_total'], ['Total airflow (cfm)', 'cfm_total'],
+  ['RH range (%)', 'rh'], ['Salesperson', 'enquiry_by'], ['Supported By', 'supported_by'], ['Quoted by', 'quoted_by'],
+  ['Drawing received Y/N', 'drawing_received'], ['Quotation Status', 'status'], ['Review Status', 'review_status'], ['Approved By', 'approved_by'], ['Feedback', 'remarks'],
+  ['Lead Source', 'source'], ['Referred By', 'ref_name'], ['Referrer Firm', 'ref_firm'], ['Referrer Phone', 'ref_phone'], ['Relation to the Client', 'ref_relation'],
+  ['Kick back involved Y/N', 'kickback'], ['Kickback / commission details', 'kickback_details'], ['Required actions', 'actions'],
 ];
+const listText = v => (Array.isArray(v) ? v.join(', ') : v ?? '');
 
 function styleHeader(row) {
   row.font = { bold: true, color: { argb: 'FFFFFFFF' } };
@@ -46,8 +50,11 @@ export async function exportEntity(name, query) {
       ws.addRow(REGISTER.map(([, k]) => {
         if (k === null) return i + 1;
         if (k === 'date') return toDate(r.date);
-        if (k === 'verified') return [r.verified_by, r.verified_date].filter(Boolean).join(' ');
         if (k === 'hospital_name') return r.hospital_name || r.customer_id_label || '';
+        if (k === 'type_of_work') return listText(r.type_of_work);
+        if (k === 'ahu_areas') return (r.ahu_areas || []).map(a => `${a.area}: ${a.ahu_count ?? 0} AHU${a.cfm ? `, ${a.cfm} cfm` : ''}${a.notes ? ` (${a.notes})` : ''}`).join('; ');
+        if (k === 'rh') return r.rh_min != null || r.rh_max != null ? `${r.rh_min ?? ''}–${r.rh_max ?? ''}` : '';
+        if (k === 'actions') return (r.actions || []).map(a => `${a.action}: ${a.status || 'Open'}${[a.owner, a.due && `due ${a.due}`].filter(Boolean).length ? ` (${[a.owner, a.due && `due ${a.due}`].filter(Boolean).join(', ')})` : ''}`).join('; ');
         return r[k] ?? '';
       }));
     });
@@ -102,12 +109,15 @@ function toIsoDate(v) {
 
 const norm = s => String(s).toLowerCase().replace(/[^a-z]/g, '');
 const HEADER_KEYS = {
-  enquiryno: 'enquiry_no', quotationrefno: 'quote_ref', date: 'date', place: 'place', district: 'district',
-  nameofthedoctor: 'doctor_name', nameofthehospital: 'hospital_name', nameoftheconsultantarchitect: 'consultant_name',
-  typeofwork: 'type_of_work', hospitalcapacity: 'capacity', enquiryby: 'enquiry_by', supportedby: 'supported_by', quotedby: 'quoted_by',
-  drawingreceivedyn: 'drawing_received', quotatationstatus: 'status', quotationstatus: 'status', remarksfeedback: 'remarks',
-  kickbackinvolvedyn: 'kickback', verifiedbydate: 'verified_by',
+  enquiryno: 'enquiry_no', quotationrefno: 'quote_ref', date: 'date', place: 'place', district: 'district', state: 'state', pincode: 'pin_code',
+  nameofthedoctor: 'client_name', clientname: 'client_name', clientemail: 'email', nameofthehospital: 'hospital_name', nameoftheconsultantarchitect: 'consultant_name',
+  typeofwork: 'type_of_work', hospitalcapacity: 'capacity', hospitalcapacityapprox: 'capacity', icubeds: 'icu_beds', nicubeds: 'nicu_beds',
+  enquiryby: 'enquiry_by', salesperson: 'enquiry_by', supportedby: 'supported_by', quotedby: 'quoted_by',
+  drawingreceivedyn: 'drawing_received', quotatationstatus: 'status', quotationstatus: 'status', remarksfeedback: 'remarks', feedback: 'remarks',
+  leadsource: 'source', referredby: 'ref_name', referrerfirm: 'ref_firm', referrerphone: 'ref_phone', relationtotheclient: 'ref_relation',
+  kickbackinvolvedyn: 'kickback', kickbackcommissiondetails: 'kickback_details', verifiedbydate: 'verified_by',
 };
+const STATE_OPTS = ENTITIES.enquiries.fields.find(f => f.key === 'state').options.filter(Boolean);
 const STATUS_OPTS = ENTITIES.enquiries.fields.find(f => f.key === 'status').options;
 
 export async function importEnquiries(buffer, user) {
@@ -131,7 +141,7 @@ function importEnquirySheet(ws, user, result, counter) {
       headerRow = n;
       let contactCount = 0;
       texts.forEach((t, col) => {
-        if (t === 'contactno') colMap[col] = contactCount++ === 0 ? 'doctor_phone' : 'consultant_phone';
+        if (t === 'contactno') colMap[col] = contactCount++ === 0 ? 'client_phone' : 'consultant_phone';
         else if (HEADER_KEYS[t]) colMap[col] = HEADER_KEYS[t];
       });
     }
@@ -147,7 +157,7 @@ function importEnquirySheet(ws, user, result, counter) {
         const v = cellText(row.getCell(Number(col)).value);
         if (v !== '' && v != null) rec[key] = v;
       }
-      const meaningful = ['date', 'place', 'doctor_name', 'hospital_name', 'type_of_work', 'consultant_name'].some(k => rec[k]);
+      const meaningful = ['date', 'place', 'client_name', 'hospital_name', 'type_of_work', 'consultant_name'].some(k => rec[k]);
       if (!meaningful) { result.skipped++; continue; }
       try {
         if (rec.date) rec.date = toIsoDate(rec.date);
@@ -166,12 +176,20 @@ function importEnquirySheet(ws, user, result, counter) {
           if (!['remarks'].includes(k)) rec[k] = rec[k].split('\n').map(s => s.trim()).filter(Boolean).join(', ');
         }
         // A section label such as "Active Enquiry 2024-25" (a merged cell repeated on every row) is not an enquiry number.
-        if (rec.enquiry_no && !/\d+\s*\/\s*\d+/.test(String(rec.enquiry_no))) {
+        if (rec.enquiry_no && !/\d+\s*\/\s*\d+|^ENQ-\d+$/.test(String(rec.enquiry_no).trim())) {
           rec.remarks = [rec.remarks, `Register section: ${rec.enquiry_no}`].filter(Boolean).join('\n');
           delete rec.enquiry_no;
         }
-        if (typeof rec.doctor_phone === 'number') rec.doctor_phone = String(rec.doctor_phone);
-        if (typeof rec.consultant_phone === 'number') rec.consultant_phone = String(rec.consultant_phone);
+        for (const k of ['client_phone', 'consultant_phone', 'ref_phone', 'pin_code']) if (typeof rec[k] === 'number') rec[k] = String(rec[k]);
+        // No District field any more: an old register's district goes into the place.
+        if (rec.district) {
+          if (!rec.place) rec.place = rec.district;
+          else if (String(rec.place).toLowerCase() !== String(rec.district).toLowerCase()) rec.place = `${rec.place}, ${rec.district}`;
+          delete rec.district;
+        }
+        // Salesperson is required; an old register row without "Enquiry By" says so instead of guessing a name.
+        if (!rec.enquiry_by) rec.enquiry_by = 'Not recorded';
+        if (rec.state) rec.state = STATE_OPTS.find(o => norm(o) === norm(rec.state)) || String(rec.state).trim();
 
         const m = String(rec.enquiry_no || '').match(/^(\d+)\/(\d{1,2})\/(\d{2}-\d{2})$/);
         if (m) {

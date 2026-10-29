@@ -15,6 +15,10 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true, sel
   const ent = ENTITIES[entity];
   const fm = fieldMap(entity);
   const cols = (columns || ent.list).map(k => fm[k]).filter(Boolean);
+  // ent.detail: the other data of a row, shown under it with ▸ (keeps the register to a few key columns)
+  const detail = !columns && ent.detail ? ent.detail.map(k => fm[k]).filter(Boolean) : null;
+  const opened = new Set();
+  const filled = v => (Array.isArray(v) ? v.length > 0 : v != null && String(v).trim() !== '');
   let sortKey = null, dir = 1, page = 0;
   const wrap = h('div');
 
@@ -33,21 +37,32 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true, sel
     const slice = data.slice(page * pageSize, (page + 1) * pageSize);
     const moneyCols = cols.filter(c => c.type === 'money');
     const tick = (on, change) => h('input', { type: 'checkbox', checked: on, style: { width: 'auto' }, onclick: e => e.stopPropagation(), onchange: e => { change(e.target.checked); onSelect?.(); } });
-    const thead = h('thead', h('tr', selected ? h('th', tick(slice.length > 0 && slice.every(r => selected.has(r.id)), on => { for (const r of slice) on ? selected.add(r.id) : selected.delete(r.id); render(); })) : null, cols.map(c => h('th' + (NUMERIC.includes(c.type) ? '.num' : ''), {
+    const thead = h('thead', h('tr', detail ? h('th', { 'aria-label': 'Details' }) : null, selected ? h('th', tick(slice.length > 0 && slice.every(r => selected.has(r.id)), on => { for (const r of slice) on ? selected.add(r.id) : selected.delete(r.id); render(); })) : null, cols.map(c => h('th' + (NUMERIC.includes(c.type) ? '.num' : ''), {
       onclick: () => { dir = sortKey === c.key ? -dir : 1; sortKey = c.key; render(); },
       title: 'Sort',
     }, c.label, sortKey === c.key ? (dir > 0 ? ' ▲' : ' ▼') : ''))));
-    const tbody = h('tbody', slice.map(r => h('tr.clickable', { onclick: () => (location.hash = recordHref(entity, r.id)) },
-      selected ? h('td', tick(selected.has(r.id), on => (on ? selected.add(r.id) : selected.delete(r.id)))) : null,
-      cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : ''), display(c, r))))));
+    const span = cols.length + (selected ? 1 : 0) + (detail ? 1 : 0);
+    const tbody = h('tbody', slice.flatMap(r => {
+      const open = opened.has(r.id);
+      const tr = h('tr.clickable', { onclick: () => (location.hash = recordHref(entity, r.id)) },
+        detail ? h('td.expander', h('button.icon-btn', { type: 'button', 'aria-expanded': String(open), title: open ? 'Hide the details' : 'Show the details',
+          onclick: e => { e.stopPropagation(); if (open) opened.delete(r.id); else opened.add(r.id); render(); } }, open ? '▾' : '▸')) : null,
+        selected ? h('td', tick(selected.has(r.id), on => (on ? selected.add(r.id) : selected.delete(r.id)))) : null,
+        cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : ''), { 'data-label': c.label }, display(c, r))));
+      if (!detail || !open) return [tr];
+      const facts = detail.filter(f => filled(r[f.key]));
+      return [tr, h('tr.detail-row', h('td', { colspan: span }, facts.length
+        ? h('dl.detail-grid', facts.map(f => h('div', h('dt', f.label), h('dd', display(f, r)))))
+        : h('span.muted', 'No other details.')))];
+    }));
     // A document with several approval steps has one row per step: its amount counts once in the total.
     const once = ent.totalOnceBy ? [...new Map(data.map(r => [ent.totalOnceBy.map(k => r[k]).join('|'), r])).values()] : data;
     const tfoot = totals && moneyCols.length && rows.length > 1
-      ? h('tfoot', h('tr', selected ? h('td') : null, cols.map((c, i) => h('td' + (c.type === 'money' ? '.num' : ''),
+      ? h('tfoot', h('tr', detail ? h('td') : null, selected ? h('td') : null, cols.map((c, i) => h('td' + (c.type === 'money' ? '.num' : ''),
         c.type === 'money' ? inr(once.reduce((s, r) => s + (Number(r[c.key]) || 0), 0)) : i === 0 ? (once.length === data.length ? `Total (${data.length})` : `Total (${once.length} documents)`) : ''))))
       : null;
     wrap.replaceChildren(
-      rows.length ? h('div.table-wrap', h('table.data', thead, tbody, tfoot)) : h('div.empty', 'No records yet'),
+      rows.length ? h('div.table-wrap', h('table.data' + (detail ? '.cards' : ''), thead, tbody, tfoot)) : h('div.empty', 'No records yet'),
       pages > 1 ? h('div.pager', `${data.length} records · page ${page + 1} of ${pages}`,
         h('button.btn.small', { disabled: page === 0, onclick: () => { page--; render(); } }, '‹ Prev'),
         h('button.btn.small', { disabled: page >= pages - 1, onclick: () => { page++; render(); } }, 'Next ›')) : null,
@@ -110,6 +125,16 @@ export async function listView(root, entity) {
     ? h('select', h('option', { value: '' }, ent.hiddenStatus ? `All (without “${ent.hiddenStatus}”)` : 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
     : null;
   if (statusSel) statusSel.value = params.get('status') || '';
+  // More filters (ent.filters), e.g. the enquiry review status, salesperson and state.
+  const extraSels = (ent.filters || []).map(k => fm[k]).filter(Boolean).map(f => {
+    const opts = f.type === 'person' ? [...new Set([...state.people.map(p => p.name), ...(f.suggest || [])])].sort((a, b) => a.localeCompare(b)) : f.options.filter(Boolean);
+    const sel = h('select', { title: f.label, 'aria-label': f.label }, h('option', { value: '' }, `${f.label}: all`), opts.map(o => h('option', { value: o }, o)));
+    const want = params.get(f.key) || '';
+    if (want && !opts.includes(want)) sel.append(h('option', { value: want }, want));
+    sel.value = want;
+    sel.dataset.key = f.key;
+    return sel;
+  });
   const hasDate = !!fm.date;
   const from = hasDate ? h('input', { type: 'date', title: 'From date' }) : null;
   const to = hasDate ? h('input', { type: 'date', title: 'To date' }) : null;
@@ -136,8 +161,9 @@ export async function listView(root, entity) {
     if (statusSel?.value) p.set(ent.statusField, statusSel.value);
     if (from?.value) p.set('from', from.value);
     if (to?.value) p.set('to', to.value);
+    for (const sel of extraSels) if (sel.value) p.set(sel.dataset.key, sel.value);
     // other filters from the link, e.g. #/list/boqs?project_id=3
-    for (const [k, v] of params) if (fm[k] && !p.has(k) && k !== ent.statusField && k !== 'q') p.set(k, v);
+    for (const [k, v] of params) if (fm[k] && !p.has(k) && k !== ent.statusField && k !== 'q' && !(ent.filters || []).includes(k)) p.set(k, v);
     return p.toString();
   };
   let timer;
@@ -152,7 +178,7 @@ export async function listView(root, entity) {
     } catch (e) { fail(e); }
   }
   const reload = () => { clearTimeout(timer); timer = setTimeout(load, 250); };
-  for (const el of [q, statusSel, from, to].filter(Boolean)) el.addEventListener('input', reload);
+  for (const el of [q, statusSel, ...extraSels, from, to].filter(Boolean)) el.addEventListener('input', reload);
 
   root.replaceChildren(
     h('div.page-head', h('h1', `${ent.icon} ${ent.label}`), h('div.actions',
@@ -163,7 +189,7 @@ export async function listView(root, entity) {
       entity === 'material_lists' && canWrite(entity, state.user.role) ? h('button.btn', { onclick: busy(() => import('./mlimport.js').then(m => m.importMaterialLists())) }, '📥 From bill of material Excel') : null,
       IMPORTABLE[entity] && canWrite(entity, state.user.role) ? h('a.btn', { href: `#/import?kind=${IMPORTABLE[entity]}` }, '📥 Import Excel') : null,
       canWrite(entity, state.user.role) && !ent.noCreate ? h('button.btn.primary', { onclick: () => newRecord(entity).catch(fail) }, `+ New ${ent.singular}`) : null)),
-    h('div.toolbar', q, statusSel, from ? h('span.muted', 'From') : null, from, to ? h('span.muted', 'to') : null, to),
+    h('div.toolbar', q, statusSel, ...extraSels, from ? h('span.muted', 'From') : null, from, to ? h('span.muted', 'to') : null, to),
     body,
   );
   await load();

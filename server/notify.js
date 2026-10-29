@@ -15,19 +15,28 @@ export function notify({ fn, userNames = [], kind, title, body = '', link = '' }
 const DOC_LINK = { boqs: id => `#/boq/${id}`, boms: id => `#/bom/${id}` };
 const docLink = (entity, id) => (DOC_LINK[entity] ? DOC_LINK[entity](id) : `#/view/${entity}/${id}`);
 
-// A new requisition / PO / BOQ / work order was created.
+// A new requisition / PO / BOQ / work order / material request was created.
+// The record is already saved when this runs, so a failed pop-up must never turn the save into a server error
+// (it did for material requests: they had no text here, the user saw an error and pressed again → duplicates).
+const ABOUT = {
+  requisitions: row => [row.project_name || row.project_id_label, `${(row.lines || []).filter(l => l.description || l.item_id).length} material(s)`],
+  purchase_orders: row => [row.vendor_id_label, row.project_note],
+  boms: row => [row.client, row.project_id_label],
+  boqs: row => [row.title, row.project_id_label],
+  material_requests: row => [row.requested_by, row.department, row.site, `${(row.lines || []).filter(l => l.description || l.item_id).length} material(s)`],
+};
 export function notifyNew(entity, row, actor) {
   const fn = NOTIFY_FUNCTIONS[entity];
   if (!fn || !row) return 0;
-  const ent = ENTITIES[entity];
-  const ref = row.req_no || row.po_no || row.bom_no || row.boq_no || `#${row.id}`;
-  const about = {
-    requisitions: () => [row.project_name || row.project_id_label, `${(row.lines || []).filter(l => l.description || l.item_id).length} material(s)`],
-    purchase_orders: () => [row.vendor_id_label, row.project_note],
-    boms: () => [row.client, row.project_id_label],
-    boqs: () => [row.title, row.project_id_label],
-  }[entity]();
-  return notify({ fn, kind: entity, title: `New ${ent.singular}: ${ref}`, body: [...about.filter(Boolean), `by ${actor?.name || 'system'}`].join(' · '), link: docLink(entity, row.id) }, actor);
+  try {
+    const ent = ENTITIES[entity];
+    const ref = row.req_no || row.po_no || row.bom_no || row.boq_no || row.mr_no || `#${row.id}`;
+    const about = ABOUT[entity]?.(row) || [];
+    return notify({ fn, kind: entity, title: `New ${ent.singular}: ${ref}`, body: [...about.filter(Boolean), `by ${actor?.name || 'system'}`].join(' · '), link: docLink(entity, row.id) }, actor);
+  } catch (e) {
+    console.error(`Pop-up for ${entity} #${row.id} not sent:`, e);
+    return 0;
+  }
 }
 
 const APPROVAL_LINK = { Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}`,

@@ -108,7 +108,7 @@ export const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 
 const STATUS_TONE = {
   good: ['Won', 'Delivered', 'Approved', 'Paid', 'Completed', 'Received', 'Done', 'Closed', 'Resolved', 'Approved with Comments', 'Active', 'Yes', 'Final', 'Reviewed', 'Reserved', 'In stock', 'Accepted'],
-  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order', 'In production', 'On hold', 'Partly accepted', 'Hold', 'Under investigation', 'Action in progress'],
+  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order', 'In production', 'On hold', 'Partly accepted', 'Hold', 'Under investigation', 'Action in progress', 'Resubmitted'],
   bad: ['Lost', 'Rejected', 'Cancelled', 'Regret', 'Critical', 'Overdue', 'Short', 'Short (no store item)', 'Late'],
   info: ['New', 'Quoted', 'Sent', 'Issued', 'In Execution', 'Draft', 'Dispatched', 'Make in-house', 'Released'],
 };
@@ -125,7 +125,8 @@ export function display(f, row) {
     case 'ref': return row[`${f.key}_label`] || '';
     case 'money': return v == null ? '' : inr(v);
     case 'date': return fmtDate(v);
-    case 'select': return ['status', 'stage', 'priority', 'delivery_status'].includes(f.key) ? badge(v) : (v ?? '');
+    case 'select': return ['status', 'stage', 'priority', 'delivery_status', 'review_status'].includes(f.key) ? badge(v) : (v ?? '');
+    case 'checks': return Array.isArray(v) ? v.join(', ') : (v ?? '');
     case 'number': return v == null ? '' : (Number.isInteger(v) ? v : Math.round(v * 100) / 100);
     default: return v ?? '';
   }
@@ -150,6 +151,16 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
   switch (f.type) {
     case 'textarea':
       el = h('textarea', { ...common, rows: f.rows || 3 }); el.value = value ?? ''; get = () => el.value; break;
+    case 'checks': {
+      // Several choices as tick boxes; saved as a list. An old single value not in the options is kept as a box too.
+      const cur = Array.isArray(value) ? value : String(value ?? '').split(',').map(s => s.trim()).filter(Boolean);
+      const opts = [...f.options, ...cur.filter(v => !f.options.includes(v))];
+      const boxes = opts.map(o => h('input', { type: 'checkbox', value: o, checked: cur.includes(o), disabled: ro, onchange: onChange }));
+      el = h('div.checks', { role: 'group', 'aria-label': f.label }, opts.map((o, i) => h('label.check', boxes[i], h('span', o))));
+      get = () => boxes.filter(b => b.checked).map(b => b.value);
+      el.setValue = v => { const want = Array.isArray(v) ? v : []; for (const b of boxes) b.checked = want.includes(b.value); };
+      break;
+    }
     case 'select': case 'yn': {
       const opts = f.type === 'yn' ? ['', 'Yes', 'No'] : f.options;
       el = h('select', { ...common, disabled: ro }, opts.map(o => h('option', { value: o }, o || '—')));
@@ -199,7 +210,7 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
       const inp = el.firstChild; inp.value = value ?? ''; get = () => inp.value; el.style.display = 'contents'; break;
     }
     case 'number': case 'money':
-      el = h('input', { ...common, type: 'number', step: 'any', inputmode: 'decimal' }); el.value = value ?? ''; get = () => (el.value === '' ? null : Number(el.value)); break;
+      el = h('input', { ...common, type: 'number', step: 'any', inputmode: 'decimal', min: f.min, max: f.max }); el.value = value ?? ''; get = () => (el.value === '' ? null : Number(el.value)); break;
     case 'date':
       el = h('input', { ...common, type: 'date' }); el.value = value ?? ''; get = () => el.value || null; break;
     default: {
@@ -209,7 +220,7 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
         el.style.display = 'contents';
         el.firstChild.value = value ?? ''; get = () => el.firstChild.value;
       } else {
-        el = h('input', { ...common, type: f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text' });
+        el = h('input', { ...common, type: f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text', pattern: f.pattern, inputmode: f.pattern === '\\d{6}' ? 'numeric' : undefined, maxLength: f.pattern === '\\d{6}' ? 6 : undefined });
         el.value = value ?? ''; get = () => el.value;
       }
     }

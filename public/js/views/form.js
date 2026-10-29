@@ -24,7 +24,10 @@ const LOCKED = {
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
   vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status),
-  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open' };
+  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open',
+  enquiries: r => r.review_status === 'Approved' };
+// An approved enquiry is read-only until a checker reopens it (maker-checker, server/enquiryreview.js).
+const lockedRow = (entity, row) => LOCKED[entity]?.includes(row.status) || (entity === 'enquiries' && row.review_status === 'Approved');
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
   || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
@@ -147,16 +150,16 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
           render();
         } }), l.bom_item_id ? h('div.muted', { style: { fontSize: '11px' } }, '📑 from BOQ') : null);
       }
-      const label = l.description ? String(++sr) : '';
+      const label = l.description || f.newLine ? String(++sr) : '';
       return h('tr', h('td.muted', label), itemCell, cells, amount, f.itemRef && amounts ? h('td.num', l.received ?? 0) : null,
         readonly ? null : h('td.nowrap',
-          f.schedule ? null : h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
+          f.schedule || f.newLine ? null : h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
           h('button.icon-btn.del', { type: 'button', title: 'Remove line', onclick: () => { lines.splice(i, 1); render(); } }, '✕')));
     });
     wrap.replaceChildren(
       f.hint && !readonly ? h('div.muted', { style: { fontSize: '12px', marginBottom: '4px' } }, f.hint) : null,
       h('div.table-wrap', h('table.data.lines', h('thead', head), h('tbody', rows))),
-      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push(f.schedule ? { due_date: '', description: '', percent: null, amount: null, status: 'Due' } : { description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); } }, f.schedule ? '+ Add payment' : '+ Add line'),
+      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push(f.newLine ? { ...f.newLine } : f.schedule ? { due_date: '', description: '', percent: null, amount: null, status: 'Due' } : { description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); wrap.dispatchEvent(new Event('input', { bubbles: true })); } }, f.schedule ? '+ Add payment' : f.addLabel || '+ Add line'),
       amounts ? totalsBox : null);
     totals();
   }
@@ -377,9 +380,9 @@ async function profileDialog(row, reload) {
 async function briefDialog(row) {
   const { token } = await api(`/enquiries/${row.id}/brief`, { method: 'POST' });
   const url = `${location.origin}/brief.html?t=${encodeURIComponent(token)}`;
-  const text = `Dear ${row.doctor_name || 'Doctor'}, please fill the detailed OT requirements for ${row.hospital_name || 'your hospital'} (about 5 minutes): ${url}`;
+  const text = `Dear ${row.client_name || 'Doctor'}, please fill the detailed OT requirements for ${row.hospital_name || 'your hospital'} (about 5 minutes): ${url}`;
   const input = h('input', { value: url, readOnly: true, onclick: e => e.target.select() });
-  const phone = String(row.doctor_phone || '').replace(/\D/g, '');
+  const phone = String(row.client_phone || '').replace(/\D/g, '');
   await modal('Detailed requirement form', h('div.grid',
     h('p', 'Send this link to the surgeon or hospital team, or open it yourself and fill it during the meeting. It asks for each OT: size, specialty (with the NABH norms), wall / floor finish, doors, pendants, OT light, gas outlets, scrub, SHRM and the site scope. The answers come back into this enquiry under “Detailed requirements”, and you get a pop-up.'),
     h('label', 'Link (works only for this enquiry)', input),
@@ -414,16 +417,47 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { customer_id: id, hospital: row.name, site: row.place }) }, '🧮 Costing sheet'));
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
-    case 'enquiries':
-      if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { enquiry_id: id, customer_id: row.customer_id || undefined, hospital: row.hospital_name, site: row.place, title: [row.type_of_work, row.hospital_name].filter(Boolean).join(' – ') }) }, '🧮 Costing sheet'));
-      if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
+    case 'enquiries': {
+      // Maker-checker: the maker submits; a checker (another user) approves or rejects with a reason; an approved
+      // enquiry is read-only until a checker reopens it.
+      const rv = row.review_status || 'Draft', approved = rv === 'Approved';
+      const checker = hasFunction(state.user.role, 'enquiry_check'), mine = [row.submitted_by, row.created_by].includes(state.user.name);
+      const review = (action, body) => post(`/enquiries/${id}/review/${action}`, body);
+      if (can('enquiries') && ['Draft', 'Rejected'].includes(rv)) A.push(h('button.btn.primary', { onclick: busy(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        await review('submit');
+        toast(rv === 'Rejected' ? 'Submitted again for the check' : 'Submitted for the check');
+        reload();
+      }) }, rv === 'Rejected' ? '📤 Submit again' : '📤 Submit for check'));
+      if (checker && ['Submitted', 'Resubmitted'].includes(rv)) {
+        if (mine) A.push(h('span.muted', 'You made or submitted this enquiry. A different user must check it.'));
+        else {
+          A.push(h('button.btn.good', { onclick: busy(async () => {
+            if (!(await confirmBox(`Approve ${row.enquiry_no}? After this, the enquiry is read-only.`, 'Approve'))) return;
+            await review('approve'); toast('Approved'); reload();
+          }) }, '✓ Approve'));
+          A.push(h('button.btn.danger', { onclick: busy(async () => {
+            const why = h('textarea', { rows: 3, placeholder: 'For example: the client phone is missing.' });
+            if (!(await modal(`Reject ${row.enquiry_no}`, h('label', 'Reason for the rejection *', why), [{ label: 'Cancel', value: false }, { label: 'Reject', cls: 'danger solid', value: true }]))) return;
+            if (!why.value.trim()) throw new Error('Write the reason for the rejection.');
+            await review('reject', { reason: why.value.trim() }); toast('Rejected: the maker can correct it and submit again'); reload();
+          }) }, '✕ Reject'));
+        }
+      }
+      if (checker && approved) A.push(h('button.btn', { onclick: busy(async () => {
+        const why = h('input', { placeholder: 'Why do you reopen it? (optional)' });
+        if (!(await modal(`Reopen ${row.enquiry_no}`, h('div.grid', h('p', 'The enquiry becomes a Draft again. The maker can change it and submit it again.'), h('label', 'Note', why)), [{ label: 'Cancel', value: false }, { label: 'Reopen', cls: 'primary', value: true }]))) return;
+        await review('reopen', { note: why.value }); toast('Reopened'); reload();
+      }) }, '🔓 Reopen'));
+      if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { enquiry_id: id, customer_id: row.customer_id || undefined, hospital: row.hospital_name, site: row.place, title: [(row.type_of_work || []).join(', '), row.hospital_name].filter(Boolean).join(' – ') }) }, '🧮 Costing sheet'));
+      if (can('quotations')) A.push(h('button.btn', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));
       if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
-      if (can('enquiries')) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
+      if (can('enquiries') && !approved) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
       A.push(h('a.btn', { href: `#/print/techsheet/${id}`, target: '_blank' }, '📄 Techno-commercial sheet'));
-      if (!row.customer_id && can('customers') && row.hospital_name) {
+      if (!row.customer_id && can('customers') && row.hospital_name && !approved) {
         A.push(h('button.btn', { onclick: go(async () => {
-          const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, district: row.district, contact_person: row.doctor_name, phone: row.doctor_phone } });
+          const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, state: row.state || undefined, pincode: row.pin_code || undefined, contact_person: row.client_name, phone: row.client_phone } });
           await api(`/enquiries/${id}`, { method: 'PUT', body: { customer_id: c.id } });
           clearRefCache('customers');
           toast('Customer created and linked');
@@ -431,6 +465,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
         }) }, '🏥 Save hospital as Customer'));
       }
       break;
+    }
     case 'vendors': {
       const st = row.vendor_status;
       const may = hasFunction(state.user.role, 'vendor_approve');
@@ -1143,16 +1178,31 @@ export async function recordView(root, entity, id) {
   } else {
     row = await api(`/${entity}/${id}`);
   }
-  const locked = !isNew && LOCKED[entity]?.includes(row.status);
+  const locked = !isNew && lockedRow(entity, row);
   const writable = canWrite(entity, state.user.role) && !locked && !(isNew && ent.noCreate);
   const inputs = {};
   const conditional = [];
 
-  const grid = h('div.form-grid');
+  // A sectioned form (ent.sectioned, e.g. enquiries): each 'section' field starts a card that opens and closes, with
+  // its number, a short description, a one-line summary and how much is filled; a progress bar on top.
+  const sectioned = !!ent.sectioned;
+  const secs = [];
+  let grid = h('div.form-grid'), target = grid;
+  if (sectioned) grid = h('div.sec-form');
   for (const f of ent.fields) {
     if (f.hidden || f.type === 'json') continue;
-    if (f.type === 'section') { grid.append(h('div.span-all', { style: { borderTop: '1px solid var(--border)', marginTop: '10px', paddingTop: '10px' } }, h('div', { style: { fontWeight: 700, fontSize: '15px' } }, f.label), f.hint ? h('div.muted', { style: { fontSize: '12.5px', marginTop: '2px' } }, f.hint) : null)); continue; }
+    if (f.type === 'section' && sectioned && !f.sub) {
+      const body = h('div.form-grid'), sum = h('span.sec-sum'), count = h('span.sec-count');
+      const det = h('details.card.sec', { open: !f.collapsed }, h('summary', h('span.sec-no', String(secs.length + 1)), h('span.sec-head', h('span.sec-title', f.label), sum), count),
+        f.hint ? h('p.sec-hint', f.hint) : null, body);
+      secs.push({ f, det, body, sum, count, keys: [] });
+      grid.append(det);
+      target = body;
+      continue;
+    }
+    if (f.type === 'section') { target.append(h('div.span-all.sub-head', { style: { borderTop: '1px solid var(--border)', marginTop: '10px', paddingTop: '10px' } }, h('div', { style: { fontWeight: 700, fontSize: f.sub ? '14px' : '15px' } }, f.label), f.hint ? h('div.muted', { style: { fontSize: '12.5px', marginTop: '2px' } }, f.hint) : null)); continue; }
     if (isNew && (f.readonly || f.computed) && row[f.key] == null) continue;
+    secs.at(-1)?.keys.push(f.key);
     if (f.type === 'lines') {
       const ed = linesEditor(f, row[f.key], {
         readonly: !writable,
@@ -1161,7 +1211,7 @@ export async function recordView(root, entity, id) {
         extras: f.poTotals ? () => Object.fromEntries([...PO_CHARGES.map(([k]) => k), 'other_charges_label', 'charges_gst'].map(k => [k, inputs[k]?.get?.() ?? row[k]])) : null,
       });
       inputs[f.key] = ed;
-      grid.append(h('div.span-all', h('label', f.label), ed.el));
+      target.append(h('div.span-all', h('label', f.label), ed.el));
       continue;
     }
     const w = fieldInput(f, row[f.key], { readonly: !writable });
@@ -1172,7 +1222,7 @@ export async function recordView(root, entity, id) {
       lbl.append(h('a', { href: recordHref(f.ref, row[f.key]), style: { fontWeight: 400 } }, 'open ›'));
     }
     if (f.showIf) conditional.push([f, lbl]);
-    grid.append(lbl);
+    target.append(lbl);
   }
   // Fields that only apply to some movement types (e.g. supplier & invoice for Inward).
   const applyShowIf = () => {
@@ -1183,6 +1233,42 @@ export async function recordView(root, entity, id) {
   };
   for (const ctrl of new Set(conditional.map(([f]) => Object.keys(f.showIf)[0]))) inputs[ctrl]?.el.addEventListener('change', applyShowIf);
   applyShowIf();
+  // Sectioned form: summary line and "filled" count per section (its summary fields count as the key data), progress on top.
+  let progress = null;
+  if (sectioned) {
+    const fm = Object.fromEntries(ent.fields.map(f => [f.key, f]));
+    const valOf = k => (inputs[k] ? inputs[k].get() : row[k]);
+    const has = v => (Array.isArray(v) ? v.length > 0 : v != null && String(v).trim() !== '');
+    const show = (k, v) => (Array.isArray(v) ? (fm[k].type === 'lines' ? `${v.length} row(s)` : v.join(', ')) : fm[k].type === 'yn' ? `${fm[k].label}: ${v}` : fm[k].type === 'date' ? fmtDate(v) : String(v));
+    for (const s of secs.filter(s => !s.body.childElementCount)) { s.det.remove(); secs.splice(secs.indexOf(s), 1); }
+    secs.forEach((s, i) => { s.det.querySelector('.sec-no').textContent = String(i + 1); });
+    const bar = h('div.progress-fill'), txt = h('span');
+    progress = h('div.card.sec-progress', h('div.progress-row', h('b', 'Form progress'), txt), h('div.progress', { role: 'progressbar', 'aria-label': 'Form progress' }, bar));
+    const refresh = () => {
+      let done = 0, counted = 0;
+      for (const s of secs) {
+        const keys = s.keys.filter(k => !fm[k].readonly || has(valOf(k)));
+        const key = (s.f.summary || keys).filter(k => s.keys.includes(k));
+        const filled = keys.filter(k => has(valOf(k))).length;
+        s.count.textContent = keys.length ? `${filled} / ${keys.length}` : '';
+        const shown = (s.f.summary || []).filter(k => s.keys.includes(k) && has(valOf(k))).map(k => show(k, valOf(k)));
+        s.sum.textContent = shown.length ? shown.join(' · ') : (s.f.summary ? 'Not filled in' : '');
+        if (!key.length) continue;
+        counted++;
+        const ok = key.every(k => has(valOf(k)));
+        if (ok) done++;
+        s.det.classList.toggle('sec-done', ok);
+      }
+      const pct = counted ? Math.round((done / counted) * 100) : 0;
+      bar.style.width = `${pct}%`;
+      progress.querySelector('[role=progressbar]').setAttribute('aria-valuenow', String(pct));
+      txt.textContent = `${done} of ${counted} sections complete`;
+    };
+    grid.addEventListener('input', refresh);
+    grid.addEventListener('change', refresh);
+    grid.addEventListener('click', e => { if (e.target.closest('button')) setTimeout(refresh); });
+    refresh();
+  }
   if (entity === 'items' && isNew && inputs.code && inputs.category) {
     const showNext = () => api(`/items/next-code?category=${encodeURIComponent(inputs.category.get() || '')}`).then(r => { inputs.code.el.placeholder = `${r.code} (given automatically)`; }).catch(() => {});
     inputs.category.el.addEventListener('change', showNext);
@@ -1236,6 +1322,12 @@ export async function recordView(root, entity, id) {
     if (isNew) for (const k of Object.keys(presets)) if (!(k in body) && ent.fields.some(f => f.key === k)) body[k] = row[k];
     const missing = ent.fields.find(f => f.required && !f.readonly && inputs[f.key] && (body[f.key] === null || body[f.key] === ''));
     if (missing) throw new Error(`${missing.label} is required`);
+    // Format and range checks given in the schema (e.g. PIN Code 6 digits, RH 40–60 %); the server checks them again.
+    for (const f of ent.fields.filter(f => f.key in body && body[f.key] != null && body[f.key] !== '')) {
+      if (f.pattern && !new RegExp(`^(?:${f.pattern})$`).test(String(body[f.key]).trim())) throw new Error(`${f.label}: ${f.hint || 'the value is not correct.'}`);
+      if ((f.min != null && body[f.key] < f.min) || (f.max != null && body[f.key] > f.max)) throw new Error(`${f.label}: use a value ${f.max != null ? `from ${f.min ?? 0} to ${f.max}` : `of ${f.min} or more`}.`);
+    }
+    if (entity === 'enquiries' && body.rh_min != null && body.rh_max != null && body.rh_min > body.rh_max) throw new Error('RH: the minimum must not be more than the maximum.');
     const wasNew = isNew;
     const saved = isNew
       ? await api(`/${entity}`, { method: 'POST', body })
@@ -1282,6 +1374,7 @@ export async function recordView(root, entity, id) {
     h('div.page-head',
       h('a.btn.small', { href: `#/list/${entity}` }, '‹ Back'),
       h('h1', `${ent.icon} ${title}`), statusVal ? badge(statusVal) : null,
+      entity === 'enquiries' && !isNew ? h('span', { title: 'Review (maker-checker)' }, badge(r.review_status || 'Draft')) : null,
       r.approval_stage ? h('span.badge.warn', `waiting: ${r.approval_stage}`) : null,
       locked ? h('span.muted', '🔒 locked') : null,
       h('div.actions',
@@ -1302,7 +1395,9 @@ export async function recordView(root, entity, id) {
     !isNew && entity === 'purchase_orders' && r.requisition_id ? requisitionCard(r.requisition_id) : null,
     !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
-    h('div.card', grid),
+    !isNew && entity === 'enquiries' ? reviewPanel(r) : null,
+    progress,
+    sectioned ? grid : h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
       `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
     isNew ? (writable ? newFiles.el : null) : attachments(entity, r.id, canWrite(entity, state.user.role)),
@@ -1311,6 +1406,28 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
+}
+
+// ---------------------------------------------------------------- enquiry review (maker-checker) and its history
+function reviewPanel(r) {
+  const st = r.review_status || 'Draft';
+  const log = Array.isArray(r.review_log) ? r.review_log : [];
+  const what = {
+    Draft: 'Draft. The maker fills in the form and submits it for the check.',
+    Submitted: 'Submitted. A checker (a different user) must approve or reject it.',
+    Resubmitted: 'Submitted again after a rejection. A checker must approve or reject it.',
+    Approved: 'Approved. The enquiry is read-only. Only a checker can reopen it.',
+    Rejected: 'Rejected. Correct the enquiry and submit it again.',
+  }[st] || st;
+  return h('details.card.review', { open: st === 'Rejected' },
+    h('summary', h('b', 'Review (maker-checker): '), badge(st), ' ', h('span.muted', what)),
+    h('div.review-facts',
+      r.submitted_by ? h('div', h('span.muted', 'Submitted by: '), r.submitted_by) : null,
+      r.approved_by ? h('div', h('span.muted', 'Approved by: '), r.approved_by) : null,
+      st === 'Rejected' && r.reject_reason ? h('div.review-reject', h('b', 'Reason for the rejection: '), r.reject_reason) : null),
+    log.length ? h('table.data', h('thead', h('tr', ['Date and time', 'User', 'Action', 'Note'].map(t => h('th', t)))),
+      h('tbody', [...log].reverse().map(e => h('tr', h('td.nowrap', e.at || ''), h('td', e.by || ''), h('td', badge(e.action) || e.action), h('td', e.note || '')))))
+      : h('p.muted', 'No review actions yet.'));
 }
 
 // ---------------------------------------------------------------- the document inside its approval request
