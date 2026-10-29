@@ -9,6 +9,7 @@ import { beforeSaveTask, afterSaveTask } from './worktasks.js';
 import { applyBaseline } from './schedule.js';
 import { afterDispatchPlan, challanToPlan } from './planning.js';
 import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
+import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './production.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -381,6 +382,18 @@ export function beforeSave(name, row, existing, user) {
     case 'material_requests':
       if (!existing && !row.mr_no) row.mr_no = docNo('material_request', date, (n, fy) => `MR-${n}/20${fy}`);
       break;
+    case 'production_orders':
+      if (!existing && !row.order_no) row.order_no = docNo('production_order', date, (n, fy) => `PRO-${n}/20${fy}`);
+      prepOrder(row, existing);
+      break;
+    case 'production_plans':
+      prepPlan(row, existing);
+      break;
+    case 'production_reports':
+      if (!existing && !row.report_no) row.report_no = docNo('production_report', date, (n, fy) => `DPR-${n}/20${fy}`);
+      prepReport(row, existing);
+      beforeReport(existing);
+      break;
     case 'production_entries': {
       if (!existing && !row.entry_no) row.entry_no = docNo('production', date, (n, fy) => `PRD-${n}/20${fy}`);
       const fg = row.fg_item_id ?? existing?.fg_item_id;
@@ -730,6 +743,7 @@ export function afterSave(name, id, user, deleted) {
   if (name === 'work_tasks' && !deleted) afterSaveTask(id, user);
   if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
   if (name === 'dispatch_plans' && !deleted) afterDispatchPlan(id, user);
+  if (name === 'production_reports') afterReport(id, deleted);
   if (name === 'vendor_evaluations' && !deleted) afterEvaluation(id, user);
   if (name === 'challans' && !deleted) challanToPlan(id);
   if (name === 'credit_notes') {

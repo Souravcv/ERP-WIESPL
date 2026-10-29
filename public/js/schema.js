@@ -112,6 +112,9 @@ for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].pus
 for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
 for (const r of ['purchase', 'purchase_head', 'accounts', 'technical', 'planning']) ROLE_SEES[r].push('vendor_evaluations', 'vendor_complaints', 'vendor_audits');
 ROLE_SEES.store.push('vendor_complaints');
+ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports');
+ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports');
+ROLE_SEES.store.push('production_orders');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 // Whoever sees projects sees their schedule (Project Planner).
@@ -130,6 +133,8 @@ export const FUNCTIONS = {
   stock_opening: 'Create 1 April opening stock for all items',
   stock_post: 'Post draft issue slips / dispatch challans / transfers (reduces stock) and process material requests',
   production_post: 'Post production entries (finished goods into stock)',
+  production_release: 'Production – release production orders (drawing, BOM and material checked), hold / cancel / close them, reopen daily reports',
+  production_plan_approve: 'Production head – approve the monthly production plan',
   hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
   hr_confirm: 'Management – approve confirmation / extension of probation',
   leave_approve: 'Approve leave requests',
@@ -166,10 +171,10 @@ export const DEFAULT_FUNCTIONS = {
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
-  production: ['production_post'],
+  production: ['production_post', 'production_release'],
   hr: ['hr_manage', 'leave_approve', 'task_assign'],
   service: ['import', 'task_assign'],
-  planning: ['task_assign', 'notify_work_order', 'notify_po'],
+  planning: ['task_assign', 'notify_work_order', 'notify_po', 'production_release'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -198,6 +203,7 @@ export const APPROVAL_FLOWS = {
   Leave: [{ stage: 'Approval', fn: 'leave_approve' }],
   Confirmation: [{ stage: 'Management', fn: 'hr_confirm' }],
   'Schedule Baseline': [{ stage: 'Projects Head', fn: 'schedule_baseline' }],
+  'Production Plan': [{ stage: 'Production Head', fn: 'production_plan_approve' }],
 };
 // Project Planner: who does an activity, and why it ran late (the delay list of the WIESPL / MSP schedules).
 export const SCHEDULE_PARTIES = ['WIESPL', 'Client', 'Vendor', 'PMC', 'Other'];
@@ -205,6 +211,13 @@ export const DELAY_REASONS = ['', 'Customer input delay', 'Customer approval del
   'Vendor input delay', 'Vendor readiness / manufacturing delay', 'Internal submission delay', 'Internal changes', 'Techno-commercial risk',
   'Optimisation delay', 'Priority issue', 'PR / PO delay', 'Material shortage', 'Dispatch / transport issue', 'Contractor manpower issue',
   'Payment issue', 'Power supply delay', 'Customer audit / permit issue', 'Hiring equipment not available', 'Material theft / damage at site', 'Other'];
+// Production Policy (Vol 2 + formats): product categories, the shop-floor stages an order goes through, and the
+// standard delay codes of the delay analysis format (a line that made less than planned needs one).
+export const PROD_CATEGORIES = ['PUF panels', 'Doors', 'LAF plenum', 'View panels / windows', 'Storage / cabinets', 'HVAC ducting', 'AHU', 'Electrical panel', 'Sheet metal / misc', 'Other'];
+export const PROD_STAGES = ['Material preparation', 'Laser cutting', 'Shearing', 'CNC bending', 'Fabrication / welding', 'PUF foaming', 'Powder coating', 'Assembly', 'Finished (final QC passed)', 'Packed'];
+export const PROD_FINISHED = 'Finished (final QC passed)';
+export const PROD_DELAY_CODES = ['', 'M01 Material shortage', 'M02 Material quality issue', 'D01 Drawing pending', 'D02 Design change', 'P01 Machine breakdown', 'P02 Labour shortage',
+  'P03 Low productivity', 'Q01 QC rejection', 'Q02 Rework', 'C01 Client scope change', 'C02 Client approval pending', 'X01 Other (write in remark)'];
 const BILL_DN = '(SELECT COALESCE(SUM(d.amount),0) FROM debit_notes d WHERE d.bill_id = {t}.id)';
 const BILL_DIRECT = "(SELECT COALESCE(SUM(p.amount),0) FROM vendor_payments p WHERE p.bill_id = {t}.id AND p.status = 'Paid')";
 const BILL_OWN = `(COALESCE({t}.amount,0) - ${BILL_DN} - ${BILL_DIRECT})`;
@@ -1992,6 +2005,121 @@ export const ENTITIES = {
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
+  // Production Policy Vol 2: nothing is made without a production order released against an approved drawing, a
+  // verified BOM, the project code and the material. The daily reports fill in what each stage made.
+  production_orders: {
+    label: 'Production Orders', singular: 'Production Order', group: 'Production', icon: '🧾', write: ['admin', 'manager', 'production', 'planning'], print: 'prodorder',
+    display: "{t}.order_no || ' · ' || substr(COALESCE({t}.description, ''), 1, 60)",
+    search: ['order_no', 'description', 'drawing_no', 'responsible', 'remarks'],
+    list: ['order_no', 'project_id', 'category', 'description', 'qty', 'qty_done', 'progress', 'target_date', 'stage', 'late', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'order_no', label: 'Production Order No', type: 'text', readonly: true, hint: 'Auto: PRO-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'project_id', label: 'Project (project code)', type: 'ref', ref: 'projects', required: true },
+      { key: 'work_order_id', label: 'Client Work Order', type: 'ref', ref: 'boqs' },
+      { key: 'bom_id', label: 'BOQ / Bill of Material', type: 'ref', ref: 'boms' },
+      { key: 'category', label: 'Product Category', type: 'select', options: PROD_CATEGORIES, required: true },
+      { key: 'description', label: 'What is made', type: 'text', required: true, span: 2, hint: 'e.g. Hermetic sliding doors 1200 × 2100, OT 1–3' },
+      { key: 'qty', label: 'Quantity', type: 'number', required: true },
+      { key: 'uom', label: 'UOM', type: 'text', default: 'Nos', suggest: ['Nos', 'Set', 'Sq. Ft', 'Sq. Mtr', 'RFt', 'Kg', 'Lot'] },
+      { key: 'drawing_no', label: 'Drawing No', type: 'text' },
+      { key: 'drawing_rev', label: 'Drawing Revision', type: 'text', hint: 'Make only from the latest approved revision' },
+      { key: 'planned_start', label: 'Planned Start', type: 'date' },
+      { key: 'target_date', label: 'Target Completion', type: 'date', required: true },
+      { key: 'dispatch_date', label: 'Tentative Dispatch', type: 'date' },
+      { key: 'priority', label: 'Priority', type: 'select', options: ['High', 'Medium', 'Low'], default: 'Medium' },
+      { key: 'responsible', label: 'Responsible (supervisor)', type: 'person' },
+      { key: 'machine', label: 'Main Machine / Line', type: 'text', suggest: ['Laser cutting', 'CNC bending', 'Shearing', 'PUF line', 'Powder coating', 'Welding', 'Assembly'] },
+      { key: 'planned_hours', label: 'Planned Labour Hours', type: 'number', hint: 'Man-hours for the whole order (standard time)' },
+      { key: 'drawing_ok', label: 'Approved drawing received', type: 'yn', default: 'No', hint: 'Release check 1' },
+      { key: 'bom_ok', label: 'BOM verified', type: 'yn', default: 'No', hint: 'Release check 2' },
+      { key: 'material_ok', label: 'Material', type: 'select', options: ['', 'Available', 'Partly – rest by date', 'Not available'], hint: 'Release check 3 (store / production stock)' },
+      { key: 'material_note', label: 'Material Note', type: 'text', span: 2, hint: 'What is short and when it comes' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Released', 'In production', 'Completed', 'On hold', 'Cancelled'], default: 'Draft', readonly: true },
+      { key: 'released_by', label: 'Released By', type: 'text', readonly: true },
+      { key: 'released_on', label: 'Released On', type: 'date', readonly: true },
+      { key: 'stage', label: 'Furthest Stage', type: 'text', readonly: true },
+      { key: 'qty_done', label: 'Finished Qty', type: 'number', readonly: true, hint: `Made at “${PROD_FINISHED}” on submitted daily reports` },
+      { key: 'progress', label: 'Progress %', type: 'number', readonly: true },
+      { key: 'hours_used', label: 'Labour Hours Used', type: 'number', readonly: true },
+      { key: 'stage_summary', label: 'Done per Stage', type: 'textarea', span: 2, readonly: true },
+      { key: 'completed_on', label: 'Completed On', type: 'date', readonly: true },
+      { key: 'late', label: 'Late', type: 'text', computed: "CASE WHEN {t}.status IN ('Draft', 'Released', 'In production', 'On hold') AND {t}.target_date < date('now', 'localtime') THEN 'Yes' WHEN {t}.status = 'Completed' AND {t}.completed_on > {t}.target_date THEN 'Was late' ELSE '' END" },
+      { key: 'hold_reason', label: 'Hold / Cancel Reason', type: 'text', span: 2, readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Monthly production plan (format “Monthly Production Planning”), made before the 25th for the next month and
+  // approved by the production head; each order's target is split into the weeks (1–7, 8–14, 15–21, 22–28, 29–end).
+  production_plans: {
+    label: 'Monthly Production Plans', singular: 'Production Plan', group: 'Production', icon: '🗓️', write: ['admin', 'manager', 'production', 'planning'], print: 'prodplan',
+    display: "{t}.plan_no",
+    search: ['plan_no', 'month', 'remarks'],
+    list: ['plan_no', 'month', 'rev', 'orders', 'total_target', 'prepared_by', 'approved_by', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'plan_no', label: 'Plan No', type: 'text', readonly: true, hint: 'Auto: PP-2026-11' },
+      { key: 'month', label: 'Month (YYYY-MM)', type: 'text', required: true, hint: 'e.g. 2026-11' },
+      { key: 'rev', label: 'Revision', type: 'number', default: 0, readonly: true },
+      { key: 'prepared_by', label: 'Prepared By', type: 'person', default: 'me' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+      { key: 'lines', label: 'Orders this month', type: 'lines', span: 2, amounts: false, hint: 'Target = finished qty planned this month; W1–W5 = its split per week (blank weeks: spread by working days)', columns: [
+        { key: 'order_id', label: 'Production order', type: 'ref', ref: 'production_orders', width: 230 },
+        { key: 'description', label: 'Product', type: 'text', width: 200 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 60 },
+        { key: 'balance', label: 'Balance at plan', type: 'number', width: 80 },
+        { key: 'target', label: 'Target', type: 'number', width: 70 },
+        { key: 'w1', label: 'W1', type: 'number', width: 56 },
+        { key: 'w2', label: 'W2', type: 'number', width: 56 },
+        { key: 'w3', label: 'W3', type: 'number', width: 56 },
+        { key: 'w4', label: 'W4', type: 'number', width: 56 },
+        { key: 'w5', label: 'W5', type: 'number', width: 56 },
+        { key: 'planned_hours', label: 'Man-hours', type: 'number', width: 70 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 140 },
+      ] },
+      { key: 'orders', label: 'Orders', type: 'number', computed: "json_array_length(COALESCE(NULLIF({t}.lines, ''), '[]'))" },
+      { key: 'total_target', label: 'Total Target', type: 'number', computed: "(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.target') AS REAL)), 0) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j)" },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Daily production report (supervisor, end of shift): per order and stage what was planned and what was made; a
+  // shortfall needs a delay code. Submitted reports move the orders' finished qty and stage.
+  production_reports: {
+    label: 'Daily Production Reports', singular: 'Daily Production Report', group: 'Production', icon: '📋', write: ['admin', 'manager', 'production', 'planning'], print: 'prodday',
+    display: "{t}.report_no || ' · ' || {t}.date",
+    search: ['report_no', 'supervisor', 'remarks'],
+    list: ['report_no', 'date', 'shift', 'supervisor', 'manpower', 'planned_total', 'done_total', 'achievement', 'delays', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'report_no', label: 'Report No', type: 'text', readonly: true, hint: 'Auto: DPR-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'shift', label: 'Shift', type: 'select', options: ['General', 'Day', 'Night'], default: 'General' },
+      { key: 'supervisor', label: 'Supervisor', type: 'person', default: 'me' },
+      { key: 'manpower', label: 'Workers Present', type: 'number' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Submitted'], default: 'Draft', readonly: true },
+      { key: 'lines', label: 'Work done', type: 'lines', span: 2, amounts: false, hint: 'One line per order and stage. Made less than planned: give the delay code', columns: [
+        { key: 'order_id', label: 'Production order', type: 'ref', ref: 'production_orders', width: 230 },
+        { key: 'stage', label: 'Stage', type: 'select', options: PROD_STAGES, width: 170 },
+        { key: 'planned', label: 'Planned', type: 'number', width: 70 },
+        { key: 'done', label: 'Done', type: 'number', width: 70 },
+        { key: 'rejected', label: 'Rejected / rework', type: 'number', width: 80 },
+        { key: 'uom', label: 'UOM', type: 'text', width: 60 },
+        { key: 'workers', label: 'Workers', type: 'number', width: 64 },
+        { key: 'hours', label: 'Man-hours', type: 'number', width: 70 },
+        { key: 'delay_code', label: 'Delay code', type: 'select', options: PROD_DELAY_CODES, width: 180 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 150 },
+      ] },
+      { key: 'planned_total', label: 'Planned', type: 'number', computed: "(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.planned') AS REAL)), 0) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j)" },
+      { key: 'done_total', label: 'Done', type: 'number', computed: "(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.done') AS REAL)), 0) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j)" },
+      { key: 'achievement', label: 'Achieved %', type: 'number', computed: "(SELECT CASE WHEN SUM(CAST(json_extract(j.value, '$.planned') AS REAL)) > 0 THEN ROUND(100.0 * SUM(MIN(COALESCE(CAST(json_extract(j.value, '$.done') AS REAL), 0), CAST(json_extract(j.value, '$.planned') AS REAL))) / SUM(CAST(json_extract(j.value, '$.planned') AS REAL))) END FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j WHERE CAST(json_extract(j.value, '$.planned') AS REAL) > 0)" },
+      { key: 'delays', label: 'Delays', type: 'number', computed: "(SELECT COUNT(*) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j WHERE COALESCE(json_extract(j.value, '$.delay_code'), '') <> '')" },
+      { key: 'submitted_by', label: 'Submitted By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks / issues', type: 'textarea', span: 2 },
+    ],
+  },
   // Outward (issue slip / dispatch challan) and transfers are prepared as drafts: nothing leaves the stock until someone
   // allowed to post checks and posts the draft; posting gives the issue / transfer / challan number.
   stock_drafts: {
@@ -2064,7 +2192,7 @@ export const ENTITIES = {
   },
 };
 
-export const GROUPS = ['Tasks', 'CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'HR'];
+export const GROUPS = ['Tasks', 'CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'Production', 'HR'];
 
 export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));

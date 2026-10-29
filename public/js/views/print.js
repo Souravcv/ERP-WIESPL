@@ -549,6 +549,9 @@ export async function printView(root, kind, id) {
   } else if (['bond', 'onboarding', 'probation', 'confirmation', 'acceptance', 'relieving', 'fnf', 'exitinterview'].includes(kind)) {
     const { hrDoc } = await import('./hrprint.js');
     ({ doc, title } = await hrDoc(kind, id, s));
+  } else if (['prodorder', 'prodplan', 'prodday', 'prodmonth'].includes(kind)) {
+    const { prodDoc } = await import('./prodprint.js');
+    ({ doc, title } = await prodDoc(kind, id, s));
   } else throw new Error('Unknown document');
   document.title = title;
   root.replaceChildren(bar(title), doc);

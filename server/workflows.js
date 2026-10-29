@@ -22,6 +22,8 @@ const DOCS = {
   Confirmation: { entity: 'probation_reviews', ref: 'review_no', amount: null, noLines: true, submitFrom: ['Due', 'Done'],
     title: r => `${r.recommendation || 'Decision'} – ${r.employee_id_label || ''} – ${r.stage}${r.score != null ? ' – score ' + r.score + '%' : ''}${r.recommendation === 'Extend probation' ? ' by ' + (r.extend_months || 1) + ' month(s)' : ''}${r.effective_date ? ' w.e.f. ' + r.effective_date : ''}` },
   'Schedule Baseline': { entity: 'schedule_baselines', ref: 'rev', amount: null, noLines: true, title: r => `Project schedule baseline ${r.rev} – ${r.project_id_label || ''}${r.finish ? ' – finish ' + r.finish : ''}` },
+  'Production Plan': { entity: 'production_plans', ref: 'plan_no', amount: null, noLines: true,
+    title: r => `Production plan ${r.month}${r.rev ? ' rev ' + r.rev : ''} – ${(r.lines || []).length} order(s), target ${(r.lines || []).reduce((s, l) => s + (Number(l.target) || 0), 0)}` },
   'Credit Note': { entity: 'credit_notes', ref: 'cn_no', amount: 'total', noLines: true, title: r => `Credit note to ${r.customer_id_label || ''} on ${r.invoice_id_label || ''} – ${r.reason}` },
 };
 // Payments / expenses: the GM step only above the approval limit or outside the PO terms.
@@ -29,7 +31,7 @@ const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews'];
+const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews', 'production_plans'];
 
 export function canApprove(docType, stage, user, ap = null) {
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
@@ -58,6 +60,7 @@ export function submitForApproval(docType, id, user) {
   }
   if (!['Draft', 'Rejected', ...(d.submitFrom || [])].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
   if (docType === 'Confirmation' && !['Confirm', 'Extend probation', 'Not suitable – separate'].includes(row.recommendation)) throw new HttpError(400, 'Choose the recommendation (confirm, extend or not suitable) first');
+  if (docType === 'Production Plan' && !(row.lines || []).some(l => l.order_id && Number(l.target) > 0)) throw new HttpError(400, 'Give at least one production order a target for the month');
   if (docType !== 'Quotation' && !d.noLines && !(row.lines || []).some(l => Number(l.qty) > 0)) throw new HttpError(400, 'Add at least one line with a quantity first');
   const flow = APPROVAL_FLOWS[docType];
   if (d.settingKey && getSettings()[d.settingKey] === 'No') {

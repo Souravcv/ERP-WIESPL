@@ -15,10 +15,14 @@ const LOCKED = {
   payments: ['Received', 'Reversed'],
   credit_notes: ['Pending Approval', 'Approved'],
   sales_orders: ['Pending Approval', 'Approved', 'In Execution', 'Completed', 'Cancelled'],
+  production_plans: ['Pending Approval', 'Approved'],
+  production_reports: ['Submitted'],
+  production_orders: ['Completed', 'Cancelled'],
 };
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
-  vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status) };
+  vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status),
+  production_reports: r => r.status === 'Submitted' };
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
   || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
@@ -709,6 +713,67 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (st !== 'Draft') A.push(h('a.btn', { href: `#/list/stock_drafts?mr_id=${id}` }, '📝 Its issue slips / MTNs'));
       break;
     }
+    case 'production_orders': {
+      const st = row.status, rel = hasFunction(state.user.role, 'production_release');
+      const act = async (action, body) => { await post(`/production_orders/${id}/act/${action}`, body); reload(); };
+      const why = async (title, label) => { const r = h('input', { placeholder: 'Reason' }); return (await modal(title, h('label', 'Reason', r), [{ label: 'Cancel', value: false }, { label, cls: 'primary', value: true }])) && r.value.trim() ? r.value.trim() : null; };
+      if (rel && st === 'Draft') A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (!(await confirmBox(`Release ${row.order_no} to production? Checked: approved drawing ${row.drawing_ok === 'Yes' ? '✔' : '✘'}, BOM ${row.bom_ok === 'Yes' ? '✔' : '✘'}, material ${row.material_ok || '✘'}.`, 'Release'))) return;
+        await act('release'); toast('Released to production');
+      }) }, '🚦 Release to production'));
+      if (rel && ['Draft', 'Released', 'In production'].includes(st)) A.push(h('button.btn', { onclick: go(async () => { const r = await why(`Put ${row.order_no} on hold`, 'Hold'); if (r) await act('hold', { reason: r }); }) }, '⏸ Hold'));
+      if (rel && st === 'On hold') A.push(h('button.btn', { onclick: go(() => act('resume')) }, '▶ Resume'));
+      if (rel && ['Released', 'In production'].includes(st)) A.push(h('button.btn', { onclick: go(async () => { const r = await why(`Close ${row.order_no} at ${row.qty_done || 0} of ${row.qty}`, 'Close short'); if (r) await act('close', { reason: r }); }) }, '⏹ Close short'));
+      if (rel && !['Completed', 'Cancelled'].includes(st)) A.push(h('button.btn.danger', { onclick: go(async () => { const r = await why(`Cancel ${row.order_no}`, 'Cancel order'); if (r) await act('cancel', { reason: r }); }) }, 'Cancel order'));
+      if (can('production_reports') && ['Released', 'In production'].includes(st)) A.push(h('button.btn', { onclick: () => { location.hash = '#/production/day'; } }, '📋 Daily report'));
+      A.push(h('a.btn', { href: `#/print/prodorder/${id}`, target: '_blank' }, '🖨 Production release note'));
+      break;
+    }
+    case 'production_plans': {
+      const st = row.status;
+      if (can(entity) && ['Draft', 'Rejected'].includes(st)) {
+        A.push(h('button.btn', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const cur = (await api(`/production_plans/${id}`)).lines || [];
+          const add = (await api(`/production/fill-plan?month=${row.month}`)).filter(l => !cur.some(c => Number(c.order_id) === l.order_id));
+          if (!add.length) { toast('Every open order is already in the plan'); return; }
+          await api(`/production_plans/${id}`, { method: 'PUT', body: { lines: [...cur, ...add] } });
+          toast(`${add.length} open order(s) added`); reload();
+        }) }, '⤓ Add open orders'));
+        A.push(h('button.btn.primary', { onclick: submit }, '📤 Submit for approval'));
+      }
+      if (st === 'Approved' && (hasFunction(state.user.role, 'production_plan_approve') || hasFunction(state.user.role, 'production_release'))) A.push(h('button.btn', { onclick: go(async () => {
+        if (!(await confirmBox(`Revise ${row.plan_no}? It goes back to Draft (revision ${(row.rev || 0) + 1}) and needs approval again.`, 'Revise'))) return;
+        await post(`/production_plans/${id}/act/revise`); reload();
+      }) }, '✎ Revise'));
+      A.push(h('a.btn', { href: `#/production/plan?month=${row.month}` }, '📊 Plan vs actual'), h('a.btn', { href: `#/print/prodplan/${id}`, target: '_blank' }, '🖨 Print plan'));
+      break;
+    }
+    case 'production_reports': {
+      const st = row.status;
+      if (can(entity) && st === 'Draft') {
+        A.push(h('button.btn', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const cur = (await api(`/production_reports/${id}`)).lines || [];
+          const add = (await api(`/production/suggest-day?date=${row.date}`)).filter(l => !cur.some(c => Number(c.order_id) === l.order_id));
+          if (!add.length) { toast('Every released order is already on the report'); return; }
+          await api(`/production_reports/${id}`, { method: 'PUT', body: { lines: [...cur, ...add] } });
+          toast(`${add.length} order(s) added with today’s plan`); reload();
+        }) }, '⤓ Add released orders'));
+        A.push(h('button.btn.primary', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          await post(`/production_reports/${id}/submit`); toast('Daily report submitted'); reload();
+        }) }, '📤 Submit report'));
+      }
+      if (st === 'Submitted' && hasFunction(state.user.role, 'production_release')) A.push(h('button.btn', { onclick: go(async () => {
+        const r = h('input', { placeholder: 'Reason' });
+        if (!(await modal(`Reopen ${row.report_no}`, h('label', 'Why (e.g. quantity typed wrong)', r), [{ label: 'Cancel', value: false }, { label: 'Reopen', cls: 'primary', value: true }])) || !r.value.trim()) return;
+        await post(`/production_reports/${id}/reopen`, { reason: r.value.trim() }); reload();
+      }) }, '↺ Reopen'));
+      A.push(h('a.btn', { href: `#/production/day?date=${row.date}` }, '📊 Day review'), h('a.btn', { href: `#/print/prodday/${id}`, target: '_blank' }, '🖨 Print'));
+      break;
+    }
     case 'production_entries':
       if (row.status === 'Draft' && hasFunction(state.user.role, 'production_post')) A.push(h('button.btn.good', { onclick: go(async () => {
         if (ctx.save) await ctx.save({ quiet: true });
@@ -1146,7 +1211,7 @@ export async function recordView(root, entity, id) {
   grid.addEventListener('input', keep.touch);
   grid.addEventListener('change', keep.touch);
   const r = row;
-  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
+  const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.order_no || r.plan_no || r.report_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
     h('div.page-head',
@@ -1185,7 +1250,7 @@ export async function recordView(root, entity, id) {
 
 // ---------------------------------------------------------------- the document inside its approval request
 const APPROVAL_DOCS = { Quotation: 'quotations', 'Purchase Order': 'purchase_orders', Requisition: 'requisitions', 'Sales Order': 'sales_orders', Payment: 'vendor_payments',
-  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes', Confirmation: 'probation_reviews' };
+  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes', Confirmation: 'probation_reviews', 'Production Plan': 'production_plans' };
 const shown = (f, v, row) => {
   if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
   if (f.type === 'ref') return row[f.key + '_label'] || `#${v}`;

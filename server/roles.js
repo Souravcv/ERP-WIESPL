@@ -169,6 +169,17 @@ export function seedRoles() {
     if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'hr_confirm'])]; db.prepare("UPDATE roles SET perms = ? WHERE name = 'manager'").run(JSON.stringify(p)); }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_hrfile_v1', '\"1\"')").run();
   }
+  // Production planning (once): production / planning release orders; the GM approves the monthly plan.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_production_v1'").get()) {
+    for (const [name, fns] of [['manager', ['production_release', 'production_plan_approve']], ['production', ['production_release']], ['planning', ['production_release']]]) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (!r) continue;
+      const p = parse(r.perms);
+      p.functions = [...new Set([...(p.functions || []), ...fns])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_production_v1', '\"1\"')").run();
+  }
   // Task scheduler (once): heads may assign tasks to others.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tasks_v1'").get()) {
     for (const name of ['manager', 'hr', 'technical', 'purchase_head', 'service']) {

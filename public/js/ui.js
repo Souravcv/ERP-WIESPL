@@ -108,9 +108,9 @@ export const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 
 const STATUS_TONE = {
   good: ['Won', 'Delivered', 'Approved', 'Paid', 'Completed', 'Received', 'Done', 'Closed', 'Resolved', 'Approved with Comments', 'Active', 'Yes', 'Final', 'Reviewed', 'Reserved', 'In stock'],
-  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order'],
+  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order', 'In production', 'On hold'],
   bad: ['Lost', 'Rejected', 'Cancelled', 'Regret', 'Critical', 'Overdue', 'Short', 'Short (no store item)', 'Late'],
-  info: ['New', 'Quoted', 'Sent', 'Issued', 'In Execution', 'Draft', 'Dispatched', 'Make in-house'],
+  info: ['New', 'Quoted', 'Sent', 'Issued', 'In Execution', 'Draft', 'Dispatched', 'Make in-house', 'Released'],
 };
 export function badge(s) {
   if (!s) return '';

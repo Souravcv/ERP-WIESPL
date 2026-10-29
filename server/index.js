@@ -37,6 +37,7 @@ import * as lots from './lots.js';
 import * as vend from './vendors.js';
 import * as hrp from './hrpolicy.js';
 import * as hrf from './hrfile.js';
+import * as prod from './production.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -198,6 +199,8 @@ const DOC_SERIES = [
   { key: 'challan_ret', label: 'Returnable Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `RE-${n}/20${fy}` },
   { key: 'material_request', label: 'Material Request (to store)', table: 'material_requests', col: 'mr_no', fmt: (n, fy) => `MR-${n}/20${fy}` },
   { key: 'production', label: 'Production Entry', table: 'production_entries', col: 'entry_no', fmt: (n, fy) => `PRD-${n}/20${fy}` },
+  { key: 'production_order', label: 'Production Order', table: 'production_orders', col: 'order_no', fmt: (n, fy) => `PRO-${n}/20${fy}` },
+  { key: 'production_report', label: 'Daily Production Report', table: 'production_reports', col: 'report_no', fmt: (n, fy) => `DPR-${n}/20${fy}` },
   { key: 'swo', label: 'Service Work Order', table: 'service_work_orders', col: 'swo_no', fmt: (n, fy) => `SW/${n}/20${fy}` },
   { key: 'service_report', label: 'Service Report', table: 'service_reports', col: 'report_no', fmt: (n, fy) => `SR-${n}/20${fy}` },
   { key: 'rca', label: 'Root Cause Analysis', table: 'rca_reports', col: 'rca_no', fmt: (n, fy) => `RCA-${n}/20${fy}` },
@@ -574,6 +577,19 @@ api.post('/production_entries/:id/post', wrap(req => sf.postProduction(req.param
 const prodView = req => { if (!canView('production_entries', req.user.role)) throw new HttpError(403, 'No access to production'); };
 api.get('/production/stock', wrap(req => { prodView(req); return sf.productionStock(); }));
 api.get('/production/daily', wrap(req => { prodView(req); return sf.dailyOutput(req.query); }));
+// Production planning & daily review.
+const planView = req => { if (!canView('production_orders', req.user.role)) throw new HttpError(403, 'No access to production orders'); };
+api.get('/production/board', wrap(req => { planView(req); return prod.board(); }));
+api.get('/production/month', wrap(req => { planView(req); return prod.monthReview(req.query.month || undefined); }));
+api.get('/production/day', wrap(req => { planView(req); return prod.dayReview(req.query.date || undefined); }));
+api.get('/production/delays', wrap(req => { planView(req); return prod.delayAnalysis(req.query); }));
+api.get('/production/fill-plan', wrap(req => { planView(req); return prod.fillPlan(req.query.month); }));
+api.get('/production/suggest-day', wrap(req => { planView(req); return prod.suggestDay(req.query.date || undefined); }));
+api.post('/production_orders/:id/act/:action', need('production_orders'), wrap(req => prod.orderAction(req.params.id, req.params.action, req.body, req.user)));
+api.post('/production_plans/:id/submit', need('production_plans'), wrap(req => wf.submitForApproval('Production Plan', req.params.id, req.user)));
+api.post('/production_plans/:id/act/:action', need('production_plans'), wrap(req => prod.planAction(req.params.id, req.params.action, req.user)));
+api.post('/production_reports/:id/submit', need('production_reports'), wrap(req => prod.submitReport(req.params.id, req.user)));
+api.post('/production_reports/:id/reopen', need('production_reports'), wrap(req => prod.reopenReport(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- attendance (phone) and HR
 const clientIp = req => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null;
@@ -871,6 +887,9 @@ const LOCKED = {
   stock_drafts: ['Posted', 'Cancelled'],
   material_requests: ['Submitted', 'Issued', 'Partly Issued', 'Sent to Purchase', 'Closed'],
   production_entries: ['Posted'],
+  production_plans: ['Pending Approval', 'Approved'],
+  production_reports: ['Submitted'],
+  production_orders: ['Completed', 'Cancelled'],
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
   probation_reviews: ['Pending Approval', 'Approved'],
   schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
@@ -945,6 +964,8 @@ api.delete('/:entity/:id', wrap(req => {
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
   if ((entity === 'attendance' && row.check_in) || entity === 'attendance_pings') throw new HttpError(409, 'Attendance with a clock-in is evidence: it cannot be deleted; HR reviews and corrects the day instead');
   if (entity === 'production_entries' && row.status === 'Posted') throw new HttpError(409, 'A posted production entry cannot be deleted');
+  if (entity === 'production_reports' && row.status === 'Submitted') throw new HttpError(409, 'A submitted daily report cannot be deleted; reopen it first');
+  if (entity === 'production_orders' && db.prepare("SELECT 1 FROM production_reports r, json_each(COALESCE(NULLIF(r.lines, ''), '[]')) j WHERE CAST(json_extract(j.value, '$.order_id') AS INTEGER) = ? LIMIT 1").get(row.id)) throw new HttpError(409, 'This order is on daily production reports; cancel it instead');
   if (entity === 'material_requests' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} material request cannot be deleted`);
   if (entity === 'payments') throw new HttpError(409, 'A receipt cannot be deleted; the GM can reverse it with a reason (e.g. cheque bounced)');
   if (entity === 'invoices' && row.status !== 'Draft') throw new HttpError(409, `An issued invoice cannot be deleted${hasFunction(req.user.role, 'pay_final') ? '; cancel it (with a reason) or make a credit note' : '; the GM can cancel it, or make a credit note'}`);
@@ -977,6 +998,7 @@ setInterval(() => {
   try { hr.closeOpenDays(); } catch (e) { console.error('attendance close', e.message); }
   try { if (new Date().getHours() >= 11) hrp.absenceAlerts(); } catch (e) { console.error('absence alerts', e.message); }
   try { if (new Date().getHours() >= 9) hrf.dailyHr(); } catch (e) { console.error('hr reminders', e.message); }
+  try { if (new Date().getHours() >= 10) prod.dailyProduction(); } catch (e) { console.error('production reminders', e.message); }
 }, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
