@@ -151,11 +151,6 @@ export function beforeSave(name, row, existing, user) {
         row.pin_code = String(row.pin_code).replace(/\s/g, '') || null;
         if (row.pin_code && !/^\d{6}$/.test(row.pin_code)) throw new HttpError(400, 'PIN Code: use 6 digits (for example 411033).');
       }
-      const rh = k => (row[k] !== undefined ? row[k] : existing?.[k]);
-      for (const k of ['rh_min', 'rh_max']) {
-        if (row[k] != null && (row[k] < 40 || row[k] > 60)) throw new HttpError(400, `${k === 'rh_min' ? 'RH Minimum' : 'RH Maximum'}: use a value from 40 % to 60 %.`);
-      }
-      if (rh('rh_min') != null && rh('rh_max') != null && rh('rh_min') > rh('rh_max')) throw new HttpError(400, 'RH: the minimum must not be more than the maximum.');
       for (const k of ['icu_beds', 'nicu_beds']) if (row[k] != null && (row[k] < 0 || !Number.isInteger(row[k]))) throw new HttpError(400, `${k === 'icu_beds' ? 'ICU Beds' : 'NICU Beds'}: use a whole number, 0 or more.`);
       // AHU by area: the totals for the register, the export and the costing sheet.
       if ('ahu_areas' in row) {

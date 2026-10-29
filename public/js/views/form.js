@@ -1288,12 +1288,11 @@ export async function recordView(root, entity, id) {
     if (isNew) for (const k of Object.keys(presets)) if (!(k in body) && ent.fields.some(f => f.key === k)) body[k] = row[k];
     const missing = ent.fields.find(f => f.required && !f.readonly && inputs[f.key] && (body[f.key] === null || body[f.key] === ''));
     if (missing) throw new Error(`${missing.label} is required`);
-    // Format and range checks given in the schema (e.g. PIN Code 6 digits, RH 40–60 %); the server checks them again.
+    // Format and range checks given in the schema (e.g. PIN Code 6 digits); the server checks them again.
     for (const f of ent.fields.filter(f => f.key in body && body[f.key] != null && body[f.key] !== '')) {
       if (f.pattern && !new RegExp(`^(?:${f.pattern})$`).test(String(body[f.key]).trim())) throw new Error(`${f.label}: ${f.hint || 'the value is not correct.'}`);
       if ((f.min != null && body[f.key] < f.min) || (f.max != null && body[f.key] > f.max)) throw new Error(`${f.label}: use a value ${f.max != null ? `from ${f.min ?? 0} to ${f.max}` : `of ${f.min} or more`}.`);
     }
-    if (entity === 'enquiries' && body.rh_min != null && body.rh_max != null && body.rh_min > body.rh_max) throw new Error('RH: the minimum must not be more than the maximum.');
     const wasNew = isNew;
     const saved = isNew
       ? await api(`/${entity}`, { method: 'POST', body })

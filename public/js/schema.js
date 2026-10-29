@@ -340,7 +340,7 @@ export const ENTITIES = {
     search: ['enquiry_no', 'quote_ref', 'place', 'state', 'pin_code', 'client_name', 'client_phone', 'hospital_name', 'consultant_name', 'type_of_work', 'remarks', 'enquiry_by', 'quoted_by', 'ref_name', 'ref_firm'],
     list: ['enquiry_no', 'hospital_name', 'client_name', 'state', 'type_of_work', 'enquiry_by', 'status'],
     // shown when a register row is opened (▸), and the extra filters above the register
-    detail: ['date', 'quote_ref', 'client_phone', 'email', 'place', 'pin_code', 'capacity', 'icu_beds', 'nicu_beds', 'ahu_total', 'cfm_total', 'rh_min', 'rh_max', 'source', 'ref_name', 'ref_firm', 'kickback', 'kickback_details', 'lead_grade', 'next_followup', 'remarks'],
+    detail: ['date', 'quote_ref', 'client_phone', 'email', 'place', 'pin_code', 'capacity', 'icu_beds', 'nicu_beds', 'ahu_total', 'cfm_total', 'source', 'ref_name', 'ref_firm', 'kickback', 'kickback_details', 'lead_grade', 'next_followup', 'remarks'],
     filters: ['enquiry_by', 'state'],
     statusField: 'status',
     related: [['followups', 'enquiry_id'], ['quotations', 'enquiry_id']],
@@ -387,9 +387,6 @@ export const ENTITIES = {
       ] },
       { key: 'ahu_total', label: 'Total AHUs', type: 'number', readonly: true, hint: 'The system adds the area rows.' },
       { key: 'cfm_total', label: 'Total Airflow (cfm)', type: 'number', readonly: true, hint: 'The system adds the area rows.' },
-      { key: 'sec_env', label: 'Environmental Conditions', type: 'section', computed: "''", hint: 'Relative humidity (RH) for the client areas. Use a range from 40 % to 60 %.', summary: ['rh_min', 'rh_max'] },
-      { key: 'rh_min', label: 'RH Minimum (%)', type: 'number', default: 40, min: 40, max: 60 },
-      { key: 'rh_max', label: 'RH Maximum (%)', type: 'number', default: 60, min: 40, max: 60 },
       { key: 'sec_sales', label: 'Salesperson, Status and Feedback', type: 'section', computed: "''", hint: 'Who handles this enquiry, the status and what the client told us.', summary: ['enquiry_by', 'status', 'next_followup'] },
       { key: 'enquiry_by', label: 'Salesperson', type: 'person', required: true, suggest: ['Saurabh', 'Pratiksha', 'SDP', 'Sir', 'Ashwin', 'Balaji', 'IM', 'Website'] },
       { key: 'supported_by', label: 'Supported By', type: 'person', suggest: ['Ashwin/Jai'] },

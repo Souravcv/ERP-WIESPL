@@ -385,7 +385,6 @@ function techSheetDoc(e, brief, files, s) {
       sec('Client & project', row('Hospital / client', e.hospital_name || P.hospital), row('Place', [e.place, e.state, e.pin_code].filter(Boolean).join(', ') || P.city), row('Client / contact', [e.client_name || P.doctor, e.client_phone || P.phone, e.email].filter(Boolean).join(' · ')),
         row('Type of work', (e.type_of_work || []).join(', ')), row('Hospital capacity (approx.)', [e.capacity, e.icu_beds != null && `ICU beds ${e.icu_beds}`, e.nicu_beds != null && `NICU beds ${e.nicu_beds}`].filter(Boolean).join(' · ')),
         row('AHU by area', (e.ahu_areas || []).map(a => `${a.area}: ${a.ahu_count ?? 0} AHU${a.cfm ? ` · ${a.cfm} cfm` : ''}${a.notes ? ` (${a.notes})` : ''}`).join('\n')),
-        row('Relative humidity (RH)', e.rh_min != null || e.rh_max != null ? `${e.rh_min ?? ''}–${e.rh_max ?? ''} %` : null),
         row('Source', e.source), row('Salesperson', e.enquiry_by), fieldsOf(PROJECT.filter(f => !['hospital', 'city', 'doctor', 'phone'].includes(f.key)), P)),
       sec('Site & scope of work', fieldsOf(SITE, S), row('Remarks', S.remarks)),
       otRows(),
