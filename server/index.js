@@ -39,7 +39,7 @@ import * as hrp from './hrpolicy.js';
 import * as hrf from './hrfile.js';
 import * as prod from './production.js';
 import * as qa from './quality.js';
-import * as enq from './enquiryreview.js';
+import * as enq from './enquiries.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
@@ -309,7 +309,7 @@ api.get('/dashboard', wrap(req => {
     pending_po: one("SELECT COUNT(*) n FROM purchase_orders WHERE status IN ('Pending Approval')").n,
     pending_req: one("SELECT COUNT(*) n FROM requisitions WHERE status = 'Submitted'").n,
     projects: all("SELECT stage, COUNT(*) n FROM projects WHERE status = 'Active' GROUP BY stage"),
-    recent: all('SELECT id, enquiry_no, date, hospital_name, client_name, place, type_of_work, status, review_status FROM enquiries ORDER BY id DESC LIMIT 8'),
+    recent: all('SELECT id, enquiry_no, date, hospital_name, client_name, place, type_of_work, status FROM enquiries ORDER BY id DESC LIMIT 8'),
     today,
   };
 }));
@@ -318,11 +318,6 @@ api.get('/dashboard', wrap(req => {
 const need = (entity) => (req, res, next) => canWrite(entity, req.user.role) ? next() : res.status(403).json({ error: 'You do not have permission for this action' });
 
 api.post('/enquiries/:id/quotation', need('quotations'), wrap(req => wf.quotationFromEnquiry(req.params.id, req.user)));
-// Maker-checker: submit (anyone who may edit enquiries), approve / reject / reopen (checker right, never on your own entry).
-api.post('/enquiries/:id/review/:action', wrap(req => {
-  if (req.params.action === 'submit' ? !canWrite('enquiries', req.user.role) : !canView('enquiries', req.user.role)) throw new HttpError(403, 'You do not have permission for this action');
-  return enq.reviewEnquiry(req.params.id, req.params.action, req.body, req.user);
-}));
 // structured detailed-form data for the techno-commercial sheet
 api.get('/enquiries/:id/brief-data', wrap(req => {
   if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access');
@@ -945,7 +940,6 @@ api.put('/:entity/:id', wrap(req => {
   entityOr404(entity);
   if (!canWrite(entity, req.user.role)) throw new HttpError(403, 'You do not have permission to edit this');
   if (entity === 'work_tasks') wt.guardUpdate(getRow('work_tasks', id), req.body, req.user);
-  if (entity === 'enquiries') enq.assertEditable(id);
   if (LOCKED[entity]) {
     const st = db.prepare(`SELECT status FROM ${entity} WHERE id = ?`).get(Number(id))?.status;
     if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked.${entity === 'quotations' ? ' Use Revise to make changes.' : ''}`);
@@ -992,7 +986,6 @@ api.delete('/:entity/:id', wrap(req => {
   if (entity === 'ncrs' && row.status !== 'Open') throw new HttpError(409, 'An NCR under investigation is cancelled (with a reason), not deleted');
   if (entity === 'production_reports' && row.status === 'Submitted') throw new HttpError(409, 'A submitted daily report cannot be deleted; reopen it first');
   if (entity === 'production_orders' && db.prepare("SELECT 1 FROM production_reports r, json_each(COALESCE(NULLIF(r.lines, ''), '[]')) j WHERE CAST(json_extract(j.value, '$.order_id') AS INTEGER) = ? LIMIT 1").get(row.id)) throw new HttpError(409, 'This order is on daily production reports; cancel it instead');
-  if (entity === 'enquiries' && row.review_status === 'Approved') throw new HttpError(409, 'This enquiry is approved. It is read-only. A checker must reopen it before you can delete it.');
   if (entity === 'material_requests' && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} material request cannot be deleted`);
   if (entity === 'payments') throw new HttpError(409, 'A receipt cannot be deleted; the GM can reverse it with a reason (e.g. cheque bounced)');
   if (entity === 'invoices' && row.status !== 'Draft') throw new HttpError(409, `An issued invoice cannot be deleted${hasFunction(req.user.role, 'pay_final') ? '; cancel it (with a reason) or make a credit note' : '; the GM can cancel it, or make a credit note'}`);

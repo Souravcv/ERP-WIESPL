@@ -153,7 +153,6 @@ export const FUNCTIONS = {
   notify_boq: 'Pop-up: new BOQ (bill of material)',
   notify_work_order: 'Pop-up: new work order',
   notify_enquiry: 'Pop-up: new enquiry from the client website form',
-  enquiry_check: 'Enquiries – checker: approve, reject or reopen an enquiry (maker-checker; never your own)',
   pay_approve: 'Payments & expenses – approve (Accounts), up to the approval limit',
   pay_final: 'GM – payments & expenses above the limit / outside the PO terms, 3-way overrides, reversals; credit notes, receipt reversals, invoice cancellation',
   pay_record: 'Payments & expenses – mark as paid with UTR / cheque no',
@@ -332,17 +331,17 @@ export const ENTITIES = {
     ],
   },
   // Enquiry Register (owner's change list, 29 Oct 2026): a sectioned form (sections below, in this order), one field for each
-  // item of data, maker-checker review (review_status; server/enquiryreview.js), ENQ-0001 numbers. Labels, hints and messages
+  // item of data, no approval step, ENQ-0001 numbers (server/enquiries.js). Labels, hints and messages
   // use ASD-STE100 Simplified Technical English. Old columns doctor_name / doctor_phone / district / verified_* stay in the
-  // table (see migrateEnquiries in server/enquiryreview.js) but are not in the form.
+  // table (see setupEnquiries in server/enquiries.js) but are not in the form.
   enquiries: {
     label: 'Enquiry Register', singular: 'Enquiry', group: 'CRM', icon: '📋', write: CRM, sectioned: true,
     display: "{t}.enquiry_no || ' · ' || COALESCE({t}.hospital_name, '')",
     search: ['enquiry_no', 'quote_ref', 'place', 'state', 'pin_code', 'client_name', 'client_phone', 'hospital_name', 'consultant_name', 'type_of_work', 'remarks', 'enquiry_by', 'quoted_by', 'ref_name', 'ref_firm'],
-    list: ['enquiry_no', 'hospital_name', 'client_name', 'state', 'type_of_work', 'enquiry_by', 'status', 'review_status'],
+    list: ['enquiry_no', 'hospital_name', 'client_name', 'state', 'type_of_work', 'enquiry_by', 'status'],
     // shown when a register row is opened (▸), and the extra filters above the register
-    detail: ['date', 'quote_ref', 'client_phone', 'email', 'place', 'pin_code', 'capacity', 'icu_beds', 'nicu_beds', 'ahu_total', 'cfm_total', 'rh_min', 'rh_max', 'source', 'ref_name', 'ref_firm', 'kickback', 'kickback_details', 'lead_grade', 'next_followup', 'approved_by', 'reject_reason', 'remarks'],
-    filters: ['review_status', 'enquiry_by', 'state'],
+    detail: ['date', 'quote_ref', 'client_phone', 'email', 'place', 'pin_code', 'capacity', 'icu_beds', 'nicu_beds', 'ahu_total', 'cfm_total', 'rh_min', 'rh_max', 'source', 'ref_name', 'ref_firm', 'kickback', 'kickback_details', 'lead_grade', 'next_followup', 'remarks'],
+    filters: ['enquiry_by', 'state'],
     statusField: 'status',
     related: [['followups', 'enquiry_id'], ['quotations', 'enquiry_id']],
     fields: [
@@ -424,12 +423,6 @@ export const ENTITIES = {
           { key: 'due', label: 'Due Date', type: 'date', width: 130 },
           { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Done', 'Not needed'], width: 110 },
         ] },
-      // maker-checker review: set only by the Submit / Approve / Reject / Reopen buttons
-      { key: 'review_status', label: 'Review', type: 'select', options: ['Draft', 'Submitted', 'Resubmitted', 'Approved', 'Rejected'], default: 'Draft', readonly: true, hidden: true },
-      { key: 'submitted_by', label: 'Submitted By', type: 'text', readonly: true, hidden: true },
-      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true, hidden: true },
-      { key: 'reject_reason', label: 'Rejection Reason', type: 'textarea', readonly: true, hidden: true },
-      { key: 'review_log', label: 'Review History', type: 'json', readonly: true, hidden: true },
       { key: 'fy', label: 'FY', type: 'text', hidden: true },
       { key: 'seq', label: 'Seq', type: 'number', hidden: true },
     ],

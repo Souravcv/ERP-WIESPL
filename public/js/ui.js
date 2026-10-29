@@ -108,7 +108,7 @@ export const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 
 const STATUS_TONE = {
   good: ['Won', 'Delivered', 'Approved', 'Paid', 'Completed', 'Received', 'Done', 'Closed', 'Resolved', 'Approved with Comments', 'Active', 'Yes', 'Final', 'Reviewed', 'Reserved', 'In stock', 'Accepted'],
-  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order', 'In production', 'On hold', 'Partly accepted', 'Hold', 'Under investigation', 'Action in progress', 'Resubmitted'],
+  warn: ['Pending', 'Partly Dispatched', 'Pending Approval', 'In Process', 'Negotiation', 'Partially Paid', 'Partially Received', 'Submitted', 'In Progress', 'Waiting for Parts', 'Resubmit', 'On Hold', 'Open', 'High', 'Design Review', 'Changes needed', 'On order', 'In production', 'On hold', 'Partly accepted', 'Hold', 'Under investigation', 'Action in progress'],
   bad: ['Lost', 'Rejected', 'Cancelled', 'Regret', 'Critical', 'Overdue', 'Short', 'Short (no store item)', 'Late'],
   info: ['New', 'Quoted', 'Sent', 'Issued', 'In Execution', 'Draft', 'Dispatched', 'Make in-house', 'Released'],
 };
@@ -125,7 +125,7 @@ export function display(f, row) {
     case 'ref': return row[`${f.key}_label`] || '';
     case 'money': return v == null ? '' : inr(v);
     case 'date': return fmtDate(v);
-    case 'select': return ['status', 'stage', 'priority', 'delivery_status', 'review_status'].includes(f.key) ? badge(v) : (v ?? '');
+    case 'select': return ['status', 'stage', 'priority', 'delivery_status'].includes(f.key) ? badge(v) : (v ?? '');
     case 'checks': return Array.isArray(v) ? v.join(', ') : (v ?? '');
     case 'number': return v == null ? '' : (Number.isInteger(v) ? v : Math.round(v * 100) / 100);
     default: return v ?? '';

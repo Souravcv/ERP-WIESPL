@@ -125,7 +125,7 @@ export async function listView(root, entity) {
     ? h('select', h('option', { value: '' }, ent.hiddenStatus ? `All (without “${ent.hiddenStatus}”)` : 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
     : null;
   if (statusSel) statusSel.value = params.get('status') || '';
-  // More filters (ent.filters), e.g. the enquiry review status, salesperson and state.
+  // More filters (ent.filters), e.g. the enquiry salesperson and state.
   const extraSels = (ent.filters || []).map(k => fm[k]).filter(Boolean).map(f => {
     const opts = f.type === 'person' ? [...new Set([...state.people.map(p => p.name), ...(f.suggest || [])])].sort((a, b) => a.localeCompare(b)) : f.options.filter(Boolean);
     const sel = h('select', { title: f.label, 'aria-label': f.label }, h('option', { value: '' }, `${f.label}: all`), opts.map(o => h('option', { value: o }, o)));

@@ -215,10 +215,6 @@ details.sec > .form-grid .span-2 { grid-column: 1 / -1; }
 .progress-row { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; margin-bottom: 8px; color: var(--text-2); }
 .progress { height: 8px; border-radius: 999px; background: var(--neutral-bg); overflow: hidden; }
 .progress-fill { height: 100%; width: 0; background: var(--good); transition: width .2s; }
-/* Review (maker-checker) panel */
-details.review > summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.review-facts { display: flex; flex-wrap: wrap; gap: 4px 24px; margin: 10px 0; font-size: 13px; }
-.review-reject { flex-basis: 100%; color: var(--bad); }
 /* Register: the details of a row under it */
 table.data td.expander { width: 32px; padding-right: 0; }
 table.data tr.detail-row > td { background: var(--surface-2); }

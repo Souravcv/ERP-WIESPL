@@ -138,8 +138,8 @@ async function crmDashboard(root, views) {
         h('td', i.name), h('td.num', `${i.stock} ${i.uom || ''}`), h('td.num.muted', `min ${i.reorder_level}`))))) : h('div.muted', 'All items above reorder level')),
     ),
     webLeadsCard(),
-    h('div.card', h('h2', 'Latest enquiries'), d.recent.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Enquiry No', 'Date', 'Hospital', 'Client', 'Place', 'Work', 'Status', 'Review'].map(t => h('th', t)))),
+    h('div.card', h('h2', 'Latest enquiries'), d.recent.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Enquiry No', 'Date', 'Hospital', 'Client', 'Place', 'Work', 'Status'].map(t => h('th', t)))),
       h('tbody', d.recent.map(e => h('tr.clickable', { onclick: () => (location.hash = `#/view/enquiries/${e.id}`) },
-        h('td', e.enquiry_no), h('td', fmtDate(e.date)), h('td', e.hospital_name || ''), h('td', e.client_name || ''), h('td', e.place || ''), h('td', workText(e.type_of_work)), h('td', badge(e.status)), h('td', badge(e.review_status || 'Draft'))))))) : h('div.muted', 'No enquiries yet. Add one, or import your Excel register from Admin → Import.')),
+        h('td', e.enquiry_no), h('td', fmtDate(e.date)), h('td', e.hospital_name || ''), h('td', e.client_name || ''), h('td', e.place || ''), h('td', workText(e.type_of_work)), h('td', badge(e.status))))))) : h('div.muted', 'No enquiries yet. Add one, or import your Excel register from Admin → Import.')),
   );
 }

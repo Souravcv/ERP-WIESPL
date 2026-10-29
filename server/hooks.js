@@ -11,7 +11,7 @@ import { afterDispatchPlan, challanToPlan } from './planning.js';
 import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
 import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './production.js';
 import { prepInspection, prepNcr } from './quality.js';
-import { nextEnquiryNo } from './enquiryreview.js';
+import { nextEnquiryNo } from './enquiries.js';
 import { HttpError } from './crud.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).

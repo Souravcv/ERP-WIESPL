@@ -24,10 +24,7 @@ const LOCKED = {
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
   vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status),
-  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open',
-  enquiries: r => r.review_status === 'Approved' };
-// An approved enquiry is read-only until a checker reopens it (maker-checker, server/enquiryreview.js).
-const lockedRow = (entity, row) => LOCKED[entity]?.includes(row.status) || (entity === 'enquiries' && row.review_status === 'Approved');
+  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open' };
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
   || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
@@ -418,44 +415,13 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
     case 'enquiries': {
-      // Maker-checker: the maker submits; a checker (another user) approves or rejects with a reason; an approved
-      // enquiry is read-only until a checker reopens it.
-      const rv = row.review_status || 'Draft', approved = rv === 'Approved';
-      const checker = hasFunction(state.user.role, 'enquiry_check'), mine = [row.submitted_by, row.created_by].includes(state.user.name);
-      const review = (action, body) => post(`/enquiries/${id}/review/${action}`, body);
-      if (can('enquiries') && ['Draft', 'Rejected'].includes(rv)) A.push(h('button.btn.primary', { onclick: busy(async () => {
-        if (ctx.save) await ctx.save({ quiet: true });
-        await review('submit');
-        toast(rv === 'Rejected' ? 'Submitted again for the check' : 'Submitted for the check');
-        reload();
-      }) }, rv === 'Rejected' ? '📤 Submit again' : '📤 Submit for check'));
-      if (checker && ['Submitted', 'Resubmitted'].includes(rv)) {
-        if (mine) A.push(h('span.muted', 'You made or submitted this enquiry. A different user must check it.'));
-        else {
-          A.push(h('button.btn.good', { onclick: busy(async () => {
-            if (!(await confirmBox(`Approve ${row.enquiry_no}? After this, the enquiry is read-only.`, 'Approve'))) return;
-            await review('approve'); toast('Approved'); reload();
-          }) }, '✓ Approve'));
-          A.push(h('button.btn.danger', { onclick: busy(async () => {
-            const why = h('textarea', { rows: 3, placeholder: 'For example: the client phone is missing.' });
-            if (!(await modal(`Reject ${row.enquiry_no}`, h('label', 'Reason for the rejection *', why), [{ label: 'Cancel', value: false }, { label: 'Reject', cls: 'danger solid', value: true }]))) return;
-            if (!why.value.trim()) throw new Error('Write the reason for the rejection.');
-            await review('reject', { reason: why.value.trim() }); toast('Rejected: the maker can correct it and submit again'); reload();
-          }) }, '✕ Reject'));
-        }
-      }
-      if (checker && approved) A.push(h('button.btn', { onclick: busy(async () => {
-        const why = h('input', { placeholder: 'Why do you reopen it? (optional)' });
-        if (!(await modal(`Reopen ${row.enquiry_no}`, h('div.grid', h('p', 'The enquiry becomes a Draft again. The maker can change it and submit it again.'), h('label', 'Note', why)), [{ label: 'Cancel', value: false }, { label: 'Reopen', cls: 'primary', value: true }]))) return;
-        await review('reopen', { note: why.value }); toast('Reopened'); reload();
-      }) }, '🔓 Reopen'));
       if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { enquiry_id: id, customer_id: row.customer_id || undefined, hospital: row.hospital_name, site: row.place, title: [(row.type_of_work || []).join(', '), row.hospital_name].filter(Boolean).join(' – ') }) }, '🧮 Costing sheet'));
-      if (can('quotations')) A.push(h('button.btn', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
+      if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));
       if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
-      if (can('enquiries') && !approved) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
+      if (can('enquiries')) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
       A.push(h('a.btn', { href: `#/print/techsheet/${id}`, target: '_blank' }, '📄 Techno-commercial sheet'));
-      if (!row.customer_id && can('customers') && row.hospital_name && !approved) {
+      if (!row.customer_id && can('customers') && row.hospital_name) {
         A.push(h('button.btn', { onclick: go(async () => {
           const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, state: row.state || undefined, pincode: row.pin_code || undefined, contact_person: row.client_name, phone: row.client_phone } });
           await api(`/enquiries/${id}`, { method: 'PUT', body: { customer_id: c.id } });
@@ -1178,7 +1144,7 @@ export async function recordView(root, entity, id) {
   } else {
     row = await api(`/${entity}/${id}`);
   }
-  const locked = !isNew && lockedRow(entity, row);
+  const locked = !isNew && LOCKED[entity]?.includes(row.status);
   const writable = canWrite(entity, state.user.role) && !locked && !(isNew && ent.noCreate);
   const inputs = {};
   const conditional = [];
@@ -1374,7 +1340,6 @@ export async function recordView(root, entity, id) {
     h('div.page-head',
       h('a.btn.small', { href: `#/list/${entity}` }, '‹ Back'),
       h('h1', `${ent.icon} ${title}`), statusVal ? badge(statusVal) : null,
-      entity === 'enquiries' && !isNew ? h('span', { title: 'Review (maker-checker)' }, badge(r.review_status || 'Draft')) : null,
       r.approval_stage ? h('span.badge.warn', `waiting: ${r.approval_stage}`) : null,
       locked ? h('span.muted', '🔒 locked') : null,
       h('div.actions',
@@ -1395,7 +1360,6 @@ export async function recordView(root, entity, id) {
     !isNew && entity === 'purchase_orders' && r.requisition_id ? requisitionCard(r.requisition_id) : null,
     !isNew && entity === 'purchase_orders' ? commercialPanel(r, () => recordView(root, entity, id)) : null,
     !isNew && entity === 'items' ? itemSummary(r.id) : null,
-    !isNew && entity === 'enquiries' ? reviewPanel(r) : null,
     progress,
     sectioned ? grid : h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
@@ -1406,28 +1370,6 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
-}
-
-// ---------------------------------------------------------------- enquiry review (maker-checker) and its history
-function reviewPanel(r) {
-  const st = r.review_status || 'Draft';
-  const log = Array.isArray(r.review_log) ? r.review_log : [];
-  const what = {
-    Draft: 'Draft. The maker fills in the form and submits it for the check.',
-    Submitted: 'Submitted. A checker (a different user) must approve or reject it.',
-    Resubmitted: 'Submitted again after a rejection. A checker must approve or reject it.',
-    Approved: 'Approved. The enquiry is read-only. Only a checker can reopen it.',
-    Rejected: 'Rejected. Correct the enquiry and submit it again.',
-  }[st] || st;
-  return h('details.card.review', { open: st === 'Rejected' },
-    h('summary', h('b', 'Review (maker-checker): '), badge(st), ' ', h('span.muted', what)),
-    h('div.review-facts',
-      r.submitted_by ? h('div', h('span.muted', 'Submitted by: '), r.submitted_by) : null,
-      r.approved_by ? h('div', h('span.muted', 'Approved by: '), r.approved_by) : null,
-      st === 'Rejected' && r.reject_reason ? h('div.review-reject', h('b', 'Reason for the rejection: '), r.reject_reason) : null),
-    log.length ? h('table.data', h('thead', h('tr', ['Date and time', 'User', 'Action', 'Note'].map(t => h('th', t)))),
-      h('tbody', [...log].reverse().map(e => h('tr', h('td.nowrap', e.at || ''), h('td', e.by || ''), h('td', badge(e.action) || e.action), h('td', e.note || '')))))
-      : h('p.muted', 'No review actions yet.'));
 }
 
 // ---------------------------------------------------------------- the document inside its approval request

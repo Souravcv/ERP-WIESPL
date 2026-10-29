@@ -5,14 +5,14 @@ import { listRows, insertRow } from './crud.js';
 import { fyOf } from '../public/js/calc.js';
 
 // Column order of the WIESPL "Sales Enquiry Register" sheet (29 Oct 2026: Client Name, State, PIN Code, ICU / NICU beds,
-// AHU by area, RH range, Salesperson, referral details, review status and required actions; no District / Verified By).
+// AHU by area, RH range, Salesperson, referral details and required actions; no District / Verified By).
 const REGISTER = [
   ['Sr. No.', null], ['Enquiry  No.', 'enquiry_no'], ['Quotation Ref No', 'quote_ref'], ['Date', 'date'], ['Name of the Hospital', 'hospital_name'],
   ['Client Name', 'client_name'], ['Contact No.', 'client_phone'], ['Client Email', 'email'], ['Place', 'place'], ['State', 'state'], ['PIN Code', 'pin_code'],
   ['Name of the consultant/architect', 'consultant_name'], ['Contact No.', 'consultant_phone'], ['Type of work', 'type_of_work'],
   ['Hospital capacity (approx.)', 'capacity'], ['ICU Beds', 'icu_beds'], ['NICU Beds', 'nicu_beds'], ['AHU by area', 'ahu_areas'], ['Total AHUs', 'ahu_total'], ['Total airflow (cfm)', 'cfm_total'],
   ['RH range (%)', 'rh'], ['Salesperson', 'enquiry_by'], ['Supported By', 'supported_by'], ['Quoted by', 'quoted_by'],
-  ['Drawing received Y/N', 'drawing_received'], ['Quotation Status', 'status'], ['Review Status', 'review_status'], ['Approved By', 'approved_by'], ['Feedback', 'remarks'],
+  ['Drawing received Y/N', 'drawing_received'], ['Quotation Status', 'status'], ['Feedback', 'remarks'],
   ['Lead Source', 'source'], ['Referred By', 'ref_name'], ['Referrer Firm', 'ref_firm'], ['Referrer Phone', 'ref_phone'], ['Relation to the Client', 'ref_relation'],
   ['Kick back involved Y/N', 'kickback'], ['Kickback / commission details', 'kickback_details'], ['Required actions', 'actions'],
 ];
