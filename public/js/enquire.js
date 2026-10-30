@@ -4,6 +4,7 @@ import { mount3D, openExplainer, WALL_FINISHES } from './ot3d.js';
 import { VIDEOS, videoSecs, fmtSecs } from './explainers.js';
 import { partPanel } from './partpanel.js';
 import { DOOR_TYPES, FLOOR_TYPES } from './parts.js';
+import { PANELS } from './panels.js';
 import { otNorms, otType, protocolFor, NABH_SOURCE } from './nabh.js';
 
 const $ = id => document.getElementById(id);
@@ -60,7 +61,7 @@ const FEATURES = [
   ['pendant_anaes', 'Anaesthesia pendant', 'Ceiling arm with gases (including AGSS), power and data for the anaesthesia workstation.', '🦾', ['ot', 'cathlab']],
   ['otlight', 'LED OT light', 'Bright, shadow-free light over the operating table.', '💡', ['ot']],
   ['bedhead', 'Bed-head panels / ICU pendants', 'Gas outlets, power sockets and a monitor shelf at every bed.', '🛏️', ['icu', 'nicu', 'picu', 'isolation']],
-  ['control', "Surgeon's control panel", 'One touch screen for temperature, humidity, lights, timers and gas alarms.', '🖥️', ['ot', 'cathlab']],
+  ['control', "Surgeon's control panel", 'Touch screens inside and at the door: climate, lights, gases, timer, music. The OR Panel adds recording, patient data and DICOM.', '🖥️', ['ot', 'cathlab']],
   ['automation', 'OT automation & remote monitoring', 'See room conditions and alarms on your phone; records for NABH audits.', '📱', ['ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation', 'cleanroom']],
   ['pressure', 'Positive / negative pressure control', 'Protects patients (positive) or contains infection (negative), switchable.', '🔁', ['icu', 'nicu', 'picu', 'isolation', 'ot']],
   ['xray', 'X-ray film viewer', 'Wall-mounted LED viewer for X-ray films.', '🩻', ['ot', 'cathlab']],
@@ -78,6 +79,7 @@ const SUB_CHOICES = {
   panels: { key: 'wall_finish', top: true, list: [['ss', 'SS 304'], ['ppgi', 'PPGL'], ['glass', 'Toughened glass'], ['ssglass', 'SS 304 + glass']] },
   doors: { key: 'door_type', list: DOOR_TYPES.map(([v, l]) => [v, l]) },
   flooring: { key: 'floor_type', list: FLOOR_TYPES.map(([v, l]) => [v, l]) },
+  control: { key: 'panel', list: PANELS.map(p => [p.key, p.name]) },
 };
 const TIMELINES = [['1m', 'Within 1 month'], ['3m', '1–3 months'], ['6m', '3–6 months'], ['6p', 'More than 6 months'], ['explore', 'Just exploring']];
 const BUDGETS = [['u50', 'Under ₹50 lakh'], ['50_100', '₹50 lakh – 1 crore'], ['100_200', '₹1 – 2 crore'], ['200_500', '₹2 – 5 crore'], ['500p', 'Above ₹5 crore'], ['guide', 'Need guidance']];

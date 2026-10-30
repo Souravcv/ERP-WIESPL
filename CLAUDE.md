@@ -20,6 +20,9 @@ memory do not move between computers).
   `js/plan-worker.js` with `@mlightcad/libredwg-web` (GPL-3.0, WebAssembly, served from `/vendor/libredwg`), turned into lines per layer by
   `js/plan-extract.js`, and the result is cached at `data/uploads/plans/<id>.json` (`/api/files/:id/plan`). Layer roles (wall / glass / door …)
   are guessed from the layer name and can be changed in the viewer (remembered in the browser).
+- Control panel range and OR app: `js/panels.js` is the one source (V1 Surgeon Panel with AHU … V5 OR Panel without AHU, features and
+  hardware by version, app modules, fumigation sequence, demo flow) for the CRM page `#/panels` (`js/views/panels.js`), the product master
+  (`PANEL-V1…V5`, added once by code in `server/seed.js`), the enquiry form sub-choice (`opts.panel`) and the detailed form (`control_panel`).
 - Company stamp and signatures: `server/signatures.js`, `js/signs.js`; printed only where an approval exists (`js/views/print.js`).
 
 ## Decisions already made (do not undo without asking)

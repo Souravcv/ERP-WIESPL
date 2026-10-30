@@ -9,13 +9,14 @@ import { notify } from './notify.js';
 import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
 import { VIDEOS } from '../public/js/explainers.js';
 import { publicPhotos, photoFile } from './photos.js';
+import { PANELS, panelByKey } from '../public/js/panels.js';
 
 const SPEC_OK = SPECIALTIES.filter(s => s !== 'Other');
 const OPTS = {
   door_type: ['sliding', 'swing', 'autoswing'], door_size: ['1200', '1500', '1800'], floor_type: ['conductive', 'homogeneous'],
   surgeon_arms: [1, 2], anaes_arms: [1, 2], light_domes: [1, 2, 3], light_camera: ['yes', 'no'], laf_size: ['4 × 6 ft', '4 × 8 ft', '6 × 8 ft', '8 × 10 ft', '10 × 10 ft'],
   xray_plates: [2, 3], storage_count: [1, 2], passbox_count: [1, 2, 3, 4], scrub_bays: [1, 2, 3], scrub_tap: ['sensor', 'foot', 'elbow'],
-  passage_finish: ['wood', 'ss', 'ppgi', 'glass'], passage_colour: null,
+  passage_finish: ['wood', 'ss', 'ppgi', 'glass'], passage_colour: null, panel: PANELS.map(p => p.key),
 };
 const cleanOpts = o => Object.fromEntries(Object.entries(o && typeof o === 'object' ? o : {}).filter(([k, v]) => k in OPTS && (OPTS[k] ? OPTS[k].includes(v) : typeof v === 'string' && v.length < 30)));
 const OPT_LABEL = { sliding: 'Sliding door', swing: 'Swing door', autoswing: 'Automatic swing door', conductive: 'Antistatic conductive vinyl', homogeneous: 'Homogeneous vinyl' };
@@ -25,6 +26,7 @@ const optsText = o => [
   o.light_domes && `OT light: ${['', 'single', 'double', 'triple'][o.light_domes]} dome${o.light_camera === 'yes' ? ' with camera' : ''}`, o.laf_size && `plenum ${o.laf_size}`,
   o.xray_plates && `${o.xray_plates}-plate X-ray viewer`, o.storage_count && `${o.storage_count} storage cabinet(s)`, o.passbox_count && `${o.passbox_count} pass box(es)`,
   o.scrub_bays && `${o.scrub_bays}-bay scrub (${o.scrub_tap || 'sensor'})`, o.passage_finish && `passage walls: ${{ wood: 'wooden finish', ss: 'SS 304', ppgi: 'PPGL', glass: 'glass' }[o.passage_finish]}${o.passage_colour ? ` (${o.passage_colour})` : ''}`,
+  o.panel && `control panel: ${panelByKey(o.panel)?.name}`,
 ].filter(Boolean).join(' · ');
 const VIDEO_NAMES = Object.fromEntries(Object.entries(VIDEOS).map(([k, v]) => [k, v.title]));
 
@@ -263,6 +265,7 @@ export function briefFor(enquiryId, d) {
     if (o.door_type) r.door = { sliding: 'Hermetic sliding (automatic)', swing: 'Single leaf swing', autoswing: 'Automatic swing' }[o.door_type];
     if (o.door_size) r.door_size = `${o.door_size} × 2100 mm`;
     if (o.floor_type) r.floor_type = OPT_LABEL[o.floor_type];
+    if (o.panel && o.panel !== 'v3') r.control_panel = panelByKey(o.panel).name;
     if (o.surgeon_arms) r.pendant_surgeon = o.surgeon_arms === 2 ? 'Double arm' : 'Single arm';
     if (o.anaes_arms) r.pendant_anaes = o.anaes_arms === 2 ? 'Double arm' : 'Single arm';
     if (o.light_domes) r.ot_light = ['', 'Single dome', 'Double dome', 'Triple dome'][o.light_domes];

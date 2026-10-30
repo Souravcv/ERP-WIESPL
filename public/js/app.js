@@ -22,6 +22,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 // Screens that are not a single module list, shown at the top of their menu group.
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
+  CRM: [['#/panels', '🖥️', 'Control Panels & OR App', 'enquiries']],
   Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   'Sales & Projects': [['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
@@ -118,6 +119,7 @@ async function route() {
       case 'production': { const { productionView } = await import('./views/production.js'); await productionView(view, a); break; }
       case 'receivables': { const { receivablesView } = await import('./views/receivables.js'); await receivablesView(view, a || 'ageing', b); break; }
       case 'bank-reco': { const { bankRecoView } = await import('./views/bankreco.js'); await bankRecoView(view); break; }
+      case 'panels': { const { panelsView } = await import('./views/panels.js'); await panelsView(view); break; }
       case 'plan3d': { const { plan3dView } = await import('./views/plan3d.js'); await plan3dView(view, a); break; }
       case 'search': await searchView(view, decodeURIComponent(a || '')); break;
       default: view.replaceChildren(h('div.empty', 'Page not found'));

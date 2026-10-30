@@ -3,6 +3,7 @@
 // and server/public.js (summary text for the Enquiry Register), so it must not touch the DOM.
 import { otNorms, otType, protocolFor } from './nabh.js';
 import { VIDEOS } from './explainers.js';
+import { PANELS } from './panels.js';
 
 export const SPECIALTIES = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
 export const WALLS = ['SS 304', 'PPGL', 'Toughened glass', 'SS 304 + glass']; // OT walls; the passage can also be wood (HPL)
@@ -76,6 +77,7 @@ export const ROOM = [
     { key: 'camera', label: 'Camera in the OT light', type: 'yn' },
     { key: 'ot_table', label: 'OT table', type: 'select', options: ['Electro-hydraulic', 'Orthopaedic (with traction)', 'Existing table', 'None'], def: () => 'Electro-hydraulic' },
     { key: 'control', label: "Surgeon's control panel", type: 'yn', def: () => 'Yes' },
+    { key: 'control_panel', label: 'Control panel version', type: 'select', options: [...PANELS.filter(p => p.key !== 'v3').map(p => p.name), 'Not decided'], def: () => 'Surgeon Panel with AHU', hint: 'OR Panel adds surgery recording, patient data, DICOM, store and video conferencing' },
     { key: 'outside_panel', label: 'Control panel outside the OT', type: 'yn', def: () => 'Yes' },
     { key: 'leds', label: 'LED ceiling lights (2 × 2 ft)', type: 'number', def: () => 8 },
   ]],

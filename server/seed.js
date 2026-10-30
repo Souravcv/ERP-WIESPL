@@ -1,4 +1,5 @@
 // Default data taken from the WIESPL "Quotation format for software" workbook.
+import { PANELS, panelSpec } from '../public/js/panels.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -425,6 +426,12 @@ export function seed() {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', 18, 'Yes', 'system')`);
     for (const p of P) st.run(...p);
   }
+
+  // WIESPL control panel range (V1–V5): added once by product code, never overwriting an edited product
+  const hasCode = db.prepare('SELECT 1 FROM products WHERE code = ?');
+  const addPanel = db.prepare(`INSERT INTO products (sort, code, name, kind, category, uom, qty_basis, default_qty, install_pct, description, rate, hsn, gst_rate, active, created_by)
+    VALUES (?, ?, ?, 'Item', 'Control Panels', 'Each', 'manual', 1, 0, ?, 0, '', 18, 'Yes', 'system')`);
+  PANELS.forEach((p, i) => { if (!hasCode.get(p.code)) addPanel.run(91 + i, p.code, `WIESPL ${p.name} (V${i + 1})`, panelSpec(p)); });
 
   if (!db.prepare('SELECT COUNT(*) c FROM users').get().c) {
     // On hosts without file access (e.g. Render) set ADMIN_PASSWORD in the environment instead.
