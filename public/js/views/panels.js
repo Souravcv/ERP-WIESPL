@@ -3,7 +3,7 @@
 // Data in ../panels.js (shared with the forms and the product master).
 import { h } from '../ui.js';
 import { PANELS, FEATURE_GROUPS, FEATURE_NOTE, HARDWARE, valueText, SURGEON_APP, OR_APP, FUMIGATION_STEPS, FUMIGATION_SAFETY, DEMO_FLOW, REQUIREMENTS } from '../panels.js';
-import { panelShowcase } from './panels3d.js';
+import { panelShowcase, OR_STORY } from './panels3d.js';
 
 const KEY = 'wiespl-panels-pick';
 const still = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -47,11 +47,64 @@ export async function panelsView(root) {
   function drawVers() {
     verBar.replaceChildren(...PANELS.map((p, i) => h('button.pn3-ver' + (verIdx() === i && pick ? '.on' : !pick && i === 0 ? '.on' : ''), { type: 'button', onclick: () => choose(p.key) }, h('b', `V${i + 1}`), h('span', p.short))));
   }
+  const say = (title, text) => { caption.replaceChildren(h('b', title), h('span', text)); caption.classList.remove('pop'); void caption.offsetWidth; caption.classList.add('pop'); };
   function playScreen(scr, name, text) {
+    if (scr === 'orscreen') { setMode('surgery'); return; }
+    if (mode !== 'panels') setMode('panels');
     show3d?.show(scr); drawChips(scr);
-    caption.replaceChildren(h('b', name), h('span', text)); caption.classList.remove('pop'); void caption.offsetWidth; caption.classList.add('pop');
+    say(name, text);
+  }
+
+  // ---- the OR Screen in a surgery: a 7-step tour that plays by itself (or step by step)
+  let mode = 'panels', storyAt = 0, storyTimer = null, playing = true;
+  const modeBar = h('div.pn3-modes');
+  const surgSide = h('div.pn3-side.surg', { hidden: true });
+  const panelSide = h('div.pn3-side');
+  function drawModes() {
+    modeBar.replaceChildren(
+      h('button.pn3-mode' + (mode === 'panels' ? '.on' : ''), { type: 'button', onclick: () => setMode('panels') }, '🖥️ The panels'),
+      h('button.pn3-mode' + (mode === 'surgery' ? '.on' : ''), { type: 'button', onclick: () => setMode('surgery') }, '🎬 OR Screen in surgery'));
+  }
+  function drawStoryChips() {
+    chips.replaceChildren(...OR_STORY.map((s, i) => h('button.pn3-chip' + (i === storyAt ? '.on' : ''), { type: 'button', onclick: () => { playing = false; drawSurgSide(); goStory(i); } }, h('span.pn3-n', String(i + 1)), s.title)));
+    chips.querySelector('.on')?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+  }
+  function goStory(i) {
+    storyAt = (i + OR_STORY.length) % OR_STORY.length;
+    const s = OR_STORY[storyAt];
+    show3d?.story?.(storyAt); drawStoryChips();
+    say(`🎬 ${storyAt + 1} / ${OR_STORY.length} · ${s.title}`, s.text);
+    clearTimeout(storyTimer);
+    if (playing && mode === 'surgery') storyTimer = setTimeout(() => { if (root.isConnected && mode === 'surgery') goStory(storyAt + 1); }, 8500);
+  }
+  function drawSurgSide() {
+    surgSide.replaceChildren(
+      h('button.pn3-btn', { type: 'button', onclick: () => { playing = !playing; drawSurgSide(); if (playing) goStory(storyAt + 1); else clearTimeout(storyTimer); } }, playing ? '⏸ Pause tour' : '▶ Play tour'),
+      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('wide') }, '👁 Whole theatre'),
+      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('screen') }, '🖥️ OR Screen'),
+      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('pendant') }, '📺 Pendant 4K'),
+      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('table') }, '🩺 The table'));
+  }
+  async function setMode(m) {
+    if (m === mode && show3d) return;
+    mode = m; clearTimeout(storyTimer); drawModes();
+    const surg = m === 'surgery';
+    verBar.hidden = surg; panelSide.hidden = surg; surgSide.hidden = !surg;
+    hero.classList.toggle('is-surgery', surg);
+    if (surg) {
+      say('🎬 The OR Screen in a surgery', 'Watch the surgeon operate while following the live video on the WIESPL OR Screen.');
+      playing = true; drawSurgSide(); drawStoryChips();
+      await show3d?.setMode?.('surgery');
+      if (!show3d?.hasVideos?.()) say('🎬 The OR Screen in a surgery', 'Demo videos are not on this server yet (data/media/or), so drawn video is shown.');
+      setTimeout(() => goStory(0), 1900);
+    } else {
+      await show3d?.setMode?.('panels'); drawChips('home');
+      say('Live panels', 'Every screen is running: tap a module below to play it on the panel.');
+    }
+    hero.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'center' });
   }
   function choose(key) {
+    if (mode !== 'panels') setMode('panels');
     pick = key; try { localStorage.setItem(KEY, key); } catch { /* ignore */ }
     show3d?.setVersion(verIdx()); show3d?.show('home'); drawVers(); drawChips('home');
     const p = PANELS[verIdx()]; caption.replaceChildren(h('b', `V${verIdx() + 1} · ${p.name}`), h('span', `${p.text} ${p.displays}.`)); caption.classList.remove('pop'); void caption.offsetWidth; caption.classList.add('pop');
@@ -59,19 +112,22 @@ export async function panelsView(root) {
   }
   const hero = h('section.pn3',
     stage,
-    h('div.pn3-top', verBar),
-    h('div.pn3-side',
-      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('overview'), title: 'See the whole wall' }, '👁 Overview'),
-      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('inside') }, '🖥️ Inside panel'),
-      h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('outside') }, '🚪 Outside panel'),
-      fumBtn = h('button.pn3-btn.danger', { type: 'button', onclick: () => playFum() }, '☢️ Play fumigation')),
+    h('div.pn3-top', modeBar, verBar),
+    panelSide,
+    surgSide,
     h('div.pn3-bottom', caption, chips),
     h('div.pn3-hint', 'Drag to look around · tap a screen to zoom in'));
-  drawVers(); drawChips();
+  panelSide.append(
+    h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('overview'), title: 'See the whole wall' }, '👁 Overview'),
+    h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('inside') }, '🖥️ Inside panel'),
+    h('button.pn3-btn', { type: 'button', onclick: () => show3d?.focus('outside') }, '🚪 Outside panel'),
+    fumBtn = h('button.pn3-btn.danger', { type: 'button', onclick: () => playFum() }, '☢️ Play fumigation'));
+  drawModes(); drawVers(); drawChips();
   caption.replaceChildren(h('b', 'Live panels'), h('span', 'Every screen is running: tap a module below to play it on the panel.'));
 
-  function playFum() {
+  async function playFum() {
     if (!show3d) return;
+    if (mode !== 'panels') await setMode('panels');
     show3d.playFumigation(); fumBtn.disabled = true; fumBtn.textContent = '☢️ Running…';
     hero.scrollIntoView({ behavior: still() ? 'auto' : 'smooth', block: 'center' });
   }
@@ -107,7 +163,12 @@ export async function panelsView(root) {
       h('div.card.pn-in', h('h2', 'Features by version'), h('p.muted', '✓ included · If fitted: shown when the sensor is installed · Optional: on request · — not included'), matrix(FEATURE_GROUPS), h('p.muted', { style: { marginTop: '8px' } }, FEATURE_NOTE)),
       h('div.card.pn-in', h('h2', 'Hardware by version'), matrix(HARDWARE)),
     ], 120),
-    apps: () => stagger([appCard(SURGEON_APP), appCard(OR_APP)], 120),
+    apps: () => stagger([
+      h('div.card.pn-in.pn-orcard', h('div.pn-fhead', h('div', h('h2', '🎬 The OR Screen, step by step'), h('p.muted', 'What the surgeon sees on the WIESPL OR Screen during an operation. Each step plays in the 3D theatre above.')),
+        h('button.btn.primary', { type: 'button', onclick: () => setMode('surgery') }, '▶ Play the surgery tour')),
+        h('ol.pn-orsteps', stagger(OR_STORY.map((s, i) => h('li', h('button.pn-orstep', { type: 'button', onclick: async () => { await setMode('surgery'); playing = false; drawSurgSide(); setTimeout(() => goStory(i), 400); } },
+          h('span.pn-fnum', String(i + 1)), h('div', h('b', s.title), h('span', s.text))))), 60))),
+      appCard(SURGEON_APP), appCard(OR_APP)], 120),
     safety: () => {
       stepEls = FUMIGATION_STEPS.map(([t, d], i) => h('li.pn-fstep', h('span.pn-fnum', String(i + 1)), h('div', h('b', t), h('span', d))));
       return stagger([

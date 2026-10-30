@@ -176,6 +176,15 @@ api.get('/settings', wrap(() => getSettings()));
 // company stamp and personal signatures (printed only where an approval was given)
 sig.migrateSignatures();
 const sendImage = (res, file) => { res.set('Cache-Control', 'private, max-age=300'); res.sendFile(file); };
+// demo videos for the OR Screen on the Control Panels page: data/media/or/*.mp4 (not in git: copy the folder to each server)
+const OR_MEDIA = path.join(DATA_DIR, 'media', 'or');
+const MEDIA_NAME = /^[\w.-]+\.(mp4|webm)$/i;
+api.get('/media/or', wrap(() => { try { return fs.readdirSync(OR_MEDIA).filter(f => MEDIA_NAME.test(f)).sort(); } catch { return []; } }));
+api.get('/media/or/:name', (req, res) => {
+  const name = String(req.params.name);
+  if (!MEDIA_NAME.test(name) || !fs.existsSync(path.join(OR_MEDIA, name))) return res.status(404).json({ error: 'Not found' });
+  res.set('Cache-Control', 'private, max-age=86400'); res.sendFile(path.join(OR_MEDIA, name));
+});
 api.get('/brand/stamp', (req, res, next) => { try { sendImage(res, sig.stampFile()); } catch (e) { next(e); } });
 api.put('/brand/stamp', requireRole(), express.raw({ type: () => true, limit: '3mb' }), wrap(req => sig.saveStamp(req.body, req.user)));
 api.delete('/brand/stamp', requireRole(), wrap(req => sig.removeStamp(req.user)));

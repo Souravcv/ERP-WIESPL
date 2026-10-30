@@ -3,6 +3,9 @@
 // and used as textures. Tapping a module plays that screen; the fumigation sequence plays on both panels.
 // three.js r128 from jsDelivr (same as the OT 3D); without WebGL the inside screen is shown flat, still animated.
 
+import { buildSurgery, OR_STORY } from './orsurgery3d.js';
+export { OR_STORY };
+
 const CDN = ['https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js', 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'];
 const loadScript = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => no(new Error('3D library did not load')); document.head.append(s); });
 let loading = null;
@@ -171,11 +174,26 @@ function dicom(P, t) {
   ['Window / level', 'Zoom · Fit', 'Rotate · Flip', 'Invert', 'Grid · Crosshair', 'Metadata'].forEach((s, i) => P.tx(s, 1024, 190 + i * 70, 20, i === 0 ? C.cyan : '#ddd', 600));
   P.rr(30, H - 50, 940, 10, 5, '#333'); P.rr(30, H - 50, 940 * (n + 1) / 48, 10, 5, C.cyan);
 }
-function feed(P, x, y, w, h, t, kind) {
+// ---------------------------------------------------------------- real surgical videos (data/media/or, login only)
+let videoList = null;
+export function orVideos() {
+  videoList ||= fetch('api/media/or').then(r => (r.ok ? r.json() : [])).catch(() => []).then(names => names.slice(0, 4).map(n => {
+    const v = Object.assign(document.createElement('video'), { src: `api/media/or/${encodeURIComponent(n)}`, muted: true, loop: true, playsInline: true, preload: 'auto' });
+    v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
+    v.addEventListener('loadedmetadata', () => { try { v.currentTime = Math.min(30, v.duration * 0.2); } catch { /* ignore */ } }, { once: true });
+    return v;
+  }));
+  return videoList;
+}
+const ready = v => v && v.readyState >= 2 && v.videoWidth;
+function cover(ctx, v, x, y, w, h) { const s = Math.max(w / v.videoWidth, h / v.videoHeight), sw = w / s, sh = h / s; ctx.drawImage(v, (v.videoWidth - sw) / 2, (v.videoHeight - sh) / 2, sw, sh, x, y, w, h); }
+
+function feed(P, x, y, w, h, t, kind, video) {
   const { ctx } = P;
   ctx.save(); ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x, y, w, h, 14); else ctx.rect(x, y, w, h); ctx.clip();
   ctx.fillStyle = '#000'; ctx.fillRect(x, y, w, h);
   const cx = x + w / 2, cy = y + h / 2;
+  if (kind !== 'vitals' && ready(video)) { cover(ctx, video, x, y, w, h); ctx.restore(); return; }
   if (kind === 'endo') {
     const g = ctx.createRadialGradient(cx + 30 * Math.sin(t), cy + 20 * Math.cos(t * 0.7), 10, cx, cy, h * 0.48); g.addColorStop(0, '#ffd2c4'); g.addColorStop(0.45, '#d4655a'); g.addColorStop(0.85, '#5a1414'); g.addColorStop(1, '#000');
     ctx.fillStyle = g; ctx.beginPath(); ctx.arc(cx, cy, h * 0.46, 0, Math.PI * 2); ctx.fill();
@@ -194,15 +212,33 @@ function feed(P, x, y, w, h, t, kind) {
   }
   ctx.restore();
 }
-function orscreen(P, t) {
-  frame(P, 'OR Screen · live video & recording', 'Endo cam · Surgical cam · Overhead · Vitals');
-  const { W, H } = P, w = (W - 90) / 2, h = (H - 160) / 2;
-  [['endo', 'Endo Cam · 4K'], ['surg', 'Surgical Cam · 1080p'], ['over', 'Overhead'], ['vitals', 'Vitals']].forEach(([k, l], i) => {
-    const x = 30 + (i % 2) * (w + 30), y = 110 + Math.floor(i / 2) * (h + 16);
-    feed(P, x, y, w, h, t + i, k); P.rr(x + 12, y + 12, 200, 30, 15, 'rgba(0,0,0,.55)'); P.tx(l, x + 24, y + 33, 17, '#fff', 600);
-  });
-  if (Math.floor(t * 2) % 2) P.dot(W - 300, 70, 10, C.red);
-  P.tx(`REC ${fmt(t + 1260)}`, W - 280, 78, 22, C.red, 800);
+// OR Screen layouts: full · quad (4 equal) · pip (picture in picture) · side (side by side) · report (live + CT) · conf (video conference)
+const SOURCES = [['endo', 'Endo Cam · 4K'], ['surg', 'Surgical Cam · 1080p'], ['over', 'Overhead'], ['lap', 'Laparoscope'], ['vitals', 'Vitals / X-ray']];
+const LAYOUT_NAME = { full: 'Full screen', quad: '4 equal screens', pip: 'Picture in picture', side: 'Side by side', report: 'Live + report', conf: 'Video conference' };
+function ctSlice(P, x, y, w, h, t) {
+  const { ctx } = P, k = Math.sin(((Math.floor(t * 8) % 48) / 48) * Math.PI), cx = x + w / 2, cy = y + h / 2, s = Math.min(w, h) / 560;
+  ctx.save(); ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip(); ctx.fillStyle = '#000'; ctx.fillRect(x, y, w, h);
+  ctx.beginPath(); ctx.ellipse(cx, cy, 250 * s, 190 * s, 0, 0, Math.PI * 2); ctx.fillStyle = '#6b6b6b'; ctx.fill();
+  for (const d of [-1, 1]) { ctx.beginPath(); ctx.ellipse(cx + d * 105 * s, cy - 8 * s, (72 + 18 * k) * s, (112 + 22 * k) * s, d * 0.15, 0, Math.PI * 2); ctx.fillStyle = '#111'; ctx.fill(); }
+  P.dot(cx, cy + 130 * s, 26 * s, '#eee'); ctx.restore();
+  P.tx('CT CHEST · Patient 1042', x + 16, y + 34, 18, C.cyan, 700); P.tx(`Slice ${Math.floor(t * 8) % 48 + 1} / 48`, x + 16, y + h - 18, 16, '#ccc', 600);
+}
+function label(P, x, y, l) { P.rr(x + 12, y + 12, P.ctx.measureText(l).width + 40, 30, 15, 'rgba(0,0,0,.6)'); P.tx(l, x + 24, y + 33, 17, '#fff', 600); }
+export function orscreen(P, t, S) {
+  const L = S.layout || 'quad', vids = S.videos || [], { W, H, ctx } = P;
+  frame(P, `OR Screen · ${LAYOUT_NAME[L]}`, 'Patient 1042 · Lap. cholecystectomy · Dr. surgeon · OT 1');
+  const src = (i, x, y, w, h) => { const [k, l] = SOURCES[i]; feed(P, x, y, w, h, t + i, k, vids[i]); ctx.font = `600 17px ${FONT}`; label(P, x, y, l); };
+  const X = 24, Y = 104, w = W - 48, h = H - 124;
+  if (L === 'full') { src(0, X, Y, w, h); src(4, X + w - 330, Y + h - 190, 310, 170); }
+  else if (L === 'quad') { const ww = (w - 16) / 2, hh = (h - 16) / 2; [0, 1, 2, 4].forEach((s, i) => src(s, X + (i % 2) * (ww + 16), Y + Math.floor(i / 2) * (hh + 16), ww, hh)); }
+  else if (L === 'pip') { src(0, X, Y, w, h); P.rr(X + w - 432, Y + 18, 414, 240, 16, null, '#fff', 4); src(1, X + w - 430, Y + 20, 410, 236); src(4, X + w - 430, Y + h - 200, 410, 180); }
+  else if (L === 'side') { const ww = (w - 16) / 2; src(0, X, Y, ww, h); src(3, X + ww + 16, Y, ww, h); }
+  else if (L === 'report') { const ww = w * 0.6; src(0, X, Y, ww, h); ctSlice(P, X + ww + 16, Y, w - ww - 16, h * 0.62, t); P.rr(X + ww + 16, Y + h * 0.62 + 14, w - ww - 16, h * 0.38 - 14, 14, C.tile); P.tx('📄 Pre-op report', X + ww + 36, Y + h * 0.62 + 56, 20, C.text, 700); P.tx('Gallbladder · calculi', X + ww + 36, Y + h * 0.62 + 92, 18, C.dim, 500); P.tx('Hb 13.2 · fit for GA', X + ww + 36, Y + h * 0.62 + 122, 18, C.dim, 500); }
+  else if (L === 'conf') { const ww = w * 0.7; src(0, X, Y, ww, h); P.rr(X + 14, Y + 50, 96, 30, 15, C.red); P.tx('● LIVE', X + 62, Y + 72, 16, '#fff', 800, 'center');
+    ['Dr. Mentor', 'Students (12)', 'Family'].forEach((n, i) => { const yy = Y + i * (h / 3); P.rr(X + ww + 16, yy, w - ww - 16, h / 3 - 12, 14, C.tile, Math.floor(t / 2) % 3 === i ? C.green : C.line, 3); P.dot(X + ww + 70, yy + h / 6 - 6, 34, ['#6366f1', '#0ea5e9', '#f97316'][i]); P.tx(n, X + ww + 116, yy + h / 6, 20, C.text, 600); }); }
+  const rec = S.rec !== false;
+  if (rec) { if (Math.floor(t * 2) % 2) P.dot(W - 330, 104 + 26, 9, C.red); P.rr(W - 350, 108, 300, 40, 20, 'rgba(0,0,0,.6)'); P.tx(`REC ${fmt(t + 1260)} · ${S.big ? '4K' : '1080p'}`, W - 316, 136, 19, C.red, 800); }
+  if (S.big) { P.rr(X + 20, H - 92, 560, 60, 30, 'rgba(0,0,0,.7)', C.red, 2); P.tx('💾 Saving to Patient 1042 / 2026-10-30 · USB + server', X + 44, H - 54, 19, '#fff', 700); }
 }
 function pi(P, t) {
   frame(P, 'PI · patient information', "Today's patients for OT 1");
@@ -227,10 +263,10 @@ function store(P, t) {
   const k = Math.min(1, ((t % 6) - 2) / 0.5);
   if (k > 0) { P.rr(W - 470, 640 + (1 - k) * 80, 420, 60, 30, C.blue); P.tx('✓ Order placed · High priority', W - 260, 678 + (1 - k) * 80, 21, '#fff', 700, 'center'); }
 }
-function video(P, t) {
+function video(P, t, S) {
   frame(P, 'Video conference', 'Surgery Room 1 · 4 participants');
   const { W, H } = P;
-  feed(P, 30, 110, 800, 480, t, 'endo'); P.rr(46, 126, 110, 32, 16, C.red); P.tx('● LIVE', 101, 149, 18, '#fff', 800, 'center');
+  feed(P, 30, 110, 800, 480, t, 'endo', S?.videos?.[0]); P.rr(46, 126, 110, 32, 16, C.red); P.tx('● LIVE', 101, 149, 18, '#fff', 800, 'center');
   ['Dr. Mentor', 'Student', 'Family'].forEach((n, i) => {
     const y = 110 + i * 162, talk = Math.floor(t / 2) % 3 === i;
     P.rr(850, y, 400, 146, 16, C.tile, talk ? C.green : C.line, talk ? 4 : 1.5); P.dot(930, y + 73, 42, ['#6366f1', '#0ea5e9', '#f97316'][i]);
@@ -314,8 +350,15 @@ export async function panelShowcase(box, { onStep } = {}) {
   const outC = Object.assign(document.createElement('canvas'), { width: 800, height: 500 });
   const PI = painter(inC), PO = painter(outC);
   const t0 = performance.now(), now = () => (performance.now() - t0) / 1000;
-  const S = { screen: 'home', since: 0, ver: 0, fum: null, fumStart: 0, fumLeft: 0 };
-  let step = -1;
+  const S = { screen: 'home', since: 0, ver: 0, fum: null, fumStart: 0, fumLeft: 0, videos: [] };
+  const OS = { layout: 'full', videos: [], big: false }; // the OR Screen in the surgery scene
+  let step = -1, mode = 'panels', surgery = null;
+  const orC = Object.assign(document.createElement('canvas'), { width: 1280, height: 720 }), PS = painter(orC);
+  orVideos().then(v => { S.videos = v; OS.videos = v; syncVideos(); });
+  function syncVideos() {
+    const need = mode === 'surgery' || ['orscreen', 'video'].includes(S.screen);
+    S.videos.forEach((v, i) => { if (need && (mode === 'surgery' || i === 0 || S.screen === 'orscreen')) v.play().catch(() => {}); else v.pause(); });
+  }
   const fumTick = t => {
     if (S.fumStart == null || !S.fumRun) return;
     let e = t - S.fumStart, i = 0;
@@ -328,7 +371,7 @@ export async function panelShowcase(box, { onStep } = {}) {
   const api = { setVersion() {}, show() {}, focus() {}, playFumigation() {}, dispose() {} };
   const base = {
     setVersion(i) { S.ver = i; S.since = now(); },
-    show(screen) { S.screen = screen; S.since = now(); },
+    show(screen) { S.screen = screen; S.since = now(); syncVideos(); },
     playFumigation() { S.fumRun = true; S.fumStart = now(); step = -1; },
   };
 
@@ -414,6 +457,10 @@ export async function panelShowcase(box, { onStep } = {}) {
   // camera moves
   const views = () => {
     const asp = box.clientWidth / Math.max(1, box.clientHeight), narrow = asp < 1.1, k = Math.max(1, 1.6 / asp), s = inside.g.scale.x;
+    if (mode === 'surgery') { // narrow screens step back from the same target
+      const kk = Math.max(1, 1.45 / asp);
+      return Object.fromEntries(Object.entries(surgery.views).map(([n, [p, tg]]) => [n, [tg.clone().add(p.clone().sub(tg).multiplyScalar(n === 'screen' ? Math.min(kk, 1.6) : kk)), tg.clone()]]));
+    }
     return {
       overview: narrow ? [new T.Vector3(0.3, 1.55, 3.3 * k), new T.Vector3(0.24, 1.4, 0)] : [new T.Vector3(1.35 + 0.3 * k, 1.5, 3.3 * k + 0.6), new T.Vector3(-0.1, 1.35, 0)],
       inside: [new T.Vector3(-0.88 + 0.18, 1.42, (narrow ? 1.6 : 1.05) * s), new T.Vector3(-0.88, 1.38, 0)],
@@ -422,16 +469,16 @@ export async function panelShowcase(box, { onStep } = {}) {
     };
   };
   let fly = null, lastUser = -10, where = 'overview';
-  const goTo = (name, dur = 1.4) => { where = name; const [p, tg] = views()[name]; fly = { t: now(), dur, p0: cam.position.clone(), t0: controls.target.clone(), p, tg }; };
+  const goTo = (name, dur = 1.4) => { const v = views()[name]; if (!v) return; where = name; const [p, tg] = v; fly = { t: now(), dur, p0: cam.position.clone(), t0: controls.target.clone(), p, tg }; };
   controls.addEventListener('start', () => { lastUser = now(); fly = null; });
   cam.position.set(2.2, 2.6, 8.5); controls.target.set(0.1, 1.2, 0);
 
   // tap a screen to look at it
   const ray = new T.Raycaster(), ptr = new T.Vector2();
   let down = null;
-  const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ptr, cam); return ray.intersectObjects(screens)[0]?.object; };
+  const pick = e => { const r = renderer.domElement.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1); ray.setFromCamera(ptr, cam); return ray.intersectObjects(mode === 'surgery' ? surgery.screens : screens)[0]?.object; };
   const onDown = e => { down = [e.clientX, e.clientY]; };
-  const onUp = e => { if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return; const o = pick(e); if (o) goTo(o === inside.scr ? (where === 'inside' ? 'overview' : 'inside') : (where === 'outside' ? 'overview' : 'outside')); };
+  const onUp = e => { if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return; const o = pick(e); if (o && mode === 'surgery') return goTo(o === surgery.screens[0] ? (where === 'screen' ? 'wide' : 'screen') : (where === 'pendant' ? 'wide' : 'pendant')); if (o) goTo(o === inside.scr ? (where === 'inside' ? 'overview' : 'inside') : (where === 'outside' ? 'overview' : 'outside')); };
   const onMove = e => { renderer.domElement.style.cursor = pick(e) ? 'pointer' : ''; };
   renderer.domElement.addEventListener('pointerdown', onDown); renderer.domElement.addEventListener('pointerup', onUp); renderer.domElement.addEventListener('pointermove', onMove);
 
@@ -449,6 +496,12 @@ export async function panelShowcase(box, { onStep } = {}) {
     raf = requestAnimationFrame(loop);
     const t = now(), dt = Math.min(0.1, t - prev); prev = t;
     if (!visible) return;
+    if (mode === 'surgery') {
+      if (t - lastPaint > 0.045) { lastPaint = t; orscreen(PS, t, OS); surgery.tick(t, Math.max(dt, 0.016)); }
+      if (fly) { const k = Math.min(1, (t - fly.t) / fly.dur), e = ease(k); cam.position.lerpVectors(fly.p0, fly.p, e); controls.target.lerpVectors(fly.t0, fly.tg, e); if (k >= 1) fly = null; }
+      else if (t - lastUser > 6 && where === 'wide') { const off = cam.position.clone().sub(controls.target); off.applyAxisAngle(new T.Vector3(0, 1, 0), Math.cos(t * 0.2) * 0.3 * dt * 0.5); cam.position.copy(controls.target).add(off); }
+      controls.update(); renderer.render(surgery.scene, cam); return;
+    }
     if (t - lastPaint > 0.05) { lastPaint = t; paint(); inside.tex.needsUpdate = true; outside.tex.needsUpdate = true; }
     sheenTex.offset.x = ((t * 0.12) % 1.6) - 0.8;
     const intro = Math.min(1, (t - introT) / 1.3), back = 1 + 2.2 * (intro - 1) ** 3 + 1.2 * (intro - 1) ** 2;
@@ -472,13 +525,31 @@ export async function panelShowcase(box, { onStep } = {}) {
   function dispose() {
     if (dead) return; dead = true; cancelAnimationFrame(raf); ro.disconnect(); io.disconnect(); controls.dispose();
     scene.traverse(o => { o.geometry?.dispose?.(); const m = o.material; (Array.isArray(m) ? m : m ? [m] : []).forEach(x => { x.map?.dispose?.(); x.dispose(); }); });
+    surgery?.dispose(); S.videos.forEach(v => v.pause());
     pm.dispose(); renderer.dispose(); renderer.forceContextLoss?.();
   }
   return Object.assign(api, {
     setVersion(i) { base.setVersion(i); target = i >= 3 ? 43 / 32 : 1; tagIn.textContent = `Inside the OT · ${i >= 3 ? '32" or 43"' : i === 2 ? '22" or 32"' : '32"'}`; if (where === 'inside') setTimeout(() => goTo('inside', 0.9), 300); },
     show(screen) { base.show(screen); goTo(screen === 'outside' ? 'outside' : 'inside', 1.1); },
     focus: name => goTo(name),
-    playFumigation() { base.playFumigation(); goTo('both', 1.2); },
+    playFumigation() { if (mode !== 'panels') this.setMode('panels'); base.playFumigation(); goTo('both', 1.2); },
+    async setMode(m) {
+      if (m === mode) return;
+      if (m === 'surgery' && !surgery) {
+        const vids = await orVideos();
+        surgery = buildSurgery(T, { orCanvas: orC, endoVideo: vids[0] || null });
+        surgery.scene.environment = scene.environment;
+      }
+      mode = m; syncVideos();
+      tagIn.style.display = tagOut.style.display = m === 'panels' ? '' : 'none';
+      Object.assign(controls, m === 'surgery' ? { minAzimuthAngle: -Infinity, maxAzimuthAngle: Infinity, minPolarAngle: 0.55, maxPolarAngle: 1.62, maxDistance: 6.5, minDistance: 0.5 } : { minAzimuthAngle: -1.05, maxAzimuthAngle: 1.05, minPolarAngle: 0.95, maxPolarAngle: 1.72, maxDistance: 5.6, minDistance: 0.6 });
+      if (m === 'surgery') { cam.position.set(4.5, 3, 5); controls.target.set(0, 1.1, -0.5); goTo('wide', 1.8); } else { cam.position.set(2.2, 2.6, 8.5); controls.target.set(0.1, 1.2, 0); goTo('overview', 1.6); }
+    },
+    story(i) {
+      const s = OR_STORY[i]; if (!s || !surgery) return;
+      OS.layout = s.layout; OS.big = !!s.big; surgery.setLook(s.look); goTo(s.view, 1.6);
+    },
+    hasVideos: () => S.videos.length > 0,
     dispose,
   });
 }

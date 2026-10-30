@@ -23,6 +23,9 @@ memory do not move between computers).
 - Control panel range and OR app: `js/panels.js` is the one source (V1 Surgeon Panel with AHU … V5 OR Panel without AHU, features and
   hardware by version, app modules, fumigation sequence, demo flow) for the CRM page `#/panels` (`js/views/panels.js`), the product master
   (`PANEL-V1…V5`, added once by code in `server/seed.js`), the enquiry form sub-choice (`opts.panel`) and the detailed form (`control_panel`).
+- 3D on that page: `js/views/panels3d.js` (the panels on an OT wall, live canvas screens) and `js/views/orsurgery3d.js` (an operation
+  with the OR Screen, 7-step tour `OR_STORY`). Real surgery videos come from `data/media/or/*.mp4` (`/api/media/or`, login only). They are
+  NOT in git (too big for GitHub): copy that folder to each server by hand; without it the screens show drawn video.
 - Company stamp and signatures: `server/signatures.js`, `js/signs.js`; printed only where an approval exists (`js/views/print.js`).
 
 ## Decisions already made (do not undo without asking)
