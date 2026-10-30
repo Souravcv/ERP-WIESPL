@@ -203,7 +203,7 @@ export async function quotationView(root, id) {
           h('button.icon-btn.del', { title: 'Remove room', onclick: async () => { if (await confirmBox(`Remove ${r.name}? Its BOQ quantities are removed too.`)) { rooms.splice(i, 1); markDirty(); render(); } } }, '✕'),
         ] : null)))));
     const tbody = h('tbody', BOD.map(([key, label, type]) => {
-      if (key === 'h') return h('tr', h('td', { colspan: rooms.length + 1, style: { fontWeight: 700, background: 'var(--surface-2)' } }, label));
+      if (key === 'h') return h('tr', h('td', { colspan: rooms.length + 1, style: { fontWeight: 700, background: 'var(--surface-2)' } }, h('span.bod-h', label)));
       return h('tr', h('td', label), rooms.map(r => {
         if (type === 'calc') {
           const a = roomAreas(r);
@@ -234,7 +234,7 @@ export async function quotationView(root, id) {
     };
     return h('div',
       h('div.toolbar', editable ? addSel : null, h('span.muted', 'Tip: type sizes like "6550mm" to convert to feet. Blue cells are auto-calculated (type to override). Every field: pick from the list or type your own.')), lists,
-      rooms.length ? h('div.table-wrap.card.flush', h('table.data.bod', thead, tbody)) : h('div.empty', 'No rooms yet. Add OTs, ICU, passage etc. from a template.'));
+      rooms.length ? h('div.table-wrap.card.flush.q-scroll', h('table.data.bod', thead, tbody)) : h('div.empty', 'No rooms yet. Add OTs, ICU, passage etc. from a template.'));
   }
 
   // ------------------------------------------------------------ BOQ
@@ -375,7 +375,7 @@ export async function quotationView(root, id) {
       basicCell.textContent = inr(t.basic);
     };
     return h('div', bar, h('label', { style: { marginBottom: '10px' } }, 'BOQ title', BOQ_TITLE),
-      lines.length ? h('div.card.flush.table-wrap', h('table.data.boq.lines', h('thead', head), h('tbody', body), h('tfoot', foot)))
+      lines.length ? h('div.card.flush.table-wrap.q-scroll', h('table.data.boq.lines', h('thead', head), h('tbody', body), h('tfoot', foot)))
         : h('div.empty', 'No BOQ lines. Use “Load standard MOT BOQ” or add products from the catalog.'),
       h('p.muted', 'Blue quantity cells follow the room areas (walls / ceiling / coving / flooring); type a number to override, clear it to go back to automatic.'));
   }

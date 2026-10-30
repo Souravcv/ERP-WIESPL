@@ -138,6 +138,14 @@ table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .bod input, .bod select { padding: 4px 6px; font-size: 12.5px; min-width: 84px; }
 .bod th:first-child, .bod td:first-child { position: sticky; left: 0; background: var(--surface-2); z-index: 1; min-width: 210px; }
 .bod td.calc { background: var(--info-bg); font-variant-numeric: tabular-nums; }
+/* A flush card that is also a table-wrap must scroll, not cut off (".card.flush" hides overflow) */
+.card.flush.table-wrap { overflow: auto; }
+/* Quotation room / BOQ tables: their own scroll box as high as the screen, so the side scrollbar is always in view;
+   the room headings stay on top and the parameter / item column stays on the left */
+.card.flush.q-scroll { max-height: calc(100vh - 150px); overscroll-behavior: contain; }
+.q-scroll thead th { position: sticky; top: 0; z-index: 2; background: var(--surface-2); }
+.q-scroll .bod thead th:first-child { z-index: 3; }
+.bod .bod-h { position: sticky; left: 10px; }
 .boq .spec { font-size: 12px; color: var(--text-2); white-space: pre-wrap; max-height: 60px; overflow: hidden; }
 .boq .spec.open { max-height: none; }
 .boq tr.heading td { background: var(--surface-2); }
