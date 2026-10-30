@@ -1,15 +1,19 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, badge, money, clearRefCache } from '../ui.js';
-import { canWrite } from '../schema.js';
+import { canWrite, UOMS } from '../schema.js';
 import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, round2, amountInWords, MM_PER_FT, AREA_BASES } from '../calc.js';
 
 const uid = p => p + Math.random().toString(36).slice(2, 9);
 const EDITABLE = ['Draft', 'Rejected'];
 
+// Cooling unit of a room: DX, chilled water (CHW) valve, or both
+const COOLING = ['DX', 'Chilled water valve', 'DX + Chilled water valve (both)'];
+const COOL_BOTH = COOLING[2];
+
 const ROOM_TEMPLATES = {
-  "Major OT – 10'x10' plenum": { name: 'Major OT', length: 21.5, width: 19, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "10' x 10'", hepa_area: '96 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 3000, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '10 TR', dx: '3Tr+3Tr', chw: '4Tr', heater_kw: 12 },
-  "Major OT – 6'x8' plenum": { name: 'Major OT', length: 17.6, width: 13.8, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "6' x 8'", hepa_area: '44 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 2000, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '6 Tr', dx: '2Tr+2TR', chw: '2TR', heater_kw: 6 },
-  'Septic OT': { name: 'Septic OT', length: 19.6, width: 18.5, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "6' x 8'", hepa_area: '44 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 2500, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '7 Tr', dx: '2Tr+2TR', chw: '3TR', heater_kw: 6 },
-  'Cath Lab': { name: 'Cath Lab', length: 22.7, width: 18.9, height: 10, cls: 'CLASS 100', temp: '22C +/-2˚C', rh: 'NMT 55', plenum: 'HEPA IN AHU', hepa_loc: 'AHU', cfm: 2500, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '10 TR', dx: '3Tr+3Tr', chw: '4Tr', heater_kw: 12 },
+  "Major OT – 10'x10' plenum": { name: 'Major OT', length: 21.5, width: 19, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "10' x 10'", hepa_area: '96 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 3000, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '10 TR', cooling: COOL_BOTH, dx: '3Tr+3Tr', chw: '4Tr', heater_kw: 12 },
+  "Major OT – 6'x8' plenum": { name: 'Major OT', length: 17.6, width: 13.8, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "6' x 8'", hepa_area: '44 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 2000, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '6 Tr', cooling: COOL_BOTH, dx: '2Tr+2TR', chw: '2TR', heater_kw: 6 },
+  'Septic OT': { name: 'Septic OT', length: 19.6, width: 18.5, height: 10, cls: 'CLASS 100', temp: '20C +/-2˚C', rh: 'NMT 55', plenum: "6' x 8'", hepa_area: '44 Sq. Ft', hepa_loc: 'TERMINAL HEPA FILTER', cfm: 2500, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '7 Tr', cooling: COOL_BOTH, dx: '2Tr+2TR', chw: '3TR', heater_kw: 6 },
+  'Cath Lab': { name: 'Cath Lab', length: 22.7, width: 18.9, height: 10, cls: 'CLASS 100', temp: '22C +/-2˚C', rh: 'NMT 55', plenum: 'HEPA IN AHU', hepa_loc: 'AHU', cfm: 2500, fresh_ach: 5, persons: 6, equip_kw: 2, light: 0.3, ac_tr: '10 TR', cooling: COOL_BOTH, dx: '3Tr+3Tr', chw: '4Tr', heater_kw: 12 },
   'ICU / NICU': { name: 'ICU', length: 30, width: 20, height: 10, cls: 'CLASS 10000', temp: '22C +/-2˚C', rh: 'NMT 55', plenum: 'HEPA IN AHU', hepa_loc: 'AHU', cfm: 2500, fresh_ach: 5, persons: 8, equip_kw: 3, light: 0.3 },
   'OT Passage': { name: 'OT Passage', length: 94.4, width: 7.9, height: 10, wall_sides: 1, temp: '24C +/-2˚C', rh: 'NMT 55' },
   'OT Store': { name: 'OT Store', length: 16.9, width: 10, height: 10 },
@@ -45,13 +49,25 @@ const BOD = [
   ['persons', 'Average persons in room', 'num'],
   ['equip_kw', 'Average equipment load (kW)', 'num'],
   ['light', 'Lighting load (W / sq. ft)', 'num'],
-  ['h', 'Condensing unit'],
+  ['h', 'Cooling unit'],
+  ['cooling', 'Cooling unit type (DX / chilled water valve / both)', 'text'],
   ['ac_tr', 'Air Conditioning + CHW (TR)', 'text'],
   ['dx', 'Air Conditioning – WIESPL scope (TR)', 'text'],
   ['chw', 'CHW – client scope (TR)', 'text'],
   ['h', 'Heater bank'],
   ['heater_kw', 'SS strip heaters with PLC control (kW)', 'num'],
 ];
+
+// Choices offered on the room fields (pick one or type your own); the templates' and the other rooms' values are added.
+const BOD_CHOICES = {
+  cls: ['CLASS 100', 'CLASS 1000', 'CLASS 10000', 'CLASS 100000', 'ISO 5', 'ISO 6', 'ISO 7', 'ISO 8'],
+  temp: ['18C +/-2˚C', '20C +/-2˚C', '21C +/-3˚C', '22C +/-2˚C', '24C +/-2˚C'],
+  rh: ['NMT 55', 'NMT 60', '50 +/- 5', '40 – 60'],
+  plenum: ["4' x 6'", "4' x 8'", "6' x 8'", "8' x 10'", "10' x 10'", 'HEPA IN AHU'],
+  hepa_loc: ['TERMINAL HEPA FILTER', 'AHU'],
+  cooling: COOLING,
+  wall_sides: [4, 3, 2, 1],
+};
 
 export async function quotationView(root, id) {
   let q = await api(`/quotations/${id}`);
@@ -168,6 +184,15 @@ export async function quotationView(root, id) {
       const m = String(v).trim().match(/^([\d.]+)\s*mm$/i);
       return m ? round2(Number(m[1]) / MM_PER_FT) : v === '' ? null : Number(v);
     };
+    // one list per room field: standard choices + template values + values in this quotation's rooms
+    const lists = h('div', { hidden: true });
+    const choiceList = key => {
+      const id = 'bod-' + key;
+      const vals = [...new Set([...(BOD_CHOICES[key] || []), ...Object.values(ROOM_TEMPLATES).map(t => t[key]), ...rooms.map(r => r[key])]
+        .filter(v => v != null && v !== '').map(String))];
+      lists.append(h('datalist', { id }, vals.map(v => h('option', { value: v }))));
+      return id;
+    };
     const thead = h('thead', h('tr', h('th', 'Project parameters'), rooms.map((r, i) => h('th', { style: { minWidth: '120px' } },
       h('div', { style: { display: 'flex', gap: '2px' } },
         h('span', { style: { flex: 1 } }, `#${i + 1}`),
@@ -193,7 +218,7 @@ export async function quotationView(root, id) {
           (calcCells[r.id] ||= {})[key] = inp;
           return h('td.calc', inp);
         }
-        const inp = h('input', { type: type === 'num' ? 'text' : 'text', inputmode: type === 'num' ? 'decimal' : undefined, readOnly: !editable });
+        const inp = h('input', { type: 'text', inputmode: type === 'num' ? 'decimal' : undefined, readOnly: !editable, list: editable ? choiceList(key) : null, autocomplete: 'off' });
         inp.value = r[key] ?? '';
         inp.oninput = () => { r[key] = type === 'num' ? (inp.value.match(/mm$/i) ? r[key] : inp.value === '' ? null : Number(inp.value)) : inp.value; markDirty(); };
         if (type === 'num') inp.onchange = () => { r[key] = parseFt(inp.value); inp.value = r[key] ?? ''; markDirty(); };
@@ -208,7 +233,7 @@ export async function quotationView(root, id) {
       }
     };
     return h('div',
-      h('div.toolbar', editable ? addSel : null, h('span.muted', 'Tip: type sizes like "6550mm" to convert to feet. Blue cells are auto-calculated (type to override).')),
+      h('div.toolbar', editable ? addSel : null, h('span.muted', 'Tip: type sizes like "6550mm" to convert to feet. Blue cells are auto-calculated (type to override). Every field: pick from the list or type your own.')), lists,
       rooms.length ? h('div.table-wrap.card.flush', h('table.data.bod', thead, tbody)) : h('div.empty', 'No rooms yet. Add OTs, ICU, passage etc. from a template.'));
   }
 
@@ -279,7 +304,9 @@ export async function quotationView(root, id) {
         h('button.btn', { onclick: () => { lines.push({ id: uid('l'), kind: 'item', name: 'Custom item', description: '', uom: 'Each', rate: 0, install: 0, basis: 'manual', qty: {} }); markDirty(); render(); } }, '+ Custom line'),
         h('button.btn', { onclick: () => { lines.push({ id: uid('l'), kind: 'heading', name: 'Heading', description: '', qty: {} }); markDirty(); render(); } }, '+ Heading'),
       ] : null,
-      rooms.length ? null : h('span.badge.warn', 'Add rooms first (Rooms & Basis of Design tab)'));
+      rooms.length ? null : h('span.badge.warn', 'Add rooms first (Rooms & Basis of Design tab)'),
+      // units for the UOM cells: pick one or type
+      h('datalist', { id: 'q-uoms' }, [...new Set([...UOMS, 'Each', 'R. Ft', 'Sq. Ft', 'Job', ...lines.map(l => l.uom).filter(Boolean)])].map(u => h('option', { value: u }))));
     const BOQ_TITLE = h('input', { readOnly: !editable, value: data.boq_title || '', placeholder: 'BOQ title printed on Annexure', oninput: e => { data.boq_title = e.target.value; markDirty(); } });
 
     const head = h('tr', h('th', '#'), h('th', { style: { minWidth: '280px' } }, 'Particulars'), h('th.num', 'Rate'), h('th.num', 'Install.'), h('th.num', 'Basic rate'), h('th.num', { title: 'Blank = the quotation GST %' }, 'GST %'),
@@ -331,7 +358,7 @@ export async function quotationView(root, id) {
       gstIn.value = l.gst ?? '';
       gstIn.oninput = () => { l.gst = gstIn.value === '' ? null : Number(gstIn.value); markDirty(); };
       return h('tr', h('td', nums[i]), partCell, num('rate'), num('install', 80), basicCellLine, h('td', gstIn),
-        h('td', h('input', { value: l.uom || '', readOnly: !editable, style: { width: '70px' }, oninput: e => { l.uom = e.target.value; markDirty(); } })),
+        h('td', h('input', { value: l.uom || '', readOnly: !editable, list: editable ? 'q-uoms' : null, autocomplete: 'off', style: { width: '70px' }, oninput: e => { l.uom = e.target.value; markDirty(); } })),
         h('td', basisSel), roomCells, qtyCells[l.id], amountCells[l.id], ctl);
     });
     const foot = h('tr', h('td', { colspan: 8 }, 'Basic total (room-wise)'), rooms.map(r => (roomTotalCells[r.id] = h('td.num'))), h('td'), (basicCell = h('td.num')), editable ? h('td') : null);

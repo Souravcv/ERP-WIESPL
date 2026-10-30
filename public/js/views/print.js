@@ -26,6 +26,13 @@ function bar(title) {
 }
 
 // ---------------------------------------------------------------- quotation
+// Rooms printed side by side: at most 8 on a landscape A4 page (18 OTs → 8 + 8 + 2).
+const ROOMS_PER_PAGE = 8;
+const roomChunks = rooms => {
+  const out = [];
+  for (let i = 0; i < rooms.length; i += ROOMS_PER_PAGE) out.push({ rooms: rooms.slice(i, i + ROOMS_PER_PAGE), from: i + 1, to: Math.min(i + ROOMS_PER_PAGE, rooms.length) });
+  return out;
+};
 function quotationDoc(q, s) {
   const d = q.data || {};
   const rooms = d.rooms || [];
@@ -68,33 +75,39 @@ function quotationDoc(q, s) {
       ['Humidity', '%', r => r.rh], ['LAF Plenum Size', 'Sq. Ft.', r => r.plenum], ['HEPA Filtration Area', 'Sizes / Nos.', r => r.hepa_area],
       ['HEPA Filter Location', 'TERMINAL / AHU', r => r.hepa_loc], ['Supply Air Quantity', 'cfm', r => r.cfm], ['Fresh Air Quantity', 'ACPH', r => r.fresh_ach],
       ['Designed Air Changes', 'ACPH', r => (roomAreas(r).air_changes ? roomAreas(r).air_changes.toFixed(1) : '')], ['Average Number of Persons', 'Nos.', r => r.persons],
-      ['Average Equipment Load', 'kW', r => r.equip_kw], ['Lighting load per sq. ft', 'watt/sq. ft', r => r.light], ['Air Conditioning + CHW', 'Tr.', r => r.ac_tr],
+      ['Average Equipment Load', 'kW', r => r.equip_kw], ['Lighting load per sq. ft', 'watt/sq. ft', r => r.light], ['Cooling Unit Type', 'DX / CHW', r => r.cooling], ['Air Conditioning + CHW', 'Tr.', r => r.ac_tr],
       ['Air Conditioning (WIESPL Scope)', 'Tr.', r => r.dx], ['CHW (Client Scope)', 'Tr.', r => r.chw], ['SS Strip heaters with PLC control', 'kW', r => r.heater_kw],
     ];
-    const chunks = [];
-    for (let i = 0; i < rooms.length; i += 8) chunks.push(rooms.slice(i, i + 8));
-    pages.push(page({ class: 'landscape' }, letterhead(s), h('h2', `ANNEXURE ${num('bod')}`), h('h3', 'BASIS OF DESIGN'),
-      chunks.map(ch => h('table', { style: { marginBottom: '10px' } },
-        h('thead', h('tr', h('th', 'Sr.'), h('th', 'Project Parameters'), h('th', 'UOM'), ch.map(r => h('th', r.name)))),
-        h('tbody', ROWS.map((row, i) => h('tr', h('td', i + 1), h('td', row[0]), h('td', row[1]), ch.map(r => h('td.num', row[2](r) ?? '')))))))));
+    // 8 rooms on each landscape page, so any number of OTs fits the paper
+    const chunks = roomChunks(rooms);
+    chunks.forEach((ch, c) => pages.push(page({ class: 'landscape' }, letterhead(s), h('h2', `ANNEXURE ${num('bod')}`),
+      h('h3', `BASIS OF DESIGN${chunks.length > 1 ? ` (rooms ${ch.from}–${ch.to} of ${rooms.length})` : ''}`),
+      h('table.rooms', h('colgroup', h('col', { style: { width: '4%' } }), h('col', { style: { width: '22%' } }), h('col', { style: { width: '10%' } }), ch.rooms.map(() => h('col'))),
+        h('thead', h('tr', h('th', 'Sr.'), h('th', 'Project Parameters'), h('th', 'UOM'), ch.rooms.map(r => h('th.num', r.name)))),
+        h('tbody', ROWS.map((row, i) => h('tr', h('td', i + 1), h('td', row[0]), h('td', row[1]), ch.rooms.map(r => h('td.num', row[2](r) ?? '')))))),
+      c === chunks.length - 1 ? null : h('p', { style: { fontSize: '10px', textAlign: 'right' } }, 'continued on the next page'))));
   }
 
   // BOQ
   const boqLines = d.lines || [];
   let main = 0, sub = 0;
   const nums = boqLines.map(l => (l.sub ? `${main}.${++sub}` : (sub = 0, String(++main))));
-  const cols = 8 + rooms.length;
+  // More than 8 rooms do not fit side by side: the BOQ shows the totals, and the quantity of each room follows on
+  // its own pages (8 rooms per page).
+  const wide = rooms.length > ROOMS_PER_PAGE;
+  const roomCols = wide ? [] : rooms;
+  const cols = 8 + roomCols.length;
   const opt = d.optionals || [];
   pages.push(page({ class: 'landscape' }, letterhead(s), h('h2', `ANNEXURE ${num('boq')}`), h('h3', d.boq_title || 'WIESPL ESTIMATE'),
     h('table', h('thead', h('tr', h('th', 'Sr. No.'), h('th', 'Particulars'), h('th.num', 'Rate (INR)'), h('th.num', 'Installation'), h('th.num', 'Basic Rate'), h('th', 'UOM'),
-      rooms.map(r => h('th.num', r.name)), h('th.num', 'Total Qty'), h('th.num', 'Basic Total'))),
+      roomCols.map(r => h('th.num', r.name)), h('th.num', 'Total Qty'), h('th.num', 'Basic Total'))),
     h('tbody', boqLines.map((l, i) => l.kind === 'heading'
       ? h('tr', h('td', nums[i]), h('td.spec', { colspan: cols - 1 }, h('b', lines(l.description || l.name)[0]), ...multiline(lines(l.description || '').slice(1).join('\n')).map(x => x)))
       : h('tr', h('td', nums[i]), h('td.spec', l.description && l.description !== l.name ? [h('b', lines(l.description)[0]), lines(l.description).length > 1 ? h('br') : null, ...multiline(lines(l.description).slice(1).join('\n'))] : h('b', l.name)),
         h('td.num', inr(l.rate)), h('td.num', inr(l.install)), h('td.num', inr(lineBasicRate(l))), h('td', l.uom),
-        rooms.map(r => h('td.num', lineQty(l, r) || '')), h('td.num', t.lineTotals[l.id]?.qty || ''), h('td.num', inr(t.lineTotals[l.id]?.amount))))),
+        roomCols.map(r => h('td.num', lineQty(l, r) || '')), h('td.num', t.lineTotals[l.id]?.qty || ''), h('td.num', inr(t.lineTotals[l.id]?.amount))))),
     h('tfoot',
-      h('tr', h('td', { colspan: 6 }, h('b', 'BASIC TOTAL')), rooms.map(r => h('td.num', h('b', inr(t.roomTotals[r.id])))), h('td'), h('td.num', h('b', inr(t.basic)))),
+      h('tr', h('td', { colspan: 6 }, h('b', 'BASIC TOTAL')), roomCols.map(r => h('td.num', h('b', inr(t.roomTotals[r.id])))), h('td'), h('td.num', h('b', inr(t.basic)))),
       t.discount ? h('tr', h('td', { colspan: cols - 1 }, `Discount @${q.discount_pct}%`), h('td.num', '− ' + inr(t.discount))) : null,
       Object.entries(t.gstByRate || { [q.gst_rate]: t.gst }).filter(([, v]) => v).map(([rate, v]) => h('tr', h('td', { colspan: cols - 1 }, `GST @${rate}%`), h('td.num', inr(v)))),
       h('tr', h('td', { colspan: cols - 1 }, h('b', 'GRAND ALL INCLUSIVE TOTAL')), h('td.num', h('b', inr(t.grand)))))),
@@ -105,6 +118,17 @@ function quotationDoc(q, s) {
         h('td.num', inr(lineBasicRate(l))), h('td.num', l.qty), h('td', l.uom), h('td.num', inr(lineBasicRate(l) * (Number(l.qty) || 0))))))),
       h('p', 'Optional items are not included in the above total. GST extra as applicable.')] : null,
     sign(s, q.approved_by)));
+  if (wide) {
+    const items = boqLines.map((l, i) => [l, nums[i]]).filter(([l]) => l.kind !== 'heading');
+    const chunks = roomChunks(rooms);
+    chunks.forEach((ch, c) => pages.push(page({ class: 'landscape' }, letterhead(s), h('h2', `ANNEXURE ${num('boq')} – ROOM-WISE QUANTITIES`),
+      h('h3', `Rooms ${ch.from}–${ch.to} of ${rooms.length}`),
+      h('table.rooms', h('colgroup', h('col', { style: { width: '5%' } }), h('col', { style: { width: '27%' } }), h('col', { style: { width: '6%' } }), ch.rooms.map(() => h('col')), c === chunks.length - 1 ? h('col', { style: { width: '7%' } }) : null),
+        h('thead', h('tr', h('th', 'Sr. No.'), h('th', 'Particulars'), h('th', 'UOM'), ch.rooms.map(r => h('th.num', r.name)), c === chunks.length - 1 ? h('th.num', 'Total Qty') : null)),
+        h('tbody', items.map(([l, no]) => h('tr', h('td', no), h('td', lines(l.description || l.name)[0] || l.name), h('td', l.uom),
+          ch.rooms.map(r => h('td.num', lineQty(l, r) || '')), c === chunks.length - 1 ? h('td.num', t.lineTotals[l.id]?.qty || '') : null))),
+        h('tfoot', h('tr', h('td', { colspan: 3 }, h('b', 'BASIC TOTAL (₹)')), ch.rooms.map(r => h('td.num', h('b', inr(t.roomTotals[r.id])))), c === chunks.length - 1 ? h('td') : null))))));
+  }
 
   if (num('summary')) {
     pages.push(page(letterhead(s), h('h2', `ANNEXURE ${num('summary')}`), h('h3', 'SUMMARY'),

@@ -271,6 +271,12 @@ dl.detail-grid dd { margin: 0; font-size: 13px; white-space: pre-line; overflow-
 .doc table th, .doc table td { border: 1px solid #555; padding: 3px 5px; vertical-align: top; }
 .doc table th { background: #dbe5f5; }
 .doc td.num, .doc th.num { text-align: right; white-space: nowrap; }
+/* rooms side by side (Basis of Design, room-wise BOQ quantities): fixed widths, names wrap, so 8 rooms fit a page */
+.doc table.rooms { table-layout: fixed; font-size: 10px; line-height: 1.25; }
+.doc table.rooms th, .doc table.rooms td { padding: 2px 4px; }
+.doc table.rooms th, .doc table.rooms td { overflow-wrap: anywhere; }
+.doc table.rooms th.num, .doc table.rooms td.num { white-space: normal; text-align: center; }
+.doc table.rooms tr { break-inside: avoid; }
 .doc .spec { white-space: pre-wrap; }
 .doc .usp li { margin-bottom: 6px; }
 .doc .sign { margin-top: 30px; }
