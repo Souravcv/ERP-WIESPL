@@ -2,7 +2,7 @@
 export default {
   'For the TDS they deduct (Form 26AS)': 'ते कापत असलेल्या TDS साठी (फॉर्म 26AS)', 'Invoice due date = invoice date + these days, unless the milestone says otherwise': 'बीजक देय दिनांक = बीजक दिनांक + हे दिवस, टप्प्यात वेगळे असल्यास ते',
   'Enter the client and the hospital data. Each item of data has one field only.': 'क्लायंट व रुग्णालयाची माहिती भरा. प्रत्येक माहितीसाठी एकच रकाना आहे.',
-  'The system gives this number (ENQ-0001).': 'हा क्रमांक सिस्टम देते (ENQ-0001).', 'The system gives this number.': 'हा क्रमांक सिस्टम देते.', 'Use the full name of the hospital.': 'रुग्णालयाचे पूर्ण नाव लिहा.',
+  'The system gives this number (W/EQ/26-27/0001).': 'हा क्रमांक सिस्टम देते (W/EQ/26-27/0001).', 'The system gives this number.': 'हा क्रमांक सिस्टम देते.', 'Use the full name of the hospital.': 'रुग्णालयाचे पूर्ण नाव लिहा.',
   'The doctor or the person who asks for the quotation.': 'कोटेशन मागणारे डॉक्टर किंवा व्यक्ती.', 'Use 6 digits.': '6 अंक लिहा.',
   'Who gave us this lead. Keep all the referral data in this section.': 'ही लीड कोणी दिली. संदर्भाची सर्व माहिती या विभागात ठेवा.', 'Write the amount or the percentage, and the person who gets it.': 'रक्कम किंवा टक्केवारी आणि ती कोणाला मिळते ते लिहा.',
   'Select all the types of work that the client needs.': 'क्लायंटला हवे असलेले सर्व कामाचे प्रकार निवडा.', 'For example: 100 beds, 4 OT.': 'उदा.: 100 खाटा, 4 OT.',

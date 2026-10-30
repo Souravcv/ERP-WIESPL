@@ -1,6 +1,9 @@
 // Marathi for the CRM screens, part 1: the most used labels, statuses and module names.
 // English (exactly as on the screen) → Marathi. Short forms used in the office (BOQ, PO, GST, AHU …) stay as they are.
 export default {
+  // enquiry form sections, 30 Oct 2026
+  'Files and Client Form Answers': 'फाइल्स व क्लायंटच्या फॉर्मची उत्तरे', 'Technical Requirements (OT and AHU)': 'तांत्रिक गरजा (OT व AHU)', 'Required': 'आवश्यक',
+  'Attach the drawings and other files here. The answers from the website form and the detailed requirement form are read only.': 'ड्रॉइंग व इतर फाइल्स येथे जोडा. वेबसाइट फॉर्म व सविस्तर गरजांच्या फॉर्ममधील उत्तरे फक्त वाचण्यासाठी आहेत.',
   'Status': 'स्थिती', 'Date': 'दिनांक', 'Draft': 'मसुदा', 'Project': 'प्रकल्प', 'Approved': 'मंजूर', 'Remarks': 'शेरा', 'Rejected': 'नामंजूर',
   'Cancel': 'रद्द करा', 'UOM': 'एकक', 'Cancelled': 'रद्द', 'Customer': 'ग्राहक', 'Employee': 'कर्मचारी', 'Remark': 'शेरा', 'Done': 'पूर्ण',
   'Vendor': 'पुरवठादार', 'Pending Approval': 'मंजुरी प्रलंबित', 'Qty': 'नग', 'Material': 'साहित्य', 'Approved By': 'मंजूर करणारे',

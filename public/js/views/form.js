@@ -95,7 +95,7 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
     onTotals?.(t);
   }
   function render() {
-    const head = h('tr', h('th', '#'), f.itemRef ? h('th', 'Inventory item') : null, f.columns.map(c => h('th', { style: { minWidth: c.width + 'px' } }, c.label)),
+    const head = h('tr', h('th', '#'), f.itemRef ? h('th', 'Inventory item') : null, f.columns.map(c => h('th', { style: { minWidth: c.width + 'px' } }, c.label, c.required && !readonly ? h('span.req', { title: 'Required' }, ' *') : null)),
       amounts ? h('th.num', 'Amount') : null, f.itemRef && amounts ? h('th.num', 'Received') : null, readonly ? null : h('th'));
     let sr = 0;
     const rows = lines.map((l, i) => {
@@ -1177,12 +1177,12 @@ export async function recordView(root, entity, id) {
         extras: f.poTotals ? () => Object.fromEntries([...PO_CHARGES.map(([k]) => k), 'other_charges_label', 'charges_gst'].map(k => [k, inputs[k]?.get?.() ?? row[k]])) : null,
       });
       inputs[f.key] = ed;
-      target.append(h('div.span-all', h('label', f.label), ed.el));
+      target.append(h('div.span-all', h('label', h('span', f.label, f.required || f.mandatory ? h('span.req', { title: 'Required' }, ' *') : '')), ed.el));
       continue;
     }
     const w = fieldInput(f, row[f.key], { readonly: !writable });
     inputs[f.key] = w;
-    const lbl = h('label', f.label, f.required ? ' *' : '', f.hint ? h('span.hint', f.hint) : null, w.el);
+    const lbl = h('label', h('span', f.label, f.required || f.mandatory ? h('span.req', { title: 'Required' }, ' *') : ''), f.hint ? h('span.hint', f.hint) : null, w.el);
     if (f.span === 2) lbl.classList.add('span-2');
     if (f.type === 'ref' && row[f.key] && !isNew) {
       lbl.append(h('a', { href: recordHref(f.ref, row[f.key]), style: { fontWeight: 400 } }, 'open ›'));
@@ -1201,12 +1201,15 @@ export async function recordView(root, entity, id) {
   applyShowIf();
   // Sectioned form: summary line and "filled" count per section (its summary fields count as the key data), progress on top.
   let progress = null;
+  // open the section that holds a field (e.g. a mandatory one left empty) and bring it into view
+  function reveal(key) { const s = secs.find(x => x.keys.includes(key)); if (s) { s.det.open = true; s.det.scrollIntoView({ block: 'start', behavior: 'smooth' }); } }
+  function secLabel(key) { return secs.find(x => x.keys.includes(key))?.f.label; }
   if (sectioned) {
     const fm = Object.fromEntries(ent.fields.map(f => [f.key, f]));
     const valOf = k => (inputs[k] ? inputs[k].get() : row[k]);
     const has = v => (Array.isArray(v) ? v.length > 0 : v != null && String(v).trim() !== '');
     const show = (k, v) => (Array.isArray(v) ? (fm[k].type === 'lines' ? `${v.length} row(s)` : v.join(', ')) : fm[k].type === 'yn' ? `${fm[k].label}: ${v}` : fm[k].type === 'date' ? fmtDate(v) : String(v));
-    for (const s of secs.filter(s => !s.body.childElementCount)) { s.det.remove(); secs.splice(secs.indexOf(s), 1); }
+    for (const s of secs.filter(s => !s.body.childElementCount && !s.f.files)) { s.det.remove(); secs.splice(secs.indexOf(s), 1); }
     secs.forEach((s, i) => { s.det.querySelector('.sec-no').textContent = String(i + 1); });
     const bar = h('div.progress-fill'), txt = h('span');
     progress = h('div.card.sec-progress', h('div.progress-row', h('b', 'Form progress'), txt), h('div.progress', { role: 'progressbar', 'aria-label': 'Form progress' }, bar));
@@ -1286,8 +1289,20 @@ export async function recordView(root, entity, id) {
     }
     // Presets for readonly-but-settable links (e.g. new payment against invoice) still need sending.
     if (isNew) for (const k of Object.keys(presets)) if (!(k in body) && ent.fields.some(f => f.key === k)) body[k] = row[k];
-    const missing = ent.fields.find(f => f.required && !f.readonly && inputs[f.key] && (body[f.key] === null || body[f.key] === ''));
-    if (missing) throw new Error(`${missing.label} is required`);
+    // Required fields, and 'mandatory' ones (e.g. the enquiry's client data and required actions): all named at once,
+    // the section with the first one opened
+    const blank = v => (Array.isArray(v) ? !v.length : v == null || String(v).trim() === '');
+    const need = ent.fields.filter(f => (f.mandatory || f.required) && !f.readonly && f.type !== 'lines' && inputs[f.key] && blank(body[f.key]));
+    if (need.length === 1 && !need[0].mandatory) throw new Error(`${need[0].label} is required`);
+    if (need.length) { reveal(need[0].key); throw new Error(`Fill in these fields: ${need.map(f => f.label).join(', ')}.`); }
+    for (const f of ent.fields.filter(f => f.mandatory && f.type === 'lines' && inputs[f.key])) {
+      const req = f.columns.filter(c => c.required);
+      const rows = (body[f.key] || []).filter(l => req.some(c => !blank(l[c.key])));
+      if (!rows.length) { reveal(f.key); throw new Error(`${secLabel(f.key) || f.label}: add at least one row.`); }
+      const bad = rows.findIndex(l => req.some(c => blank(l[c.key])));
+      if (bad >= 0) { reveal(f.key); throw new Error(`${secLabel(f.key) || f.label}, row ${bad + 1}: fill in ${req.map(c => 'the ' + c.label.toLowerCase()).join(', ').replace(/, ([^,]*)$/, ' and $1')}.`); }
+      body[f.key] = rows;
+    }
     // Format and range checks given in the schema (e.g. PIN Code 6 digits); the server checks them again.
     for (const f of ent.fields.filter(f => f.key in body && body[f.key] != null && body[f.key] !== '')) {
       if (f.pattern && !new RegExp(`^(?:${f.pattern})$`).test(String(body[f.key]).trim())) throw new Error(`${f.label}: ${f.hint || 'the value is not correct.'}`);
@@ -1333,6 +1348,10 @@ export async function recordView(root, entity, id) {
   grid.addEventListener('input', keep.touch);
   grid.addEventListener('change', keep.touch);
   const r = row;
+  // the record's files; a sectioned form with a 'files' section shows them inside that section
+  const filesEl = isNew ? (writable ? newFiles.el : null) : attachments(entity, r.id, canWrite(entity, state.user.role));
+  const filesHere = filesEl && secs.find(s => s.f.files);
+  if (filesHere) { filesEl.classList.add('sec-files'); filesHere.body.prepend(h('div.span-all', filesEl)); }
   const title = isNew ? `New ${ent.singular}` : `${ent.singular}: ${r.enquiry_no || r.quote_no || r.so_no || r.po_no || r.req_no || r.challan_no || r.bom_no || r.boq_no || r.invoice_no || r.receipt_no || r.cn_no || (['invoices', 'credit_notes'].includes(entity) && r.status === 'Draft' ? 'draft #' + r.id : null) || r.order_no || r.plan_no || r.report_no || r.qc_no || r.ncr_no || r.ticket_no || r.submittal_no || r.doc_no || r.project_no || r.code || r.name || r.doc_ref || fmtDate(r.date) || '#' + r.id}${entity === 'items' && r.name ? ' · ' + r.name : ''}`;
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
@@ -1363,7 +1382,7 @@ export async function recordView(root, entity, id) {
     sectioned ? grid : h('div.card', grid),
     isNew ? null : h('div.muted', { style: { fontSize: '12px', marginBottom: '12px' } },
       `Created ${r.created_at || ''} by ${r.created_by || '-'}${r.updated_at ? ` · last updated ${r.updated_at}` : ''}`),
-    isNew ? (writable ? newFiles.el : null) : attachments(entity, r.id, canWrite(entity, state.user.role)),
+    filesHere ? null : filesEl,
     isNew ? null : related(entity, r),
     isNew || !hasFunction(state.user.role, 'view_audit') ? null : changeHistory(entity, id),
   );

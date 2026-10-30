@@ -34,14 +34,14 @@ function mmyy(date) {
 }
 
 // Quotation reference WIESPL/01/0425: a running number per FY. Enquiries had 01/04/25-26 on the same number; since
-// 29 Oct 2026 the enquiry number is ENQ-0001 without a date (nextEnquiryNo), old numbers stay as they are.
+// 29 Oct 2026 the enquiry has its own number W/EQ/26-27/0001 (nextEnquiryNo, per FY); old numbers stay as they are.
 export function quoteRef(date) {
   const { seq, fy } = nextSeq('enquiry', date);
   const { mm, yy } = mmyy(date);
   return { seq, fy, quote_ref: `${prefix()}/${pad(seq)}/${mm}${yy}` };
 }
 export function enquiryNumbers(date) {
-  return { ...quoteRef(date), enquiry_no: nextEnquiryNo() };
+  return { ...quoteRef(date), enquiry_no: nextEnquiryNo(date) };
 }
 
 // "22+22" → 44, "36" → 36, text without numbers → null

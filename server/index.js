@@ -939,6 +939,7 @@ api.post('/:entity', wrap(req => {
   if (!canWrite(req.params.entity, req.user.role) || ent.noCreate) throw new HttpError(403, 'You do not have permission to create this');
   if (req.params.entity === 'bom_items') bomEditable(req.body?.bom_id, req.user);
   if (req.params.entity === 'boms' && ['Design Review', 'Final'].includes(req.body?.status)) throw new HttpError(400, 'Save the BOQ as Draft; Design Review and Final are set with the buttons on the BOQ');
+  if (req.params.entity === 'enquiries') enq.checkMandatory(req.body || {});
   const row = insertRow(req.params.entity, req.body || {}, req.user);
   notify.notifyNew(req.params.entity, row, req.user);
   if (req.params.entity === 'bom_items') flow.touchReview(row.bom_id, [row.department], req.user);
@@ -949,6 +950,8 @@ api.put('/:entity/:id', wrap(req => {
   entityOr404(entity);
   if (!canWrite(entity, req.user.role)) throw new HttpError(403, 'You do not have permission to edit this');
   if (entity === 'work_tasks') wt.guardUpdate(getRow('work_tasks', id), req.body, req.user);
+  // the whole form is checked; small updates (customer link, profile questionnaire) are not
+  if (entity === 'enquiries' && req.body && 'client_name' in req.body) enq.checkMandatory(req.body, getRow('enquiries', id));
   if (LOCKED[entity]) {
     const st = db.prepare(`SELECT status FROM ${entity} WHERE id = ?`).get(Number(id))?.status;
     if (LOCKED[entity].includes(st)) throw new HttpError(409, `This document is ${st} and locked.${entity === 'quotations' ? ' Use Revise to make changes.' : ''}`);
