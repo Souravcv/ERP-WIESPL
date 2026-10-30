@@ -1,4 +1,5 @@
 import { h, api, state, toast, fail, modal } from './ui.js';
+import { startI18n, getLang, setLang } from './i18n.js';
 import { ENTITIES, GROUPS, canView, hasFunction, setPermissions } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
@@ -217,6 +218,8 @@ $('login-form').addEventListener('submit', async e => {
 });
 $('btn-logout').onclick = async () => { await api('/logout', { method: 'POST' }).catch(() => {}); location.hash = ''; location.reload(); };
 $('btn-password').onclick = () => changePassword(false).catch(fail);
+$('btn-lang').textContent = getLang() === 'mr' ? '🌐 English' : '🌐 मराठी';
+$('btn-lang').onclick = () => setLang(getLang() === 'mr' ? 'en' : 'mr');
 $('btn-signature').onclick = () => signatureDialog().catch(fail);
 $('menu-btn').onclick = () => $('sidebar').classList.toggle('open');
 $('global-search').addEventListener('submit', e => {
@@ -227,5 +230,7 @@ $('global-search').addEventListener('submit', e => {
 window.addEventListener('hashchange', () => state.user && route());
 window.addEventListener('logged-out', () => { state.user = null; $('app').classList.add('hidden'); $('login').classList.remove('hidden'); });
 window.addEventListener('approvals-changed', refreshPending);
+$('login-lang').textContent = $('btn-lang').textContent;
+$('login-lang').onclick = $('btn-lang').onclick;
 
-start();
+startI18n().catch(() => {}).finally(start);

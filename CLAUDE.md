@@ -26,6 +26,9 @@ memory do not move between computers).
 - 3D on that page: `js/views/panels3d.js` (the panels on an OT wall, live canvas screens) and `js/views/orsurgery3d.js` (an operation
   with the OR Screen, 7-step tour `OR_STORY`). Real surgery videos come from `data/media/or/*.mp4` (`/api/media/or`, login only). They are
   NOT in git (too big for GitHub): copy that folder to each server by hand; without it the screens show drawn video.
+- Marathi: `js/i18n.js` translates screen text through the dictionary `js/i18n/mr*.js` (English text → Marathi, plus
+  `PATTERNS` for texts with numbers). New screen text stays English until it is added there. Typed data, inputs and printed
+  documents (`.doc`, `#print-root`) are never translated. 🌐 button in the top bar / login; the choice is kept per browser.
 - Company stamp and signatures: `server/signatures.js`, `js/signs.js`; printed only where an approval exists (`js/views/print.js`).
 
 ## Decisions already made (do not undo without asking)
