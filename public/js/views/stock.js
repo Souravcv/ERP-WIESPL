@@ -179,10 +179,12 @@ export async function stockEntryView(root) {
       : field({ INWARD: 'GRN No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
-      F.push(field('Against PO *', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
+      F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
-      if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'must be an approved PO in the CRM'));
+      if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'an approved PO in the CRM'),
+        h('label.span-2', 'Reason for receiving without a PO (if there is no PO) *', h('span.hint', 'Purchase, Accounts and the GM are told, so the PO can be raised or attached'),
+          v('reason', h('input', { placeholder: 'e.g. urgent site requirement – PO to follow' }))));
     }
     if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
     if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
@@ -282,7 +284,11 @@ export async function stockEntryView(root) {
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
-    if (type === 'INWARD' && !po && !String(header.po_no || '').trim()) throw new Error('Inward needs a purchase order: choose it under “Against PO” (or type its PO number)');
+    if (type === 'INWARD' && !po && !String(header.po_no || '').trim()) {
+      if (!header.vendor_id && !String(header.supplier || '').trim()) throw new Error('Without a PO, choose the supplier (or type its name)');
+      if (!String(header.reason || '').trim()) throw new Error('Without a PO, write the reason for receiving without one');
+      if (!(await confirmBox('This GRN has no purchase order. It will be saved, and Purchase, Accounts and the GM get a pop-up so the PO can be raised or attached. Save it?', 'Save without PO'))) return;
+    }
     if (type === 'INWARD' && po && lines.some(l => Number(l.qty) && !Number.isInteger(l.po_line))) throw new Error('Pick the PO material on every line (type part of its name and choose it)');
     if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');
     if (type === 'TRANSFER' && !header.to_location) throw new Error('Enter where the material is transferred to');
@@ -293,7 +299,7 @@ export async function stockEntryView(root) {
       const open = url => { window.open(url, '_blank'); return false; }; // keep the dialog open to print the other one too
       await modal('Saved', h('div.grid', h('p', r.challan && against
         ? `Issued ${r.count} item(s) against ${against}. Delivery challan ${r.challan.challan_no} was created automatically and the ${bom ? 'BOQ' : 'work order'} now shows this material as sent.`
-        : `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).${r.challan ? ` Delivery challan ${r.challan.challan_no} made with it.` : ''}`)), [
+        : `${MOVE_TYPES[type].label} ${r.doc_no} saved with ${r.count} item(s).${r.challan ? ` Delivery challan ${r.challan.challan_no} made with it.` : ''}${r.without_po ? ` No PO: ${r.told} person(s) in Purchase / Accounts / GM were told.` : ''}`)), [
         { label: '🖨 Print issue slip', action: () => open(`#/print/stockdoc/${type}?doc=${encodeURIComponent(r.doc_no)}`) },
         r.challan ? { label: '🖨 Print challan', action: () => open(`#/print/challan/${r.challan.id}`) } : null,
         r.challan && against ? { label: bom ? '📑 Open BOQ' : '📂 Open work order', action: () => { location.hash = bom ? `#/bom/${bom.id}` : `#/boq/${boq.id}`; return true; } } : null,

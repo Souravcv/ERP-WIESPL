@@ -2,6 +2,7 @@
 import { db, tx, nextSeq, audit } from './db.js';
 import { insertRow, updateRow, getRow, listRows, HttpError } from './crud.js';
 import { poInwardDues } from './hooks.js';
+import { notify } from './notify.js';
 import { MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
 import { round2, fyOf } from '../public/js/calc.js';
 
@@ -59,10 +60,9 @@ export function stockEntry(body, user) {
         .get(typed, typed.replace(/^(\d{1,3})\//, (m, d) => d.padStart(3, '0') + '/'));
       if (hit) header.po_id = hit.id;
     }
-    // Goods are only received against a purchase order.
-    if (type === 'INWARD' && !header.po_id && !body.allowWithoutPo) {
-      throw new HttpError(400, header.po_no ? `PO ${header.po_no} is not an approved PO in the CRM (approved / sent / partly received). Check the number or approve the PO first.` : 'Inward needs a purchase order: choose it under “Against PO” (or type its PO number)');
-    }
+    // Goods received without a PO are taken in (the GRN screen asks for the supplier and the reason); Purchase,
+    // Accounts and the GM are told below.
+    const noPo = type === 'INWARD' && !header.po_id;
     if (type === 'INWARD' && header.po_id) {
       po = getRow('purchase_orders', header.po_id);
       if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, `PO ${po.po_no} is ${po.status}; only approved POs can be received`);
@@ -103,8 +103,18 @@ export function stockEntry(body, user) {
       updateRow('purchase_orders', po.id, { lines: po.lines, status: all ? 'Closed' : 'Partially Received' }, user, { system: true });
       poInwardDues(po.id, date); // "N days after inward" payments become due
     }
-    audit(user.name, 'stock_moves', null, `${type} ${docNo}`, `${lines.length} line(s)`);
-    return { doc_no: docNo, type, count: created.length, ids: created };
+    audit(user.name, 'stock_moves', null, `${type} ${docNo}`, `${lines.length} line(s)${noPo ? ' – without PO' : ''}`);
+    let told = 0;
+    if (noPo) {
+      const supplier = header.vendor_id ? db.prepare('SELECT name FROM vendors WHERE id = ?').get(Number(header.vendor_id))?.name : header.supplier;
+      const value = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.rate) || 0), 0);
+      const names = lines.slice(0, 3).map(l => `${db.prepare('SELECT name FROM items WHERE id = ?').get(Number(l.item_id))?.name || 'item'} × ${l.qty}`).join(', ');
+      told = notify({ fn: 'notify_grn_without_po', kind: 'grn_without_po', title: `⚠ GRN ${docNo} without a PO – ${supplier || 'supplier'}`,
+        body: [`${names}${lines.length > 3 ? ` +${lines.length - 3} more` : ''}`, `₹ ${round2(value).toLocaleString('en-IN')} + GST`, header.invoice_no ? `invoice ${header.invoice_no}` : null,
+          header.reason ? `reason: ${String(header.reason).trim()}` : null, `by ${user.name}`, 'raise / attach the PO'].filter(Boolean).join(' · '),
+        link: `#/stock-movements?type=INWARD&q=${encodeURIComponent(docNo)}` }, user);
+    }
+    return { doc_no: docNo, type, count: created.length, ids: created, without_po: noPo, told };
   });
 }
 

@@ -239,6 +239,14 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_boq_flow_v1', '\"1\"')").run();
   }
+  // GRN without a PO (once): Purchase, Purchase Head, Accounts and the GM are told, so they can raise the PO / check the bill.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_grn_nopo_v1'").get()) {
+    for (const name of ['manager', 'purchase_head', 'purchase', 'accounts']) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'notify_grn_without_po'])]; db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name); }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_grn_nopo_v1', '\"1\"')").run();
+  }
   // Project Planner (once): whoever sees projects gets their schedule; the GM and Technical Manager approve baselines.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_planner_v1'").get()) {
     for (const r of db.prepare('SELECT name, perms FROM roles').all()) {

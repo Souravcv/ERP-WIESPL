@@ -150,6 +150,7 @@ export const FUNCTIONS = {
   view_audit: 'See change history / activity log',
   notify_requisition: 'Pop-up: new material requisition',
   notify_po: 'Pop-up: new purchase order',
+  notify_grn_without_po: 'Pop-up: material received (GRN) without a purchase order',
   notify_boq: 'Pop-up: new BOQ (bill of material)',
   notify_work_order: 'Pop-up: new work order',
   notify_enquiry: 'Pop-up: new enquiry from the client website form',
@@ -167,11 +168,11 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
-  purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
+  purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_grn_without_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
-  accounts: ['po_commercial', 'import', 'notify_po', 'pay_approve', 'pay_record'],
+  accounts: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record'],
   store: ['iqc_inspect', 'stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
-  purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq'],
+  purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_grn_without_po'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
   production: ['production_post', 'production_release', 'qc_inspect'],

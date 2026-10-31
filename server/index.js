@@ -560,7 +560,7 @@ api.post('/stock/entry', need('stock_moves'), wrap(req => {
 }));
 function postStockEntry(reqBody, user) {
   const req = { body: reqBody, user };
-  const body = { ...req.body, allowWithoutPo: false, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
+  const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
   if (['OUTWARD', 'TRANSFER', 'SCRAP'].includes(body.type)) {
     reservedCheck(body, body.lines, { projectId: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id), bomId: body.bom_id });
   }
