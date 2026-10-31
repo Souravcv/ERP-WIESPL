@@ -74,6 +74,7 @@ export async function attendView(root) {
     lastAuto.at = Date.now();
     try {
       const r = await api('/hr/check', { method: 'POST', body: await locate() });
+      if (r.site) { toast(`📍 You are now at ${r.site}: your day moved there`); reload(); return; }
       status.textContent = `Location recorded at ${r.at || new Date().toTimeString().slice(0, 5)}`;
       status.style.color = 'var(--good)';
     } catch (e) { status.textContent = `Location check failed: ${e.message}`; status.style.color = 'var(--warn)'; }
@@ -100,6 +101,13 @@ export async function attendView(root) {
 
   const mode = h('select', h('option', 'Site / office'), h('option', 'Travel / outstation'));
   const note = h('input', { placeholder: 'For travel / outstation: where and why' });
+  // The site to clock in at: the nearest one where you stand, or the one you choose (yours first, then all other sites).
+  // During the day the CRM follows you: a location check at another site moves the day there.
+  const site = h('select', h('option', { value: '' }, 'Nearest site where I am (automatic)'),
+    me.sites.length ? h('optgroup', { label: 'My sites and offices' }, me.sites.map(s => h('option', { value: s.id }, s.name))) : null,
+    (me.other_sites || []).length ? h('optgroup', { label: 'Other sites' }, me.other_sites.map(s => h('option', { value: s.id }, s.name))) : null);
+  const siteLbl = h('label', 'Site', site);
+  mode.onchange = () => { siteLbl.style.display = mode.value === 'Travel / outstation' ? 'none' : ''; };
   const needPhoto = me.employee.field_staff === 'Yes';
   const send = async (path, extra = {}, withPhoto = needPhoto) => {
     const photo = withPhoto ? await selfie() : undefined;
@@ -125,9 +133,9 @@ export async function attendView(root) {
           a.review === 'To review' && !working ? h('div.muted', { style: { marginTop: '6px' } }, 'HR is checking this day') : null),
       nextPhoto ? h('div', { style: { marginTop: '6px', fontWeight: 600 } }, nextPhoto) : null, status),
     !a?.check_in && a?.status !== 'On Leave' ? h('div.grid', { style: { gap: '10px' } },
-      h('label', 'Where', mode), h('label', 'Note', note),
+      h('label', 'Where', mode), siteLbl, h('label', 'Note', note),
       h('button.btn.primary', { style: { fontSize: '18px', padding: '14px' }, onclick: busy(async () => {
-        try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value }); toast(r.site ? `Clocked in at ${r.site}` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
+        try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value, site_id: mode.value === 'Travel / outstation' ? undefined : site.value || undefined }); toast(r.site ? `Clocked in at ${r.site}` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock in (selfie + location)' : '📍 Clock in')) : null,
     working ? h('div.grid', { style: { gap: '10px' } },
       needPhoto ? h('button.btn.good', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {

@@ -56,6 +56,11 @@ export function allowedSites(emp, date) {
   return [...ids].map(id => db.prepare("SELECT id, name, kind, lat, lng, radius_m FROM work_locations WHERE id = ? AND COALESCE(active, 'Yes') = 'Yes'").get(id)).filter(l => l && l.lat != null && l.lng != null);
 }
 
+// Every active work location with a position (for choosing the site at clock-in and for following a move to another site).
+export function activeSites() {
+  return db.prepare("SELECT id, name, kind, lat, lng, radius_m FROM work_locations WHERE COALESCE(active, 'Yes') = 'Yes' AND lat IS NOT NULL AND lng IS NOT NULL ORDER BY name").all();
+}
+
 // Inside = the distance, less the GPS uncertainty (up to 100 m), is within the radius.
 function fence(loc, p) {
   const d = Math.round(haversine(p.lat, p.lng, loc.lat, loc.lng));
@@ -122,6 +127,8 @@ export function outingsOf(pings, end, previous) {
   for (const p of pings) {
     if (p.kind === 'Going out') { if (!cur) cur = { from: p.at, reason: p.note || '', by: p.note ? 'Employee' : '' }; else if (!cur.reason) Object.assign(cur, { reason: p.note || '', by: 'Employee' }); seenOut = false; continue; }
     if (p.kind === 'Back') { if (cur) close(p.at); continue; }
+    // arrived at another site: the time since leaving the last one was travel to it
+    if (p.kind === 'Site change') { if (cur) { if (!cur.reason || cur.by !== 'Employee') Object.assign(cur, { reason: p.note || 'Travel', by: 'Auto' }); close(p.at); } continue; }
     if (p.inside === 'No') { if (!cur) cur = { from: p.at, reason: '', by: '' }; seenOut = true; if (p.kind === 'Out') close(p.at); continue; }
     if (cur && (p.kind === 'Out' || (p.inside === 'Yes' && (seenOut || !cur.by)))) close(p.at);
   }
@@ -192,13 +199,15 @@ export function evaluate(attId) {
   // Outside periods (going out is not clocking out): hours stay clock-in to clock-out; HR sees each period with its reason.
   const end = a.check_out || (a.date < today() ? pings.at(-1)?.at : now());
   const outings = outingsOf(pings, end, a.outings);
-  const away = outings.reduce((s, o) => s + (Number(o.minutes) || 0), 0);
+  // travel from one site to the next (found by the site change) is work time, not time away
+  const away = outings.filter(o => o.by !== 'Auto').reduce((s, o) => s + (Number(o.minutes) || 0), 0);
   const deduct = outings.reduce((s, o) => s + (Number(o.deduct) || 0), 0);
   for (const x of [...flags]) if (/^(away from the site|outside the site)/.test(x)) flags.delete(x);
   if (away >= 15) {
     const why = {};
-    for (const o of outings) why[o.reason || 'no reason given'] = (why[o.reason || 'no reason given'] || 0) + o.minutes;
-    flags.add(`outside the site ${outings.length} time(s), ${away} min (${Object.entries(why).map(([k, v]) => `${k} ${v}`).join(', ')})`);
+    const own = outings.filter(o => o.by !== 'Auto');
+    for (const o of own) why[o.reason || 'no reason given'] = (why[o.reason || 'no reason given'] || 0) + o.minutes;
+    flags.add(`outside the site ${own.length} time(s), ${away} min (${Object.entries(why).map(([k, v]) => `${k} ${v}`).join(', ')})`);
   }
   const c = counts(a.id);
   const list = [...flags];
@@ -218,19 +227,29 @@ export function clockIn(user, body = {}, ip) {
   const p = position(body);
   const travel = body.mode === 'Travel / outstation';
   let f = null;
+  const inFlags = [];
   if (!travel) {
     const sites = allowedSites(emp, t);
-    if (!sites.length) throw new HttpError(409, 'No work location is set for you today: ask HR / the service coordinator to assign your site (or choose Travel / outstation with a note)');
-    f = nearest(sites, p);
-    if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${f.loc.name} (allowed ${f.radius} m). Clock in at the site, or choose Travel / outstation with a note.`);
+    if (body.site_id) {
+      // The site the employee chose: they must be at it. A site not assigned to them is allowed, and HR sees it.
+      const loc = activeSites().find(l => l.id === Number(body.site_id));
+      if (!loc) throw new HttpError(400, 'That site has no position in the CRM: choose another site, or ask HR to set its location');
+      f = { loc, ...fence(loc, p) };
+      if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${loc.name} (allowed ${f.radius} m). Choose the site where you are now, or Travel / outstation with a note.`);
+      if (!sites.some(l => l.id === loc.id)) inFlags.push(`site not assigned to them (${loc.name})`);
+    } else {
+      if (!sites.length) throw new HttpError(409, 'No work location is set for you today: choose your site from the list, ask HR / the service coordinator to assign your site, or choose Travel / outstation with a note');
+      f = nearest(sites, p);
+      if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${f.loc.name} (allowed ${f.radius} m). Choose the site where you are from the list, or Travel / outstation with a note.`);
+    }
   } else if (!String(body.note || '').trim()) throw new HttpError(400, 'Write where you are going / why (travel or outstation work)');
   if (emp.field_staff === 'Yes' && !body.photo) throw new HttpError(400, 'Take a selfie to clock in');
   return tx(() => {
     const att = existing ? getRow('attendance', existing.id) : insertRow('attendance', { date: t, employee_id: emp.id }, user, { system: true });
     updateRow('attendance', att.id, { check_in: now(), location_id: f?.loc.id || null, mode: travel ? 'Travel / outstation' : 'Site / office', in_distance_m: f?.distance ?? null, in_ip: ip || null,
-      note: String(body.note || '').trim() || null, status: 'Working', review: '' }, user, { system: true });
+      note: String(body.note || '').trim() || null, status: 'Working', review: '', site_moves: f ? `${now().slice(11, 16)} ${f.loc.name} (clock in)` : null }, user, { system: true });
     const photoId = savePhoto(att.id, 'Clock in', body.photo, user);
-    addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId);
+    addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId, inFlags);
     audit(user.name, 'attendance', att.id, 'clock in', f ? `${f.loc.name} ${f.distance} m` : 'travel');
     return { attendance: forPhone(evaluate(att.id)), site: f?.loc.name || null };
   });
@@ -243,14 +262,34 @@ function openDay(emp) {
 }
 const siteOf = att => (att.location_id ? db.prepare('SELECT id, name, lat, lng, radius_m FROM work_locations WHERE id = ?').get(att.location_id) : null);
 
+// People move during the day (office first, then a site, or back): when a check finds the person outside their
+// current site but inside another work location, the day moves to that site. The move is logged on the day, the time
+// on the road is "Travel to <site>", a "going out" ends, and HR / the reporting manager are told. A site that is not
+// assigned to the person is allowed and flagged for HR. Returns the site and fence to judge this check by.
+function followSite(att, emp, p, ip, user) {
+  const loc = siteOf(att);
+  const f = loc ? fence(loc, p) : null;
+  if (!f || f.inside || att.mode === 'Travel / outstation') return { att, loc, f };
+  const there = activeSites().filter(l => l.id !== loc.id).map(l => ({ loc: l, ...fence(l, p) })).filter(x => x.inside).sort((a, b) => a.distance - b.distance)[0];
+  if (!there) return { att, loc, f };
+  const assigned = allowedSites(emp, att.date).some(l => l.id === there.loc.id);
+  const flags = assigned ? [] : [`site not assigned to them (${there.loc.name})`];
+  insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind: 'Site change', lat: p.lat, lng: p.lng, accuracy_m: p.accuracy, distance_m: there.distance,
+    inside: 'Yes', ip: ip || null, note: `Travel to ${there.loc.name}`, flags: flags.join('; ') || null }, { name: emp.name }, { system: true });
+  updateRow('attendance', att.id, { location_id: there.loc.id, site_moves: [att.site_moves, `${now().slice(11, 16)} ${there.loc.name} (moved from ${loc.name})`].filter(Boolean).join('\n'),
+    out_since: null, out_reason: null, away_since: null }, user, { system: true });
+  audit(emp.name, 'attendance', att.id, 'site change', `${loc.name} → ${there.loc.name}`);
+  notify({ fn: 'hr_manage', userNames: emp.reporting_to ? [emp.reporting_to] : [], kind: 'attendance', title: `📍 ${emp.name} moved from ${loc.name} to ${there.loc.name}`,
+    body: `at ${now().slice(11, 16)}${assigned ? '' : ' · this site is not assigned to them'}`, link: `#/view/attendance/${att.id}` }, { name: 'Attendance' });
+  return { att: getRow('attendance', att.id), loc: there.loc, f: { distance: there.distance, inside: true, radius: there.radius }, moved: there.loc.name };
+}
+
 // A presence check: automatic (every few minutes while the page is open, every 30 min from the Android app even when the
 // phone is locked, and at once when the app sees the phone leave the site radius) or with a photo (every few hours).
 export function check(user, body = {}, ip) {
   const emp = employeeOf(user);
   const att = openDay(emp);
   const p = position(body);
-  const loc = siteOf(att);
-  const f = loc ? fence(loc, p) : null;
   const kind = body.photo ? 'Photo check' : body.reason === 'geofence-exit' ? 'Geofence exit' : 'Auto';
   // A plain check within 20 s of the last one adds nothing (e.g. the button pressed again and again).
   const last = db.prepare('SELECT at FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
@@ -258,11 +297,12 @@ export function check(user, body = {}, ip) {
   return tx(() => {
     const prev = db.prepare('SELECT inside FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
     const photoId = savePhoto(att.id, 'Presence check', body.photo, user);
-    addPing(att, emp, kind, p, f, ip, photoId);
+    const s = followSite(att, emp, p, ip, user);
+    addPing(s.att, emp, kind, p, s.f, ip, photoId);
     evaluate(att.id);
-    if (f) awayAlert(getRow('attendance', att.id), emp, loc, f, prev?.inside === 'No', user);
-    // The phone is told only that the check was recorded: whether it was inside the site is for HR.
-    return { recorded: true, at: now().slice(11, 16) };
+    if (s.f && !s.moved) awayAlert(getRow('attendance', att.id), emp, s.loc, s.f, prev?.inside === 'No', user);
+    // The phone is told only that the check was recorded (and the new site after a move): being inside is for HR.
+    return { recorded: true, at: now().slice(11, 16), ...(s.moved ? { site: s.moved } : {}) };
   });
 }
 
@@ -312,11 +352,12 @@ export function backAtSite(user, body = {}, ip) {
   let p = null;
   try { p = position(body); } catch { p = null; }
   return tx(() => {
-    if (p) addPing(att, emp, 'Back', p, siteOf(att) ? fence(siteOf(att), p) : null, ip, null);
+    const s = p ? followSite(att, emp, p, ip, user) : null;
+    if (p) addPing(s.att, emp, 'Back', p, s.f, ip, null);
     else insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind: 'Back', ip: ip || null }, { name: emp.name }, { system: true });
     updateRow('attendance', att.id, { out_since: null, out_reason: null }, user, { system: true });
     evaluate(att.id);
-    return { recorded: true, at: now().slice(11, 16) };
+    return { recorded: true, at: now().slice(11, 16), ...(s?.moved ? { site: s.moved } : {}) };
   });
 }
 
@@ -325,11 +366,11 @@ export function clockOut(user, body = {}, ip) {
   const att = openDay(emp);
   const p = position(body);
   if (emp.field_staff === 'Yes' && !body.photo) throw new HttpError(400, 'Take a selfie to clock out');
-  const loc = siteOf(att);
-  const f = loc ? fence(loc, p) : null;
   return tx(() => {
     const photoId = savePhoto(att.id, 'Clock out', body.photo, user);
-    addPing(att, emp, 'Out', p, f, ip, photoId, f && !f.inside ? ['clocked out outside the site'] : []);
+    // clocking out at another site than the morning's: the day moves there first
+    const { att: cur, f } = followSite(att, emp, p, ip, user);
+    addPing(cur, emp, 'Out', p, f, ip, photoId, f && !f.inside ? ['clocked out outside the site'] : []);
     updateRow('attendance', att.id, { check_out: now(), out_distance_m: f?.distance ?? null, out_since: null, out_reason: null }, user, { system: true });
     audit(user.name, 'attendance', att.id, 'clock out', f ? `${f.distance} m` : '');
     return { attendance: forPhone(evaluate(att.id)) };
@@ -350,6 +391,8 @@ export function myDay(user) {
   const leaves = db.prepare('SELECT id, leave_no, type, from_date, to_date, days, status, balance_note FROM leave_requests WHERE employee_id = ? ORDER BY id DESC LIMIT 10').all(emp.id);
   return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, shift_start: emp.shift_start, shift_end: emp.shift_end },
     today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
+    // other active sites, also selectable at clock-in (HR sees when a site is not assigned)
+    other_sites: activeSites().filter(l => !allowedSites(emp, t).some(a => a.id === l.id)).map(l => ({ id: l.id, name: l.name, kind: l.kind })),
     rules: rules(), month, leaves, balance: balances(t, emp.id).rows[0] || null, holiday: db.prepare('SELECT name FROM holidays WHERE date = ?').get(t)?.name || null, weekly_off: isWeeklyOff(emp, t) };
 }
 
