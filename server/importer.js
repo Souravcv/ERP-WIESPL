@@ -276,6 +276,32 @@ function parseStoreWorkbook(wb, plan) {
   moveSheet('Material Transfer', ['date', 'qty'], g => ({ type: 'TRANSFER', date: date(g('date')), doc_no: str(g('transferno')) || null, code: code(g('itemcode')),
     name: str(g('materialdescription')), qty: num(g('qty')), uom: uom(g('unit')), rate: num(g('price')) ?? 0, from_location: str(g('fromlocation')) || 'Store',
     to_location: str(g('tolocation')) || null, purpose: str(g('purpose')) || null }));
+  // Job work (sheets after Material Transfer, Oct 2026): parts sent to a vendor for a process (powder coating,
+  // fabrication …) and parts received from the vendor. The workbook counts them for FG parts only (FG Part Summary:
+  // FG inward − outward + job work inward − job work outward). A raw material sent for job work is on Material
+  // Transfer as well, which is where the workbook counts it, so such rows are not counted a second time.
+  const isFg = c => masterRef.get(String(c || '').trim())?.sheet === 'FG Part Summary';
+  const jobWork = (name, must, codeKey, build) => {
+    const ws = wb.getWorksheet(name);
+    if (!ws) return;
+    let other = 0;
+    moveSheet(name, must, g => { if (!isFg(code(g(codeKey)))) { if (Number(num(g(must[1]))) > 0) other++; return null; } return build(g); });
+    if (other) addOp(plan, { sheet: name, kind: 'note', label: `${other} row(s) of store materials (not FG parts) left out: the workbook counts them on Material Transfer / Inward, not here`, errors: [] });
+  };
+  jobWork('Job Work Outward', ['date', 'qtysent'], 'fgpartcode', g => {
+    const vendor = str(g('vendername', 'vendorname'));
+    const why = str(g('projectpurpose'));
+    return { type: 'TRANSFER', date: date(g('date')), doc_no: str(g('vendordcno', 'dcno')) || null, code: code(g('fgpartcode')), name: str(g('fgpartname')), qty: num(g('qtysent')),
+      uom: uom(g('uom')), rate: 0, from_location: 'Store', to_location: vendor || 'Job work vendor', vendor_id: L.vendorByName.get(norm(vendor)) || null,
+      purpose: why ? `Job work: ${why}` : 'Job work' };
+  });
+  jobWork('Job Work Inward', ['receiptdate', 'qtyreceived'], 'fgpartcode', g => {
+    const d = date(g('receiptdate'));
+    const vendor = str(g('vendorname', 'vendername'));
+    return { type: 'INWARD', date: d, doc_no: seqDoc(g('grnno'), d), code: code(g('fgpartcode')), name: str(g('fgpartname')), category: 'Finished Goods', qty: num(g('qtyreceived')),
+      uom: uom(g('uom')), rate: num(g('price')) ?? 0, supplier: vendor || null, vendor_id: L.vendorByName.get(norm(vendor)) || null, invoice_no: str(g('invoiceno')) || null,
+      remarks: ['Job work', str(g('process')), str(g('remark'))].filter(Boolean).join(': ') || null };
+  });
   moveSheet('Return Material', ['date', 'returnqty'], g => {
     const u = str(g('uom'));
     return { type: 'RETURN', date: date(g('date')), code: code(g('itemcode')), name: str(g('itemname')), qty: num(g('returnqty')), uom: isUom(u) ? uom(u) : '',
