@@ -1259,6 +1259,27 @@ export async function recordView(root, entity, id) {
     inputs.category.el.addEventListener('change', showNext);
     showNext();
   }
+  if (entity === 'employees' && writable && inputs.login) {
+    // Pick the person's existing CRM user: their details come along and no new login is needed.
+    const inp = inputs.login.el, roleField = inputs.login_role?.el.closest('label');
+    api('/hr/logins').then(all => {
+      const users = all.filter(u => !u.employee_id || u.employee_id === row.id);
+      const sync = pick => {
+        const u = users.find(x => x.username.toLowerCase() === inp.value.trim().toLowerCase());
+        if (roleField) roleField.style.display = u ? 'none' : '';
+        if (!u || !pick) return;
+        inp.value = u.username;
+        inputs.login_role?.set('');
+        for (const k of ['name', 'mobile', 'email']) if (u[k] && inputs[k] && !inputs[k].get()) inputs[k].set(u[k]);
+      };
+      inp.setAttribute('list', 'employee-logins');
+      inp.autocomplete = 'off';
+      inp.placeholder = 'Select an existing user…';
+      inp.after(h('datalist', { id: 'employee-logins' }, users.map(u => h('option', { value: u.username }, `${u.name} · ${u.role_label}`))));
+      inp.addEventListener('change', () => sync(true));
+      sync(false);
+    }).catch(() => {});
+  }
   if (entity === 'purchase_orders' && inputs.lines?.refresh) {
     // Charges change the totals at once.
     for (const k of [...PO_CHARGES.map(([k]) => k), 'other_charges_label', 'charges_gst']) inputs[k]?.el.addEventListener('input', () => inputs.lines.refresh());

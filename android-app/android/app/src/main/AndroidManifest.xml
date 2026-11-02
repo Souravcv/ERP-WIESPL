@@ -28,7 +28,16 @@
         <service
             android:name=".TrackerService"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="location" />
+
+        <!-- Starts the service again if it was killed (app removed from recents, phone restarted, app updated), until clock-out. -->
+        <receiver android:name=".TrackerAlarm" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -46,12 +55,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <!-- optional ("Allow all the time"): lets Android restart tracking by itself after it stopped the app -->
+    <!-- "Allow all the time": lets tracking come back by itself after the app was closed or killed -->
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <!-- selfie at clock in / out (the CRM page uses a camera file input) -->
     <uses-permission android:name="android.permission.CAMERA" />

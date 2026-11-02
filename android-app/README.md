@@ -11,7 +11,8 @@ location checks **while the phone is locked or the app is closed**.
   - **at once when the phone leaves the site radius** (`reason: "geofence-exit"`, saved as a *Geofence exit* check);
   - at once the first time a mock location is seen (`mock: true`).
 - The server (`server/hr.js`) flags **"fake GPS app detected"**, sends the day to HR review straight away and notifies HR.
-- The service stops at clock-out (or when the server says the person is no longer clocked in).
+- The service stops at clock-out (or when the server says the person is no longer clocked in). Until then an alarm every 5 min (`TrackerAlarm`) starts it again
+  if it was killed: app removed from the recent apps, phone restarted, app updated. This needs location *Allow all the time*.
 - A privacy notice is shown at first start; the app closes if it is not accepted.
 
 Where the code is:
@@ -84,10 +85,10 @@ Then on the phone:
 2. Log in with the CRM login (the one HR entered on the employee record).
 3. Clock in. Allow **Location** (*While using the app*), **Notifications**, and *Allow* when asked to let the app run in the background
    (battery optimisation).
-4. Recommended: tap *Set location to "Allow all the time"* on the attendance screen (or Settings → Apps → WIESPL Attendance → Permissions →
-   Location → *Allow all the time*). Without it tracking still runs from clock-in, but if the phone kills the app it stays off until the app is opened again.
-5. Xiaomi / Redmi / POCO, Oppo, Vivo, Realme, OnePlus also stop background apps on their own: set *Battery → No restrictions* (or *Autostart* on)
-   for WIESPL Attendance. See <https://dontkillmyapp.com> for the exact steps per brand.
+4. Required: tap *Set location to "Allow all the time"* on the attendance screen (or Settings → Apps → WIESPL Attendance → Permissions →
+   Location → *Allow all the time*). Without it, if the phone kills the app tracking stays off until the app is opened again, and the phone shows *Location checks stopped*.
+5. Xiaomi / Redmi / POCO, Oppo, Vivo, Realme, OnePlus also stop background apps on their own, and removing the app from recents can force-stop it, which ends
+   the alarm too: set *Battery → No restrictions* and *Autostart* on for WIESPL Attendance.  *Force stop* in the phone settings always ends tracking until the app is opened. See <https://dontkillmyapp.com> for the exact steps per brand.
 
 While the person is clocked in a notification *"WIESPL attendance: location shared"* is always shown with the time of the last check.
 

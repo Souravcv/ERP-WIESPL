@@ -681,6 +681,7 @@ const hrView = req => { if (!canView('attendance', req.user.role)) throw new Htt
 api.get('/hr/today', wrap(req => { hrView(req); return hr.todayBoard(req.query.date || undefined); }));
 api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.query.month); }));
 api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
+api.get('/hr/logins', need('employees'), wrap(() => hrf.loginChoices()));
 api.post('/leave_requests/:id/submit', need('leave_requests'), wrap(req => wf.submitForApproval('Leave', req.params.id, req.user)));
 api.post('/probation_reviews/:id/submit', need('probation_reviews'), wrap(req => wf.submitForApproval('Confirmation', req.params.id, req.user)));
 api.post('/separations/:id/act/:action', wrap(req => hrf.separationAction(req.params.id, req.params.action, req.body, req.user)));
@@ -1001,6 +1002,7 @@ api.post('/:entity', wrap(req => {
   if (req.params.entity === 'bom_items') bomEditable(req.body?.bom_id, req.user);
   if (req.params.entity === 'boms' && ['Design Review', 'Final'].includes(req.body?.status)) throw new HttpError(400, 'Save the BOQ as Draft; Design Review and Final are set with the buttons on the BOQ');
   if (req.params.entity === 'enquiries') enq.checkMandatory(req.body || {});
+  if (req.params.entity === 'employees') hrf.checkLogin(req.body?.login);
   const row = insertRow(req.params.entity, req.body || {}, req.user);
   if (req.params.entity === 'employees') return hrf.ensureLogin(row, req.user);
   notify.notifyNew(req.params.entity, row, req.user);
@@ -1045,7 +1047,7 @@ api.put('/:entity/:id', wrap(req => {
       if (to !== undefined && to !== cur.status && !['Final', 'In Progress', 'Completed', 'On Hold'].includes(to)) throw new HttpError(400, `A Final BOQ cannot go back to ${to}; use “Reopen”`);
     }
   }
-  if (entity === 'employees') return hrf.ensureLogin(updateRow(entity, id, body, req.user), req.user);
+  if (entity === 'employees') { hrf.checkLogin(body.login, id); return hrf.ensureLogin(updateRow(entity, id, body, req.user), req.user); }
   return updateRow(entity, id, body, req.user);
 }));
 api.delete('/:entity/:id', wrap(req => {

@@ -51,7 +51,7 @@ export async function dashboardView(root) {
     (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts'],
     canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service']].filter(Boolean);
   // Shop floor and site people land on their own performance.
-  if (WORKER_ROLES.includes(role)) { location.hash = '#/performance'; return; }
+  if (WORKER_ROLES.includes(role)) { location.hash = window.Capacitor?.isNativePlatform?.() ? '#/attend' : '#/performance'; return; } // the Android app is for attendance
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
   let tab = sessionStorage.getItem('dash-tab');
   if (!views.some(v => v[0] === tab)) {

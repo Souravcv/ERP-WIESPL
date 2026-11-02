@@ -2,6 +2,18 @@
 // English (exactly as on the screen) → Marathi. Short forms used in the office (BOQ, PO, GST, AHU …) stay as they are.
 export default {
   // worker performance, Nov 2026
+  "Select the existing CRM user, or leave blank and choose a CRM role to make a new login. Phone attendance is booked to this employee": "सध्याचा CRM युजर निवडा, किंवा रिकामे ठेवून नवीन लॉगिनसाठी CRM भूमिका निवडा. फोनवरील हजेरी या कर्मचाऱ्याच्या नावे नोंदवली जाते",
+
+  "Select an existing user…": "सध्याचा युजर निवडा…",
+
+  "⚠️ Location stops when this app is closed": "⚠️ हे ॲप बंद केल्यावर लोकेशन थांबते",
+
+  "⚙️ Set location to “Allow all the time”": "⚙️ लोकेशन “नेहमी परवानगी द्या” वर ठेवा",
+
+  "⚠️ The phone may stop location checks to save battery": "⚠️ बॅटरी वाचवण्यासाठी फोन लोकेशन तपासणी थांबवू शकतो",
+
+  "🔋 Allow running in the background": "🔋 बॅकग्राउंडमध्ये चालू ठेवण्याची परवानगी द्या",
+
   '📈 Performance': '📈 कामगिरी', 'Performance': 'कामगिरी', '📝 Daily Team Work': '📝 टीमचे दैनंदिन काम', 'Daily Team Work': 'टीमचे दैनंदिन काम', 'Worker': 'कामगार', 'Helper': 'मदतनीस', 'Technician': 'तंत्रज्ञ', 'Wiring Engineer': 'वायरिंग इंजिनिअर', 'Panel Maker': 'पॅनल मेकर', 'Work In-charge': 'काम प्रभारी',
   'My score': 'माझा गुण', 'Days worked': 'काम केलेले दिवस', 'Work recorded': 'नोंदवलेले काम', 'Done': 'पूर्ण', 'Quality': 'गुणवत्ता', 'Late marks': 'उशिराच्या नोंदी', 'Score': 'गुण', 'Doing best': 'सर्वोत्तम', 'Target': 'लक्ष्य', 'Panel Shop': 'पॅनल शॉप', 'Electrical / Wiring': 'इलेक्ट्रिकल / वायरिंग', '💾 Save the day': '💾 दिवस जतन करा',
   // job work and employee login, 2 Nov 2026

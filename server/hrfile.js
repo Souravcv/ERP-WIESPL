@@ -13,6 +13,17 @@ import crypto from 'node:crypto';
 // The CRM login made from the employee form: a CRM role chosen and no account with this username yet creates the account
 // with a temporary password (changed at the first sign-in), shown once to the person saving. No username: one is made from
 // the name. HR may not make Administrator or GM logins (those stay under Admin → Users).
+// Existing CRM users for the employee form: who they are, and which employee already has them.
+export const loginChoices = () => db.prepare(`SELECT u.username, u.name, u.phone AS mobile, u.email, COALESCE(r.label, u.role) AS role_label, e.id AS employee_id
+  FROM users u LEFT JOIN roles r ON r.name = u.role LEFT JOIN employees e ON lower(e.login) = lower(u.username) WHERE u.active = 1 ORDER BY u.name`).all();
+
+// Attendance is booked by the login: one login, one employee.
+export function checkLogin(login, id) {
+  if (!login) return;
+  const other = db.prepare('SELECT name FROM employees WHERE lower(login) = lower(?) AND id <> ?').get(String(login).trim(), id || 0);
+  if (other) throw new HttpError(400, `The login ${login} is already linked to the employee ${other.name}`);
+}
+
 export function ensureLogin(row, actor) {
   const role = row.login_role;
   if (!role) return row;

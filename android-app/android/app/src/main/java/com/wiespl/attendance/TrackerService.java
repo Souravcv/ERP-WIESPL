@@ -22,6 +22,7 @@ import android.webkit.CookieManager;
 
 import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -50,6 +51,8 @@ import java.util.concurrent.Executors;
  *  - at once when the phone leaves the site radius (reason "geofence-exit");
  *  - at once the first time a mock (fake GPS app) position is seen.
  * The server measures the distance itself; the radius check here only decides when to send.
+ * Removing the app from the recent apps must not end this: an alarm every few minutes (TrackerAlarm) outlives the process
+ * and starts the service again until clock-out. Android allows that with location "Allow all the time".
  */
 public class TrackerService extends Service {
     private static final String TAG = "WIESPL-Tracker";
@@ -58,9 +61,14 @@ public class TrackerService extends Service {
     private static final long FIX_EVERY_MS = 5 * 60_000L;   // GPS fix every 5 min (decides geofence exits)
     private static final long RETRY_MS = 2 * 60_000L;       // after a failed send
     private static final float MAX_ACCURACY_M = 150;        // the server refuses rougher fixes (hr_max_accuracy_m)
+    static final long WATCHDOG_MS = 5 * 60_000L;            // alarm: starts the service again if it was killed
+    private static final long RESTART_MS = 10_000L;         // after the app was removed from the recent apps
+    private static final int STOPPED_NOTE_ID = 7002;
+    private static final String ALERT_CHANNEL = "attendance_alert";
     static final String ACTION_CHECK = "com.wiespl.attendance.CHECK";
 
     static volatile boolean running = false;
+    static volatile TrackerService self = null;
     static volatile String lastSentText = null;
     static volatile String lastResult = null;
 
@@ -119,6 +127,7 @@ public class TrackerService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        self = this;
         fused = LocationServices.getFusedLocationProviderClient(this);
         NotificationManager nm = getSystemService(NotificationManager.class);
         if (Build.VERSION.SDK_INT >= 26 && nm != null) {
@@ -132,15 +141,19 @@ public class TrackerService extends Service {
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         cfg = Config.load(this);
         if (cfg == null) { stopSelf(); return START_NOT_STICKY; }
+        armAlarm(this, WATCHDOG_MS);
         try {
             ServiceCompat.startForeground(this, NOTE_ID, note("Clocked in · location checks every " + cfg.intervalMinutes + " min"),
                 Build.VERSION.SDK_INT >= 29 ? ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0);
         } catch (Exception e) {
             // Android refuses a location service started in the background without "Allow all the time": wait for the app.
             Log.w(TAG, "cannot start in the background", e);
+            noticeStopped(this);
             stopSelf();
             return START_NOT_STICKY;
         }
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (nm != null) nm.cancel(STOPPED_NOTE_ID);
         if (!running) {
             running = true;
             LocationRequest req = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, FIX_EVERY_MS)
@@ -148,36 +161,75 @@ public class TrackerService extends Service {
             fused.requestLocationUpdates(req, callback, Looper.getMainLooper());
             freshFix("interval");   // first check right away
         } else if (intent != null && ACTION_CHECK.equals(intent.getAction())) {
-            if (SystemClock.elapsedRealtime() - lastSentAt >= cfg.intervalMinutes * 60_000L - 60_000L) freshFix("interval");
+            tick();
         }
-        scheduleAlarm();
         return START_STICKY;
+    }
+
+    // The app was swiped away. Many phones kill the process soon after: come back by the alarm.
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        if (Config.load(this) != null) armAlarm(this, RESTART_MS);
+        super.onTaskRemoved(rootIntent);
     }
 
     @Override public void onDestroy() {
         running = false;
+        self = null;
         fused.removeLocationUpdates(callback);
-        AlarmManager am = getSystemService(AlarmManager.class);
-        if (am != null) am.cancel(alarmIntent());
+        // Only clock-out ends the tracking; anything else that stops the service is undone by the alarm.
+        if (Config.load(this) != null) armAlarm(this, RESTART_MS);
+        else { AlarmManager am = getSystemService(AlarmManager.class); if (am != null) am.cancel(alarmIntent(this)); }
         net.shutdown();
         super.onDestroy();
     }
 
-    // Backstop: an alarm that fires even in Doze (inexact, at most ~every 9 min), in case the location updates are held back.
-    private void scheduleAlarm() {
-        AlarmManager am = getSystemService(AlarmManager.class);
-        if (am == null) return;
-        long at = SystemClock.elapsedRealtime() + cfg.intervalMinutes * 60_000L;
-        am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent());
+    // Called by the alarm while the service is alive: the next alarm, and the check if one is due.
+    void tick() {
+        armAlarm(this, WATCHDOG_MS);
+        if (cfg != null && SystemClock.elapsedRealtime() - lastSentAt >= cfg.intervalMinutes * 60_000L - 60_000L) freshFix("interval");
     }
-    private PendingIntent alarmIntent() {
-        Intent i = new Intent(this, TrackerService.class).setAction(ACTION_CHECK);
-        return PendingIntent.getService(this, 1, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+    // Fires even in Doze (at most about every 9 min there), also when the process is gone. An exact alarm may start the service from the background.
+    static void armAlarm(Context c, long delayMs) {
+        AlarmManager am = c.getSystemService(AlarmManager.class);
+        if (am == null) return;
+        long at = SystemClock.elapsedRealtime() + delayMs;
+        if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent(c));
+        else am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, alarmIntent(c));
+    }
+    private static PendingIntent alarmIntent(Context c) {
+        Intent i = new Intent(c, TrackerAlarm.class).setAction(ACTION_CHECK);
+        return PendingIntent.getBroadcast(c, 1, i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    // Android refuses to start tracking from the background: the person has to know, and the alarm keeps trying.
+    static void noticeStopped(Context c) {
+        NotificationManager nm = c.getSystemService(NotificationManager.class);
+        if (nm == null) return;
+        if (Build.VERSION.SDK_INT >= 26) nm.createNotificationChannel(new NotificationChannel(ALERT_CHANNEL, "Attendance location stopped", NotificationManager.IMPORTANCE_HIGH));
+        Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        nm.notify(STOPPED_NOTE_ID, new NotificationCompat.Builder(c, ALERT_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_location).setContentTitle("Location checks stopped")
+            .setContentText("You are clocked in: open WIESPL Attendance and set location to Allow all the time")
+            .setStyle(new NotificationCompat.BigTextStyle().bigText("You are clocked in: open WIESPL Attendance and set location to Allow all the time"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH).setOnlyAlertOnce(true).setAutoCancel(true)
+            .setContentIntent(PendingIntent.getActivity(c, 2, open, PendingIntent.FLAG_IMMUTABLE)).build());
+    }
+
+    static boolean mayRunInBackground(Context c) {
+        return Build.VERSION.SDK_INT < 29 || ContextCompat.checkSelfPermission(c, android.Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
     @SuppressLint("MissingPermission")
     private void freshFix(String reason) {
-        fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnSuccessListener(l -> { if (l != null) onFix(l, reason); });
+        // the phone may be asleep: the alarm only keeps it awake while it runs
+        PowerManager.WakeLock wl = getSystemService(PowerManager.class).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "wiespl:fix");
+        wl.acquire(45_000L);
+        fused.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, null).addOnCompleteListener(t -> {
+            Location l = t.isSuccessful() ? t.getResult() : null;
+            if (l != null) onFix(l, reason); else update("Clocked in · no GPS position: switch on location");
+            if (wl.isHeld()) wl.release();
+        });
     }
 
     // ------------------------------------------------------------------ deciding when to send

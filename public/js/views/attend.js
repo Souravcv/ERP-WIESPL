@@ -88,7 +88,11 @@ export async function attendView(root) {
         if (!working) return;
         status.textContent = `Location checks run in the background every ${R.pingMinutes} min, also with the phone locked`;
         status.style.color = 'var(--good)';
-        if (r?.background === false) bg.replaceChildren(h('button.btn', { onclick: () => app('allowAlways') }, '⚙️ Set location to “Allow all the time” (recommended)'));
+        // Without these two the phone ends the checks when the app is closed.
+        const warn = (text, label, method) => h('div', { style: { marginTop: '8px' } }, h('div', { style: { color: 'var(--bad)', fontSize: '13px', marginBottom: '4px' } }, text), h('button.btn', { onclick: () => app(method) }, label));
+        bg.replaceChildren(
+          r?.background === false ? warn('⚠️ Location stops when this app is closed', '⚙️ Set location to “Allow all the time”', 'allowAlways') : null,
+          r?.battery === false ? warn('⚠️ The phone may stop location checks to save battery', '🔋 Allow running in the background', 'allowBattery') : null);
       })
       .catch(e => { if (working) { status.textContent = `Background location checks are off: ${e?.message || e}`; status.style.color = 'var(--bad)'; } });
   } else if (working) {

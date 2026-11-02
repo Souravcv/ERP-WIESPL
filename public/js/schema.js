@@ -1293,7 +1293,7 @@ export const ENTITIES = {
     fields: [
       { key: 'emp_code', label: 'Employee Code', type: 'text', readonly: true, hint: 'Auto: EMP-001' },
       { key: 'name', label: 'Name', type: 'text', required: true },
-      { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'The username this person signs in with: their phone attendance is booked to this employee. Blank with a CRM role chosen: made from the name' },
+      { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'Select the existing CRM user, or leave blank and choose a CRM role to make a new login. Phone attendance is booked to this employee' },
       { key: 'login_role', label: 'CRM Role (makes the login)', type: 'select', options: ['', ...Object.keys(ROLE_INFO).filter(r => !['admin', 'manager'].includes(r))], optionLabels: Object.fromEntries(Object.entries(ROLE_INFO).map(([k, v]) => [k, v.label])), hint: 'Choose a role: Save creates the login and shows a temporary password once. Administrator and GM logins: Admin → Users' },
       { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Panel Shop', 'Electrical / Wiring', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
       { key: 'designation', label: 'Designation', type: 'text', suggest: ['Worker', 'Helper', 'Technician', 'Wiring Engineer', 'Panel Maker', 'Work In-charge', 'Supervisor'] },

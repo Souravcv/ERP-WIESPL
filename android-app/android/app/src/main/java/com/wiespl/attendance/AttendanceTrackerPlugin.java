@@ -31,7 +31,8 @@ import com.google.android.gms.location.Priority;
  *  start       – after clock-in: start the background location service (checks every N minutes and on leaving the site)
  *  stop        – after clock-out
  *  status      – is the service running, when was the last check sent
- *  allowAlways – open the settings page to allow location "all the time" (keeps tracking after the phone restarts the app)
+ *  allowAlways – open the settings page to allow location "all the time" (keeps tracking after the app is closed)
+ *  allowBattery – ask to let the app run without battery limits
  */
 @CapacitorPlugin(
     name = "AttendanceTracker",
@@ -124,7 +125,9 @@ public class AttendanceTrackerPlugin extends Plugin {
         askBatteryExemption();
         JSObject out = new JSObject();
         out.put("running", true);
-        out.put("background", ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED || Build.VERSION.SDK_INT < 29);
+        out.put("background", TrackerService.mayRunInBackground(ctx));
+        PowerManager pm = (PowerManager) ctx.getSystemService(Context.POWER_SERVICE);
+        out.put("battery", pm == null || pm.isIgnoringBatteryOptimizations(ctx.getPackageName()));
         call.resolve(out);
     }
 
@@ -165,6 +168,17 @@ public class AttendanceTrackerPlugin extends Plugin {
         Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getContext().getPackageName()));
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         getContext().startActivity(i);
+        call.resolve();
+    }
+
+    @SuppressLint("BatteryLife")
+    @PluginMethod
+    public void allowBattery(PluginCall call) {
+        try {
+            getActivity().startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getContext().getPackageName())));
+        } catch (Exception e) {
+            getActivity().startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+        }
         call.resolve();
     }
 
