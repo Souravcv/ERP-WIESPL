@@ -388,6 +388,12 @@ api.post('/purchase_orders/:id/payments', wrap(req => {
   if (!Array.isArray(req.body?.payment_schedule)) throw new HttpError(400, 'Send the payment schedule');
   return updateRow('purchase_orders', req.params.id, { payment_schedule: req.body.payment_schedule }, req.user, { system: true });
 }));
+// What the printed PO shows of its vendor (and the GST split needs): for everyone who sees the PO, also without the vendor master (no bank details).
+api.get('/purchase_orders/:id/vendor', wrap(req => {
+  if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');
+  const po = getRow('purchase_orders', req.params.id);
+  return db.prepare('SELECT name, address, city, state, pincode, gstin, emails, contact_person, phone FROM vendors WHERE id = ?').get(po.vendor_id) || {};
+}));
 // Terms of the vendor's last PO (and the vendor's contact), to start a new PO to the same vendor.
 api.get('/purchase_orders/last-terms', wrap(req => {
   if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access');

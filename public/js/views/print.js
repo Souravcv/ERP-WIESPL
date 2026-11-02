@@ -528,7 +528,7 @@ export async function printView(root, kind, id) {
   } else if (kind === 'po') {
     const po = await api(`/purchase_orders/${id}`);
     await siteLabels(po.lines);
-    const v = await api(`/vendors/${po.vendor_id}`);
+    const v = await api(`/purchase_orders/${id}/vendor`);
     const internal = new URLSearchParams(location.hash.split('?')[1] || '').get('internal') === '1';
     title = `PO ${po.po_no} ${v.name}${internal ? ' (internal)' : ''}`;
     doc = poDoc(po, v, s, internal);

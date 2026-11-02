@@ -481,7 +481,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       break;
     }
     case 'approvals': {
-      const docEnt = APPROVAL_DOCS[row.doc_type];
+      const docEnt = APPROVAL_DOCS[row.doc_type] && canView(APPROVAL_DOCS[row.doc_type], state.user.role) ? APPROVAL_DOCS[row.doc_type] : null; // print / open only if the role may see the document
       if (docEnt && ENTITIES[docEnt].print) A.push(h('a.btn', { href: `#/print/${ENTITIES[docEnt].print}/${row.doc_id}${docEnt === 'purchase_orders' ? '?internal=1' : ''}`, target: '_blank' }, `🖨 Print ${row.doc_type}`));
       if (docEnt) A.push(h('a.btn', { href: recordHref(docEnt, row.doc_id), title: 'Open the document itself (to edit it)' }, `Open ${row.doc_type} ›`));
       if (row.status === 'Pending' && canApprove(row.doc_type, row.stage, row)) {

@@ -1,7 +1,7 @@
 // BOQ / Bill of Material window (WIESPL engineers' format): components by section, what is procured
 // (requisition → PO → GRN), what is sent to site and what is pending. Dispatch makes the challan automatically.
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy, reservedRetry } from '../ui.js';
-import { canWrite, hasFunction } from '../schema.js';
+import { canView, canWrite, hasFunction } from '../schema.js';
 import { sigImg, stampImg } from '../signs.js';
 import { itemPicker, attachments, bomRows, toProcure } from './form.js';
 
@@ -53,8 +53,10 @@ const PROC = b => {
 };
 
 export async function bomView(root, bomId) {
+  // The challans only with access to them; the BOQ itself opens for everyone who sees BOQs.
+  const seesChallans = canView('challans', state.user.role);
   const [bom, raw, challans, items, check] = await Promise.all([
-    api(`/boms/${bomId}`), api(`/bom_items?bom_id=${bomId}&limit=20000`), api(`/challans?bom_id=${bomId}`), refOptions('items'),
+    api(`/boms/${bomId}`), api(`/bom_items?bom_id=${bomId}&limit=20000`), seesChallans ? api(`/challans?bom_id=${bomId}`) : [], refOptions('items'),
     api(`/boms/${bomId}/stock-check`).catch(() => null),
   ]);
   const rows = bomRows(raw);
@@ -329,7 +331,7 @@ export async function bomView(root, bomId) {
       k('Procured ✓', items_.filter(r => PROC(r) === 'Procured').length),
       k('Sent to site', items_.filter(r => ['Dispatched', 'Delivered'].includes(r.delivery_status)).length, `${items_.filter(r => r.delivery_status === 'Delivered').length} delivered ✓`),
       k('Pending to send', items_.filter(r => r.pending > 0).length),
-      k('Challans', challans.length)) : null,
+      seesChallans ? k('Challans', challans.length) : null) : null,
     rows.length ? h('div.toolbar', search, depts.length > 1 ? deptSel : null, filter, cols, h('span.muted', 'Tick components → “Requisition”, “PO” or “Dispatch selected”.')) : null,
     out,
     challans.length ? h('div.card', h('h2', '🚚 Challans of this BOQ'), h('table.data', h('thead', h('tr', ['Challan', 'Date', 'Vehicle', 'Items', 'Status', 'Delivered', 'Received by', ''].map(x => h('th', x)))),

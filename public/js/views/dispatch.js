@@ -1,7 +1,7 @@
 // Work order window: upload the client's work order, see each section's material, what is sent and what is pending,
 // and dispatch (the delivery challan is created automatically).
 import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, reservedRetry } from '../ui.js';
-import { canWrite, WO_DEPARTMENTS, ROLE_DEPARTMENT } from '../schema.js';
+import { canView, canWrite, WO_DEPARTMENTS, ROLE_DEPARTMENT } from '../schema.js';
 import { itemPicker, attachments } from './form.js';
 
 const firstLine = s => String(s || '').split('\n')[0];
@@ -74,8 +74,10 @@ async function generateBomDialog(boqId) {
 }
 
 export async function boqView(root, boqId) {
+  // Every department sees the master work order; the challans only with access to them.
+  const seesChallans = canView('challans', state.user.role);
   const [boq, rows, challans, items, boms] = await Promise.all([
-    api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), api(`/challans?boq_id=${boqId}`), refOptions('items'), api(`/boms?work_order_id=${boqId}`).catch(() => []),
+    api(`/boqs/${boqId}`), api(`/boq_items?boq_id=${boqId}&limit=20000`), seesChallans ? api(`/challans?boq_id=${boqId}`) : [], refOptions('items'), api(`/boms?work_order_id=${boqId}`).catch(() => []),
   ]);
   const canEdit = canWrite('boqs', state.user.role), canSend = canWrite('challans', state.user.role);
   rows.sort((a, b) => (a.sort ?? a.id) - (b.sort ?? b.id));
@@ -266,7 +268,7 @@ export async function boqView(root, boqId) {
       h('div.kpi', h('div.label', 'Delivered ✓'), h('div.value', all.delivered)),
       h('div.kpi', h('div.label', 'Partly sent'), h('div.value', all.partly)),
       h('div.kpi', h('div.label', 'Pending'), h('div.value', all.pending), h('div.sub', `${rows.filter(r => isItem(r) && r.qty == null).length} with qty TBD`)),
-      h('div.kpi', h('div.label', 'Challans'), h('div.value', challans.length))) : h('div.card', h('p', 'No material yet. Use “Add work order file” to import the work order Excel, or add lines by hand.')),
+      seesChallans ? h('div.kpi', h('div.label', 'Challans'), h('div.value', challans.length)) : null) : h('div.card', h('p', 'No material yet. Use “Add work order file” to import the work order Excel, or add lines by hand.')),
     rows.length ? deptBox : null,
     rows.length ? tabs : null,
     rows.length ? h('div.toolbar', search, deptSel, filter, canSend ? h('span.muted', 'Tick what you are sending (qty defaults to pending) → “Dispatch selected”. The challan is made for you.') : null) : null,

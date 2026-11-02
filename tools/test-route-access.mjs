@@ -161,6 +161,15 @@ const prev = await pv.json();
 ok(pv.status === 200 && prev.token, 'admin previews a vendor file');
 if (prev.token) ok(await status('hr', '/import/commit', { method: 'POST', body: JSON.stringify({ token: prev.token, mode: 'skip' }), headers: { 'content-type': 'application/json' } }) === 403, 'HR cannot commit it, even with the token');
 
+// the printed PO: its vendor's address for whoever sees the PO, without opening the vendor master
+const poId = (await json('admin', '/purchase_orders?limit=1'))[0]?.id;
+if (poId) {
+  await allowed(`/purchase_orders/${poId}/vendor`, r => view(r, 'purchase_orders'), 'vendor of a printed PO');
+  const pv2 = await json('technical', `/purchase_orders/${poId}/vendor`);
+  ok(pv2.name && 'state' in pv2 && !Object.keys(pv2).some(k => /bank|ifsc|account|pan/i.test(k)), 'technical gets name, address and state of the PO vendor, no bank details or PAN');
+  ok(await status('technical', '/vendors/options') === 200 && await status('technical', `/vendors/${(await json('admin', '/vendors?limit=1'))[0]?.id}`) === 403, 'technical still cannot open the vendor master');
+}
+
 // the older checks are still there
 ok(await status('store', '/payables') === 403 && await status('sales', '/receipts-register') === 403 && await status('store', '/audit') === 403, 'older report checks unchanged');
 ok(await status('sales', '/people') === 200 && await status('sales', '/signatures') === 200, 'name pickers and signatures: any office role');
