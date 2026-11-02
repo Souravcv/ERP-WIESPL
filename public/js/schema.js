@@ -3,7 +3,9 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge'];
+// Least-access roles for the shop floor and site: own attendance and leave, own tasks, own performance.
+export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge'];
 // Departments a work order line belongs to (the work order is one master copy; each department sees its part).
 export const WO_DEPARTMENTS = ['Design', 'Purchase', 'Production', 'Store', 'Logistics', 'Site / Installation', 'Electrical', 'Service'];
 // The department each built-in profile works for (its default view of a work order).
@@ -91,6 +93,12 @@ export const ROLE_INFO = {
   hr: { label: 'HR Manager', description: 'Employees, work locations, site assignments, attendance review, leave, holidays' },
   planning: { label: 'Planning (Logistics)', description: 'Dispatch plans per project (what goes to site when), project schedules; sees projects, work orders, POs and stock' },
   service: { label: 'Service Coordinator', description: 'Complaints, AMC / warranty register, service work orders, service reports, RCA, service quotations' },
+  worker: { label: 'Worker', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  helper: { label: 'Helper', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  technician: { label: 'Technician', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  wiring_engineer: { label: 'Wiring Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  panel_maker: { label: 'Panel Maker', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  incharge: { label: 'Work In-charge', description: 'As a worker, plus: enters the daily work of the department\'s team, sees the whole department, requests material from the store' },
 };
 
 // What each built-in profile works with; everything else is hidden from it (an admin can still change this under
@@ -109,6 +117,8 @@ export const ROLE_SEES = {
   production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
   service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
   hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects', 'onboardings', 'probation_reviews', 'asset_issues', 'separations'],
+  worker: [], helper: [], technician: [], wiring_engineer: [], panel_maker: [],
+  incharge: ['material_requests', 'items'],
   planning: ['approvals', 'projects', 'dispatch_plans', ...BOQ_VIEW, 'challans', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests', 'production_entries'],
 };
 // Every department sees the master work order; the store, site, design and purchase see the dispatch plans.
@@ -116,8 +126,9 @@ for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].pus
 for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
 for (const r of ['purchase', 'purchase_head', 'accounts', 'technical', 'planning']) ROLE_SEES[r].push('vendor_evaluations', 'vendor_complaints', 'vendor_audits');
 ROLE_SEES.store.push('vendor_complaints');
-ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs');
-ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs');
+ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs');
+ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs');
+ROLE_SEES.hr.push('work_logs');
 ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs');
 ROLE_SEES.store.push('production_orders');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
@@ -165,6 +176,8 @@ export const FUNCTIONS = {
   boq_final: 'BOQ – make Final (freeze, reserve stock, auto requisition) and reopen',
   notify_store_check: 'Pop-up: BOQ final – store stock check & auto requisition',
   notify_material_request: 'Pop-up: new material request to the store',
+  work_log: 'Daily Team Work: enter who did what each day (own department; with "see everyone" any department) and see the whole department',
+  perf_all: 'Performance: see everyone, all departments',
 };
 // Departments a BOQ section belongs to; each one is reviewed before the BOQ can be made Final.
 export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels', 'Doors', 'MGPS', 'Flooring / Civil', 'Lighting', 'Bought-out'];
@@ -179,10 +192,11 @@ export const DEFAULT_FUNCTIONS = {
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_grn_without_po'],
   sales: ['import', 'notify_enquiry'],
   engineer: ['notify_work_order', 'boq_review'],
-  production: ['production_post', 'production_release', 'qc_inspect'],
-  hr: ['hr_manage', 'leave_approve', 'task_assign'],
+  production: ['production_post', 'production_release', 'qc_inspect', 'work_log', 'perf_all'],
+  incharge: ['work_log'],
+  hr: ['hr_manage', 'leave_approve', 'task_assign', 'perf_all'],
   service: ['import', 'task_assign'],
-  planning: ['task_assign', 'notify_work_order', 'notify_po', 'production_release'],
+  planning: ['work_log', 'perf_all', 'task_assign', 'notify_work_order', 'notify_po', 'production_release'],
 };
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
@@ -1281,8 +1295,8 @@ export const ENTITIES = {
       { key: 'name', label: 'Name', type: 'text', required: true },
       { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'The username this person signs in with: their phone attendance is booked to this employee. Blank with a CRM role chosen: made from the name' },
       { key: 'login_role', label: 'CRM Role (makes the login)', type: 'select', options: ['', ...Object.keys(ROLE_INFO).filter(r => !['admin', 'manager'].includes(r))], optionLabels: Object.fromEntries(Object.entries(ROLE_INFO).map(([k, v]) => [k, v.label])), hint: 'Choose a role: Save creates the login and shows a temporary password once. Administrator and GM logins: Admin → Users' },
-      { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
-      { key: 'designation', label: 'Designation', type: 'text' },
+      { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Panel Shop', 'Electrical / Wiring', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
+      { key: 'designation', label: 'Designation', type: 'text', suggest: ['Worker', 'Helper', 'Technician', 'Wiring Engineer', 'Panel Maker', 'Work In-charge', 'Supervisor'] },
       { key: 'mobile', label: 'Mobile', type: 'tel' },
       { key: 'email', label: 'Email', type: 'email' },
       { key: 'joining_date', label: 'Joining Date', type: 'date' },
@@ -2193,6 +2207,27 @@ export const ENTITIES = {
       { key: 'delays', label: 'Delays', type: 'number', computed: "(SELECT COUNT(*) FROM json_each(COALESCE(NULLIF({t}.lines, ''), '[]')) j WHERE COALESCE(json_extract(j.value, '$.delay_code'), '') <> '')" },
       { key: 'submitted_by', label: 'Submitted By', type: 'text', readonly: true },
       { key: 'remarks', label: 'Remarks / issues', type: 'textarea', span: 2 },
+    ],
+  },
+  // Who did what each day: entered by the in-charge / supervisor on Performance → Daily Team Work (server/performance.js).
+  work_logs: {
+    label: 'Daily Team Work', singular: 'Work Entry', group: 'Production', icon: '🧰', write: [], noCreate: true,
+    display: "{t}.date || ' · ' || COALESCE({t}.work, '')",
+    search: ['work', 'department', 'remark'],
+    list: ['date', 'employee_id', 'department', 'work', 'order_id', 'target', 'done', 'rejected', 'uom', 'hours', 'created_by'],
+    fields: [
+      { key: 'date', label: 'Date', type: 'date', required: true },
+      { key: 'employee_id', label: 'Person', type: 'ref', ref: 'employees', required: true },
+      { key: 'department', label: 'Department', type: 'text' },
+      { key: 'work', label: 'Work', type: 'text', span: 2 },
+      { key: 'order_id', label: 'Production Order', type: 'ref', ref: 'production_orders' },
+      { key: 'target', label: 'Target', type: 'number' },
+      { key: 'done', label: 'Done', type: 'number' },
+      { key: 'rejected', label: 'Rejected / Rework', type: 'number' },
+      { key: 'uom', label: 'UOM', type: 'text' },
+      { key: 'hours', label: 'Hours', type: 'number' },
+      { key: 'remark', label: 'Remark', type: 'text', span: 2 },
+      { key: 'created_by', label: 'Entered By', type: 'text', computed: '{t}.created_by' },
     ],
   },
   // QC inspection (QEMS Vol 3): in-process at each stage, final (product release) and before dispatch. No stage moves on

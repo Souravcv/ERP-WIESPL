@@ -1,6 +1,6 @@
 import { h, api, state, toast, fail, modal } from './ui.js';
 import { startI18n, getLang, setLang } from './i18n.js';
-import { ENTITIES, GROUPS, canView, hasFunction, setPermissions } from './schema.js';
+import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
 import { recordView } from './views/form.js';
@@ -46,11 +46,12 @@ let tasksOpen = 0;
 function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/taskboard' }, '🗂️ Task board'));
+  $('btn-signature').style.display = WORKER_ROLES.includes(role) ? 'none' : ''; // no documents to sign
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'));
   for (const g of GROUPS) {
     const links = [
-      ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
-      ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role))
+      ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
+      ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role) && !(k === 'items' && WORKER_ROLES.includes(role)))
         .map(([key, e]) => h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null)),
     ];
     if (links.length) nav.append(h('div.grp', g), ...links);
@@ -115,6 +116,7 @@ async function route() {
       case 'vendor-performance': { const { vendorPerformanceView } = await import('./views/vendorperf.js'); await vendorPerformanceView(view); break; }
       case 'drafts': { const { draftsView } = await import('./views/drafts.js'); await draftsView(view); break; }
       case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
+      case 'performance': { const { performanceView } = await import('./views/performance.js'); await performanceView(view); break; }
       case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }
       case 'service': { const { serviceView } = await import('./views/service.js'); await serviceView(view); break; }
       case 'production': { const { productionView } = await import('./views/production.js'); await productionView(view, a); break; }

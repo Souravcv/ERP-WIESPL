@@ -1,6 +1,6 @@
 import { h, api, money, fmtDate, badge, tip, state, fail } from '../ui.js';
 import { fyOf } from '../calc.js';
-import { canView, hasFunction } from '../schema.js';
+import { canView, hasFunction, WORKER_ROLES } from '../schema.js';
 import { storeDashboard } from './storedash.js';
 import { accountsDashboard } from './accountsdash.js';
 
@@ -50,6 +50,8 @@ export async function dashboardView(root) {
   const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store'],
     (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts'],
     canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service']].filter(Boolean);
+  // Shop floor and site people land on their own performance.
+  if (WORKER_ROLES.includes(role)) { location.hash = '#/performance'; return; }
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
   let tab = sessionStorage.getItem('dash-tab');
   if (!views.some(v => v[0] === tab)) {

@@ -1,6 +1,9 @@
 // Marathi for the CRM screens, part 1: the most used labels, statuses and module names.
 // English (exactly as on the screen) → Marathi. Short forms used in the office (BOQ, PO, GST, AHU …) stay as they are.
 export default {
+  // worker performance, Nov 2026
+  '📈 Performance': '📈 कामगिरी', 'Performance': 'कामगिरी', '📝 Daily Team Work': '📝 टीमचे दैनंदिन काम', 'Daily Team Work': 'टीमचे दैनंदिन काम', 'Worker': 'कामगार', 'Helper': 'मदतनीस', 'Technician': 'तंत्रज्ञ', 'Wiring Engineer': 'वायरिंग इंजिनिअर', 'Panel Maker': 'पॅनल मेकर', 'Work In-charge': 'काम प्रभारी',
+  'My score': 'माझा गुण', 'Days worked': 'काम केलेले दिवस', 'Work recorded': 'नोंदवलेले काम', 'Done': 'पूर्ण', 'Quality': 'गुणवत्ता', 'Late marks': 'उशिराच्या नोंदी', 'Score': 'गुण', 'Doing best': 'सर्वोत्तम', 'Target': 'लक्ष्य', 'Panel Shop': 'पॅनल शॉप', 'Electrical / Wiring': 'इलेक्ट्रिकल / वायरिंग', '💾 Save the day': '💾 दिवस जतन करा',
   // job work and employee login, 2 Nov 2026
   '🛠️ Job Work Outward': '🛠️ जॉब वर्क बाहेर', '🛠️ Job Work Inward': '🛠️ जॉब वर्क आत', 'Job Work Outward': 'जॉब वर्क बाहेर', 'Job Work Inward': 'जॉब वर्क आत', 'Job Work Out': 'जॉब वर्क बाहेर', 'Job Work In': 'जॉब वर्क आत',
   'Job work vendor *': 'जॉब वर्क विक्रेता *', 'Vendor name (if not in list)': 'विक्रेत्याचे नाव (यादीत नसल्यास)', 'Vendor DC No': 'विक्रेता DC क्र.', 'Process': 'प्रक्रिया', 'Project / Purpose': 'प्रकल्प / उद्देश',

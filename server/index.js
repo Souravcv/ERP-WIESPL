@@ -40,9 +40,10 @@ import * as hrf from './hrfile.js';
 import * as prod from './production.js';
 import * as qa from './quality.js';
 import * as enq from './enquiries.js';
+import * as perf from './performance.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL } from '../public/js/schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES } from '../public/js/schema.js';
 import * as roles from './roles.js';
 import { fyOf } from '../public/js/calc.js';
 
@@ -107,9 +108,38 @@ api.use('/public', publicRouter());
 
 api.use(authenticate);
 
+// Least-access roles (shop floor, site): only what is listed here and the modules their role is given; every other route
+// is refused, also routes added later. /:entity/options: only for fields of the modules they see (their forms need the lists).
+const WORKER_ROUTES = new Set(['me', 'people', 'notifications', 'my-tasks', 'performance', 'hr', 'logout']);
+api.use((req, res, next) => {
+  const role = req.user?.role;
+  if (!WORKER_ROLES.includes(role)) return next();
+  const [, seg, sub] = req.path.split('/');
+  if (WORKER_ROUTES.has(seg)) return next();
+  // the item list is for picking materials: no prices or values
+  if (seg === 'items' && canView('items', role)) {
+    const send = res.json.bind(res);
+    const clean = o => (Array.isArray(o) ? o.map(clean) : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => !/rate|price|value|cost/i.test(k))) : o);
+    res.json = body => send(clean(body));
+    if (req.method !== 'GET') return res.status(403).json({ error: 'Your role does not have access to this' });
+    return next();
+  }
+  if (ENTITIES[seg] && canView(seg, role)) return next();
+  if (seg === 'attachments' && ENTITIES[sub] && canView(sub, role)) return next();
+  if (seg === 'files') return next(); // /files/:id checks the module of the file
+  if (req.method === 'GET' && sub === 'options' && ENTITIES[seg]) {
+    const refs = new Set(Object.entries(ENTITIES).filter(([k]) => canView(k, role)).flatMap(([, e]) => e.fields.flatMap(f => [f.ref, ...(f.columns || []).map(c => c.ref)])));
+    if (refs.has(seg)) return next();
+  }
+  res.status(403).json({ error: 'Your role does not have access to this' });
+});
+
 api.get('/me', wrap(req => {
   const r = roles.listRoles().find(x => x.name === req.user.role);
-  return { user: { ...publicUser(req.user), role_label: r?.label || req.user.role }, settings: getSettings(), perms: r?.perms || null };
+  // the company's settings (terms, bank details ...) are not for the least-access roles
+  const all = getSettings();
+  const settings = WORKER_ROLES.includes(req.user.role) ? { company_name: all.company_name } : all;
+  return { user: { ...publicUser(req.user), role_label: r?.label || req.user.role }, settings, perms: r?.perms || null };
 }));
 api.post('/me/password', wrap(req => {
   const { current, password } = req.body || {};
@@ -596,6 +626,10 @@ api.get('/production/stock', wrap(req => { prodView(req); return sf.productionSt
 api.get('/production/daily', wrap(req => { prodView(req); return sf.dailyOutput(req.query); }));
 // Production planning & daily review.
 const planView = req => { if (!canView('production_orders', req.user.role)) throw new HttpError(403, 'No access to production orders'); };
+// Worker performance and Daily Team Work (what each person sees is decided in performance.js).
+api.get('/performance', wrap(req => perf.report(req.user, req.query)));
+api.get('/performance/team', wrap(req => perf.team(req.user, req.query)));
+api.post('/performance/team', wrap(req => perf.saveTeam(req.user, req.body)));
 api.get('/production/board', wrap(req => { planView(req); return prod.board(); }));
 api.get('/production/month', wrap(req => { planView(req); return prod.monthReview(req.query.month || undefined); }));
 api.get('/production/day', wrap(req => { planView(req); return prod.dayReview(req.query.date || undefined); }));
