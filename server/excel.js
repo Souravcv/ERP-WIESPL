@@ -29,9 +29,9 @@ function styleHeader(row) {
 
 const toDate = s => (s ? new Date(`${s}T00:00:00`) : null);
 
-export async function exportEntity(name, query) {
+export async function exportEntity(name, query, only = rows => rows) {
   const ent = ENTITIES[name];
-  const rows = listRows(name, query);
+  const rows = only(listRows(name, query));
   const wb = new ExcelJS.Workbook();
   wb.creator = 'WIESPL CRM';
   // Excel sheet names cannot contain * ? : \ / [ ] and are limited to 31 characters.

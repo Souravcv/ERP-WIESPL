@@ -103,6 +103,8 @@ async function crmDashboard(root, views) {
   const d = await api(`/dashboard?fy=${fySel.value}`);
   const k = d.kpi;
   const kpi = (label, value, sub, href) => h('a.kpi', { href }, h('div.label', label), h('div.value', value), sub ? h('div.sub', sub) : null);
+  // the server sends only the figures of modules this role may open
+  const has = v => v !== undefined;
 
   root.replaceChildren(
     h('div.page-head', h('h1', '📊 Dashboard'), h('div.actions', fySel,
@@ -111,14 +113,14 @@ async function crmDashboard(root, views) {
     h('div.kpis',
       kpi('Enquiries this FY', k.enquiries, `${k.won} won · ${k.lost} lost/regret`, '#/list/enquiries'),
       kpi('Win rate', k.conversion == null ? '—' : `${k.conversion}%`, 'won ÷ (won + lost)', '#/list/enquiries?status=Won'),
-      kpi('Quotes in pipeline', money(k.open_quote_value).replace('.00', ''), 'approved / sent / pending', '#/list/quotations'),
-      kpi('Orders booked (basic)', money(k.order_value).replace('.00', ''), `FY ${d.fy}`, '#/list/sales_orders'),
-      kpi('Receivable', money(k.receivable).replace('.00', ''), `collected ${money(k.collected).replace('.00', '')}`, '#/list/invoices'),
-      kpi('Pending approvals', k.pending_approvals, `${k.pending_material} client submittals awaiting`, '#/list/approvals?status=Pending'),
-      kpi('Active projects', k.active_projects, null, '#/list/projects?status=Active'),
-      kpi('Open service tickets', k.open_tickets, null, '#/list/service_tickets'),
-      kpi('Stock value', money(d.stock_value).replace('.00', ''), `${d.low_stock.length} items below minimum`, '#/stock-summary'),
-      kpi('Purchase pipeline', d.pending_po, `POs waiting for approval · ${d.pending_req} requisitions`, '#/list/approvals?status=Pending'),
+      has(k.open_quote_value) ? kpi('Quotes in pipeline', money(k.open_quote_value).replace('.00', ''), 'approved / sent / pending', '#/list/quotations') : null,
+      has(k.order_value) ? kpi('Orders booked (basic)', money(k.order_value).replace('.00', ''), `FY ${d.fy}`, '#/list/sales_orders') : null,
+      has(k.receivable) ? kpi('Receivable', money(k.receivable).replace('.00', ''), has(k.collected) ? `collected ${money(k.collected).replace('.00', '')}` : null, '#/list/invoices') : null,
+      has(k.pending_approvals) ? kpi('Pending approvals', k.pending_approvals, has(k.pending_material) ? `${k.pending_material} client submittals awaiting` : null, '#/list/approvals?status=Pending') : null,
+      has(k.active_projects) ? kpi('Active projects', k.active_projects, null, '#/list/projects?status=Active') : null,
+      has(k.open_tickets) ? kpi('Open service tickets', k.open_tickets, null, '#/list/service_tickets') : null,
+      has(d.stock_value) ? kpi('Stock value', money(d.stock_value).replace('.00', ''), `${d.low_stock.length} items below minimum`, '#/stock-summary') : null,
+      has(d.pending_po) ? kpi('Purchase pipeline', d.pending_po, has(d.pending_req) ? `POs waiting for approval · ${d.pending_req} requisitions` : 'POs waiting for approval', '#/list/approvals?status=Pending') : null,
     ),
     h('div.grid.cols-2',
       h('div.card', h('h2', 'Enquiries per month'), monthly(d.monthly, d.fy)),

@@ -51,4 +51,5 @@ memory do not move between computers).
 ## Working rules
 - Test on a copy of the data (`WIESPL_DATA_DIR=<temp copy> PORT=3002 node server/index.js`), never on the live `data/wiespl.db`.
 - Never type passwords or tokens for the owner; never delete data without a backup and consent.
+- Every API route needs a deliberate role rule (module view / write, function, or admin). Check with `WIESPL_DATA_DIR=<temp copy> node tools/test-route-access.mjs`: a new route without a visible check fails until it is decided.
 - On Windows, write patch scripts with a file editor rather than bash heredocs (backslashes get mangled); keep `.bat` files CRLF.

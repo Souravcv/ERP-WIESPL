@@ -883,6 +883,8 @@ export async function preview(kind, buffer, user) {
   };
 }
 
+export const planKind = token => plans.get(token)?.plan.kind;
+
 export function commit(token, mode, user, opts = {}) {
   const createMissing = false;
   const entry = plans.get(token);

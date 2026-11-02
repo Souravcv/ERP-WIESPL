@@ -111,6 +111,18 @@ api.use(authenticate);
 // Least-access roles (shop floor, site): only what is listed here and the modules their role is given; every other route
 // is refused, also routes added later. /:entity/options: only for fields of the modules they see (their forms need the lists).
 const WORKER_ROUTES = new Set(['me', 'people', 'notifications', 'my-tasks', 'performance', 'hr', 'logout']);
+// The pick lists a role's forms need: the modules it sees and every module their fields point to (labels only).
+const pickable = (entity, role) => canView(entity, role) || Object.entries(ENTITIES).some(([k, e]) => canView(k, role)
+  && e.fields.some(f => f.ref === entity || (f.itemRef && entity === 'items') || (f.columns || []).some(c => c.ref === entity)));
+// Settings: printed documents and forms need the company, bank, PO and quotation text; limits, margins, HR rules and the
+// client web form are for the Settings page (the admin); the bond text is printed from the employee.
+const settingsFor = role => {
+  const all = getSettings();
+  if (role === 'admin') return all;
+  const out = Object.fromEntries(Object.entries(all).filter(([k]) => !/^(hr_|web_)|^(payment_approval_limit|expense_po_limit|bill_tolerance_pct|sales_margin_pct|service_margin_pct)$/.test(k)));
+  if (canView('employees', role)) out.hr_bond_template = all.hr_bond_template;
+  return out;
+};
 api.use((req, res, next) => {
   const role = req.user?.role;
   if (!WORKER_ROLES.includes(role)) return next();
@@ -127,18 +139,14 @@ api.use((req, res, next) => {
   if (ENTITIES[seg] && canView(seg, role)) return next();
   if (seg === 'attachments' && ENTITIES[sub] && canView(sub, role)) return next();
   if (seg === 'files') return next(); // /files/:id checks the module of the file
-  if (req.method === 'GET' && sub === 'options' && ENTITIES[seg]) {
-    const refs = new Set(Object.entries(ENTITIES).filter(([k]) => canView(k, role)).flatMap(([, e]) => e.fields.flatMap(f => [f.ref, ...(f.columns || []).map(c => c.ref)])));
-    if (refs.has(seg)) return next();
-  }
+  if (req.method === 'GET' && sub === 'options' && ENTITIES[seg] && pickable(seg, role)) return next();
   res.status(403).json({ error: 'Your role does not have access to this' });
 });
 
 api.get('/me', wrap(req => {
   const r = roles.listRoles().find(x => x.name === req.user.role);
   // the company's settings (terms, bank details ...) are not for the least-access roles
-  const all = getSettings();
-  const settings = WORKER_ROLES.includes(req.user.role) ? { company_name: all.company_name } : all;
+  const settings = WORKER_ROLES.includes(req.user.role) ? { company_name: getSettings().company_name } : settingsFor(req.user.role);
   return { user: { ...publicUser(req.user), role_label: r?.label || req.user.role }, settings, perms: r?.perms || null };
 }));
 api.post('/me/password', wrap(req => {
@@ -156,7 +164,7 @@ api.post('/notifications/read', wrap(req => notify.markRead(req.user, req.body?.
 api.get('/web-leads', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return unfinishedLeads(); }));
 
 // ---------------------------------------------------------------- users & settings (admin)
-api.get('/users', wrap(() => db.prepare('SELECT * FROM users ORDER BY active DESC, name').all().map(publicUser)));
+api.get('/users', requireRole(), wrap(() => db.prepare('SELECT * FROM users ORDER BY active DESC, name').all().map(publicUser)));
 // Everyone who can be named on a record: CRM users, then employees (HR) who have no CRM login.
 api.get('/people', wrap(() => {
   const users = db.prepare('SELECT name, role FROM users WHERE active = 1 ORDER BY name').all();
@@ -202,15 +210,16 @@ api.delete('/users/:id', requireRole(), wrap(req => {
   audit(req.user.name, 'users', u.id, 'delete', `${u.username} (${u.name})`);
   return { ok: true };
 }));
-api.get('/settings', wrap(() => getSettings()));
+api.get('/settings', wrap(req => settingsFor(req.user.role)));
 // company stamp and personal signatures (printed only where an approval was given)
 sig.migrateSignatures();
 const sendImage = (res, file) => { res.set('Cache-Control', 'private, max-age=300'); res.sendFile(file); };
 // demo videos for the OR Screen on the Control Panels page: data/media/or/*.mp4 (not in git: copy the folder to each server)
 const OR_MEDIA = path.join(DATA_DIR, 'media', 'or');
 const MEDIA_NAME = /^[\w.-]+\.(mp4|webm)$/i;
-api.get('/media/or', wrap(() => { try { return fs.readdirSync(OR_MEDIA).filter(f => MEDIA_NAME.test(f)).sort(); } catch { return []; } }));
+api.get('/media/or', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); try { return fs.readdirSync(OR_MEDIA).filter(f => MEDIA_NAME.test(f)).sort(); } catch { return []; } }));
 api.get('/media/or/:name', (req, res) => {
+  if (!canView('enquiries', req.user.role)) return res.status(403).json({ error: 'No access' });
   const name = String(req.params.name);
   if (!MEDIA_NAME.test(name) || !fs.existsSync(path.join(OR_MEDIA, name))) return res.status(404).json({ error: 'Not found' });
   res.set('Cache-Control', 'private, max-age=86400'); res.sendFile(path.join(OR_MEDIA, name));
@@ -302,6 +311,8 @@ api.get('/audit', wrap(req => {
 
 // ---------------------------------------------------------------- dashboard
 api.get('/dashboard', wrap(req => {
+  if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access to the sales dashboard');
+  const sees = m => canView(m, req.user.role);
   const fy = req.query.fy || fyOf();
   const [a, b] = fy.split('-');
   const from = `20${a}-04-01`, to = `20${b}-03-31`;
@@ -312,18 +323,19 @@ api.get('/dashboard', wrap(req => {
   const total = enqCounts.reduce((s, r) => s + r.n, 0);
   const won = enqCounts.find(r => r.status === 'Won')?.n || 0;
   const lost = enqCounts.filter(r => ['Lost', 'Regret'].includes(r.status)).reduce((s, r) => s + r.n, 0);
+  // each tile and list only for those who may open that module (no value = the screen leaves the tile out)
   return {
     fy, from, to,
     kpi: {
       enquiries: total, won, lost, conversion: won + lost ? Math.round((won / (won + lost)) * 100) : null,
-      open_quote_value: one("SELECT COALESCE(SUM(grand_total),0) v FROM quotations WHERE status IN ('Approved','Sent','Pending Approval')").v,
-      order_value: one("SELECT COALESCE(SUM(order_value),0) v FROM sales_orders WHERE status <> 'Cancelled' AND date BETWEEN ? AND ?", from, to).v,
-      receivable: recv.ageing().totals.total,
-      collected: one("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE status = 'Received' AND date BETWEEN ? AND ?", from, to).v,
-      active_projects: one("SELECT COUNT(*) n FROM projects WHERE status = 'Active'").n,
-      open_tickets: one("SELECT COUNT(*) n FROM service_tickets WHERE status NOT IN ('Resolved','Closed')").n,
-      pending_approvals: one("SELECT COUNT(*) n FROM approvals WHERE status = 'Pending'").n,
-      pending_material: one("SELECT COUNT(*) n FROM material_approvals WHERE status IN ('Submitted','Resubmit')").n,
+      open_quote_value: sees('quotations') ? one("SELECT COALESCE(SUM(grand_total),0) v FROM quotations WHERE status IN ('Approved','Sent','Pending Approval')").v : undefined,
+      order_value: sees('sales_orders') ? one("SELECT COALESCE(SUM(order_value),0) v FROM sales_orders WHERE status <> 'Cancelled' AND date BETWEEN ? AND ?", from, to).v : undefined,
+      receivable: sees('invoices') ? recv.ageing().totals.total : undefined,
+      collected: sees('payments') ? one("SELECT COALESCE(SUM(amount),0) v FROM payments WHERE status = 'Received' AND date BETWEEN ? AND ?", from, to).v : undefined,
+      active_projects: sees('projects') ? one("SELECT COUNT(*) n FROM projects WHERE status = 'Active'").n : undefined,
+      open_tickets: sees('service_tickets') ? one("SELECT COUNT(*) n FROM service_tickets WHERE status NOT IN ('Resolved','Closed')").n : undefined,
+      pending_approvals: sees('approvals') ? one("SELECT COUNT(*) n FROM approvals WHERE status = 'Pending'").n : undefined,
+      pending_material: sees('material_approvals') ? one("SELECT COUNT(*) n FROM material_approvals WHERE status IN ('Submitted','Resubmit')").n : undefined,
     },
     enquiry_status: enqCounts,
     monthly: all(`SELECT substr(e.date,1,7) month, COUNT(*) enquiries,
@@ -335,19 +347,19 @@ api.get('/dashboard', wrap(req => {
     by_work: all(`SELECT COALESCE(NULLIF(trim(j.value),''),'(blank)') work, COUNT(*) n FROM enquiries e,
         json_each(CASE WHEN json_valid(e.type_of_work) AND json_type(e.type_of_work) = 'array' THEN e.type_of_work ELSE json_array(COALESCE(e.type_of_work, '')) END) j
         WHERE e.date BETWEEN ? AND ? GROUP BY 1 ORDER BY n DESC LIMIT 8`, from, to),
-    followups_due: all(`SELECT 'enquiry' kind, id, enquiry_no ref, COALESCE(hospital_name, client_name, place) title, next_followup due, enquiry_by who, status
+    followups_due: !sees('followups') ? [] : all(`SELECT 'enquiry' kind, id, enquiry_no ref, COALESCE(hospital_name, client_name, place) title, next_followup due, enquiry_by who, status
         FROM enquiries WHERE next_followup IS NOT NULL AND next_followup <= date(?, '+7 day') AND status NOT IN ('Won','Lost','Regret')
       UNION ALL
       SELECT 'followup', f.id, e.enquiry_no, f.notes, f.next_date, f.assigned_to, f.status
         FROM followups f LEFT JOIN enquiries e ON e.id = f.enquiry_id WHERE f.status = 'Open' AND f.next_date IS NOT NULL AND f.next_date <= date(?, '+7 day')
       ORDER BY due LIMIT 30`, today, today),
-    approvals: all("SELECT id, doc_type, doc_ref, title, amount, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id DESC LIMIT 20"),
-    low_stock: all(`SELECT * FROM (SELECT t.id, t.code, t.name, t.uom, t.reorder_level, ${STOCK_SQL.replaceAll('{t}', 't')} AS stock
+    approvals: !sees('approvals') ? [] : all("SELECT id, doc_type, doc_ref, title, amount, requested_by, requested_at FROM approvals WHERE status = 'Pending' ORDER BY id DESC LIMIT 20"),
+    low_stock: !sees('items') ? [] : all(`SELECT * FROM (SELECT t.id, t.code, t.name, t.uom, t.reorder_level, ${STOCK_SQL.replaceAll('{t}', 't')} AS stock
         FROM items t) WHERE reorder_level > 0 AND stock <= reorder_level ORDER BY name LIMIT 20`),
-    stock_value: one(`SELECT COALESCE(SUM(v), 0) v FROM (SELECT ${STOCK_SQL.replaceAll('{t}', 't')} * COALESCE(t.rate, 0) AS v FROM items t)`).v,
-    pending_po: one("SELECT COUNT(*) n FROM purchase_orders WHERE status IN ('Pending Approval')").n,
-    pending_req: one("SELECT COUNT(*) n FROM requisitions WHERE status = 'Submitted'").n,
-    projects: all("SELECT stage, COUNT(*) n FROM projects WHERE status = 'Active' GROUP BY stage"),
+    stock_value: !sees('items') ? undefined : one(`SELECT COALESCE(SUM(v), 0) v FROM (SELECT ${STOCK_SQL.replaceAll('{t}', 't')} * COALESCE(t.rate, 0) AS v FROM items t)`).v,
+    pending_po: sees('purchase_orders') ? one("SELECT COUNT(*) n FROM purchase_orders WHERE status IN ('Pending Approval')").n : undefined,
+    pending_req: sees('requisitions') ? one("SELECT COUNT(*) n FROM requisitions WHERE status = 'Submitted'").n : undefined,
+    projects: !sees('projects') ? [] : all("SELECT stage, COUNT(*) n FROM projects WHERE status = 'Active' GROUP BY stage"),
     recent: all('SELECT id, enquiry_no, date, hospital_name, client_name, place, type_of_work, status FROM enquiries ORDER BY id DESC LIMIT 8'),
     today,
   };
@@ -456,7 +468,7 @@ for (const entity of Object.keys(PAY_DOC)) {
   api.post(`/${entity}/:id/paid`, wrap(req => pay.markPaid(entity, req.params.id, req.body, req.user)));
   api.post(`/${entity}/:id/reverse`, wrap(req => pay.reverse(entity, req.params.id, req.body, req.user)));
 }
-api.get('/vendor_payments/:id/check', wrap(req => { const r = getRow('vendor_payments', req.params.id); const c = pay.checkPayment(r); return { blockers: c.blockers, notes: c.notes, off_terms: c.offTerms, gm: pay.needsGm({ ...r, off_terms: c.offTerms ? 'Yes' : 'No' }), money: c.m }; }));
+api.get('/vendor_payments/:id/check', wrap(req => { payView(req); const r = getRow('vendor_payments', req.params.id); const c = pay.checkPayment(r); return { blockers: c.blockers, notes: c.notes, off_terms: c.offTerms, gm: pay.needsGm({ ...r, off_terms: c.offTerms ? 'Yes' : 'No' }), money: c.m }; }));
 api.post('/vendor_bills/:id/override', wrap(req => pay.overrideBill(req.params.id, req.body, req.user)));
 const payView = req => { if (!canView('vendor_payments', req.user.role)) throw new HttpError(403, 'No access to payments'); };
 api.get('/payables', wrap(req => { payView(req); return pay.payables(req.query); }));
@@ -717,18 +729,20 @@ api.post('/stock/drafts/:id/cancel', need('stock_moves'), wrap(req => {
   if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
   return updateRow('stock_drafts', d.id, { status: 'Cancelled' }, req.user, { system: true });
 }));
-api.get('/stock/available/:itemId', wrap(req => ({ stock: stock.stockOf(Number(req.params.itemId)) })));
-api.get('/stock/summary', wrap(req => stock.stockSummary(req.query)));
+const itemView = req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); };
+api.get('/stock/available/:itemId', wrap(req => { itemView(req); return { stock: stock.stockOf(Number(req.params.itemId)) }; }));
+api.get('/stock/summary', wrap(req => { itemView(req); return stock.stockSummary(req.query); }));
 api.get('/dashboard/accounts', wrap(req => { if (!canView('invoices', req.user.role) && !hasFunction(req.user.role, 'po_commercial')) throw new HttpError(403, 'No access to accounts'); return stock.accountsDashboard(); }));
 api.post('/products/import-boq', need('products'), express.raw({ type: () => true, limit: '30mb' }), wrap(req => importer.importProductBoq(req.body, req.query.set, req.user)));
 api.get('/dashboard/store', wrap(req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); return stock.storeDashboard(req.query); }));
-api.get('/items/next-code', wrap(req => ({ code: nextItemCode(req.query.category) })));
+api.get('/items/next-code', need('items'), wrap(req => ({ code: nextItemCode(req.query.category) })));
 api.post('/stock/opening', wrap(req => {
   if (!hasFunction(req.user.role, 'stock_opening')) throw new HttpError(403, 'You do not have permission to create opening stock');
   return stock.carryForwardOpening(req.body?.fy, req.user);
 }));
-api.get('/reports/po-lines', wrap(req => stock.poLines(req.query)));
+api.get('/reports/po-lines', wrap(req => { if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access to purchase orders'); return stock.poLines(req.query); }));
 api.get('/export/stock-summary', wrap(async (req, res) => {
+  itemView(req);
   const { from, to, rows } = stock.stockSummary(req.query);
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
@@ -750,6 +764,9 @@ api.get('/export/stock-summary', wrap(async (req, res) => {
 
 // ---------------------------------------------------------------- Excel import (preview → commit) and backup
 api.get('/import/template/:kind', wrap(async (req, res) => {
+  // a blank sheet: for whoever may import it, or may use the import page
+  const right = IMPORT_RIGHTS[req.params.kind];
+  if (right && !canWrite(right, req.user.role) && !hasFunction(req.user.role, 'import')) throw new HttpError(403, 'You do not have permission to import this');
   const buf = await importer.templateFile(req.params.kind);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="WIESPL-import-${req.params.kind}.xlsx"`);
@@ -772,9 +789,13 @@ api.post('/import/po-file', express.raw({ type: () => true, limit: '30mb' }), wr
   audit(req.user.name, 'import', null, 'PO file', `${name}: ${r.map(x => `${x.po_no || ''} ${x.action}`).join(', ')}`);
   return r;
 }));
-api.post('/import/commit', wrap(req => importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, {
-  createMissing: !!req.body?.createMissing, sync: req.body?.sync, removeItems: req.body?.removeItems, canSync: hasFunction(req.user.role, 'import'),
-})));
+api.post('/import/commit', wrap(req => {
+  const ent = IMPORT_RIGHTS[importer.planKind(req.body?.token)];
+  if (ent && !canWrite(ent, req.user.role)) throw new HttpError(403, 'You do not have permission to import this');
+  return importer.commit(req.body?.token, req.body?.mode || 'skip', req.user, {
+    createMissing: !!req.body?.createMissing, sync: req.body?.sync, removeItems: req.body?.removeItems, canSync: hasFunction(req.user.role, 'import'),
+  });
+}));
 
 api.get('/admin/backup', requireRole(), wrap(async (req, res) => {
   const file = path.join(os.tmpdir(), `wiespl-backup-${Date.now()}.db`);
@@ -835,8 +856,8 @@ api.post('/:entity/:id/status', wrap(req => {
 
 // ---------------------------------------------------------------- excel
 api.get('/export/:entity', wrap(async (req, res) => {
-  entityOr404(req.params.entity);
-  const buf = await exportEntity(req.params.entity, req.query);
+  viewable(req);
+  const buf = await exportEntity(req.params.entity, req.query, req.params.entity === 'work_tasks' ? rows => wt.visibleTasks(rows, req.user) : undefined);
   const fname = `${req.params.entity}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);
@@ -849,7 +870,7 @@ api.post('/import/enquiries', need('enquiries'), express.raw({ type: () => true,
 
 // ---------------------------------------------------------------- roles & permissions (admin)
 const viewable = req => { entityOr404(req.params.entity); if (!canView(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this module'); };
-api.get('/roles', wrap(() => roles.listRoles()));
+api.get('/roles', requireRole(), wrap(() => roles.listRoles()));
 api.post('/roles', requireRole(), wrap(req => roles.saveRole(null, req.body, req.user)));
 api.put('/roles/:name', requireRole(), wrap(req => roles.saveRole(req.params.name, req.body, req.user)));
 api.delete('/roles/:name', requireRole(), wrap(req => { roles.deleteRole(req.params.name, req.user); return { ok: true }; }));
@@ -956,7 +977,7 @@ const LOCKED = {
   schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
 };
 
-api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); return options(req.params.entity, req.query.q); }));
+api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); if (!pickable(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this list'); return options(req.params.entity, req.query.q); }));
 api.get('/:entity', wrap(req => {
   viewable(req);
   const rows = listRows(req.params.entity, req.query);
