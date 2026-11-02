@@ -8,7 +8,7 @@ import { round2, fyOf } from '../public/js/calc.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const fyStart = fy => `20${fy.slice(0, 2)}-04-01`;
-const OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP'];
+const OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
 const APPROVED_PO = ['Approved', 'Sent', 'Partially Received', 'Closed', 'Received'];
 
 export function stockOf(itemId) {
@@ -26,6 +26,13 @@ export function stockEntry(body, user) {
   const lines = (body.lines || []).filter(l => l.item_id && Number(l.qty));
   if (!lines.length) throw new HttpError(400, 'Add at least one item with a quantity');
   if (type === 'INWARD' && lines.some(l => !(Number(l.rate) >= 0) || l.rate === '' || l.rate == null)) throw new HttpError(400, 'Enter the price per piece for every inward line');
+  // Job work: always with a vendor; the parts go to / come from that vendor.
+  if (['JOB_OUT', 'JOB_IN'].includes(type)) {
+    const vendor = body.vendor_id ? db.prepare('SELECT name FROM vendors WHERE id = ?').get(Number(body.vendor_id))?.name : String(body.supplier || body.to_location || '').trim();
+    if (!vendor) throw new HttpError(400, 'Choose the job work vendor (or type the name)');
+    if (type === 'JOB_OUT') { body = { ...body, from_location: body.from_location || 'Store', to_location: body.to_location || vendor }; }
+    else if (!body.vendor_id && !body.supplier) body = { ...body, supplier: vendor };
+  }
 
   // Stock check for issues / transfers / scrap (total per item across the slip).
   if (OUT_TYPES.includes(type) && !body.allowNegative) {
@@ -46,9 +53,11 @@ export function stockEntry(body, user) {
     // Next number of the series; a number already in the CRM (e.g. imported from Smart Store) is skipped.
     const docNo = body.doc_no || (() => {
       for (;;) {
-        const { seq, fy } = nextSeq(`stock_${type}`, date);
+        // job work continues the series of the workbook: vendor DC = transfer numbers, job work GRN = GRN numbers
+        const series = { JOB_OUT: 'TRANSFER', JOB_IN: 'INWARD' }[type] || type;
+        const { seq, fy } = nextSeq(`stock_${series}`, date);
         const no = `${String(seq).padStart(3, '0')}/20${fy}`;
-        if (!db.prepare('SELECT 1 FROM stock_moves WHERE type = ? AND doc_no = ?').get(type, no)) return no;
+        if (!db.prepare('SELECT 1 FROM stock_moves WHERE type IN (?, ?) AND doc_no = ?').get(type, series, no)) return no;
       }
     })();
     const header = Object.fromEntries(HEADER_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
@@ -129,7 +138,7 @@ export function stockSummary(q = {}) {
 
   const rows = items.map(it => {
     const r = { id: it.id, code: it.code, name: it.name, category: it.category, uom: it.uom, rate: it.rate || 0, reorder_level: it.reorder_level || 0, location: it.location,
-      opening: 0, inward: 0, outward: 0, transfer: 0, return: 0, scrap: 0, adjust: 0, closing: 0,
+      opening: 0, inward: 0, outward: 0, transfer: 0, return: 0, scrap: 0, adjust: 0, job_out: 0, job_in: 0, closing: 0,
       inward_value: 0, consumption_value: 0, last_out: null, months: new Set() };
     let bal = Number(it.opening_stock) || 0;
     let started = false;
@@ -148,6 +157,8 @@ export function stockSummary(q = {}) {
         case 'RETURN': r.return += qty; bal += qty; break;
         case 'SCRAP': r.scrap += qty; bal -= qty; break;
         case 'ADJUST': r.adjust += qty; bal += qty; break;
+        case 'JOB_OUT': r.job_out += qty; bal -= qty; break;
+        case 'JOB_IN': r.job_in += qty; r.inward_value += qty * (m.rate ?? 0); bal += qty; break;
       }
     }
     if (!started) r.opening = bal;
@@ -159,7 +170,7 @@ export function stockSummary(q = {}) {
     // FSN, as in the workbook: issued in 4+ active months = FAST, 1-3 = SLOW, none = NON-M
     r.fsn = r.months.size >= 4 ? 'FAST' : r.months.size >= 1 ? 'SLOW' : 'NON-M';
     delete r.months;
-    for (const k of ['opening', 'inward', 'outward', 'transfer', 'return', 'scrap', 'adjust']) r[k] = round2(r[k]);
+    for (const k of ['opening', 'inward', 'outward', 'transfer', 'return', 'scrap', 'adjust', 'job_out', 'job_in']) r[k] = round2(r[k]);
     r.low = r.reorder_level > 0 && r.closing <= r.reorder_level;
     return r;
   });
@@ -263,10 +274,10 @@ export function storeDashboard(q = {}) {
   const months = [];
   const d = new Date(to.slice(0, 7) + '-01T00:00:00');
   for (let i = 5; i >= 0; i--) { const x = new Date(d.getFullYear(), d.getMonth() - i, 1); months.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}`); }
-  const flows = db.prepare(`SELECT substr(m.date, 1, 7) mo, CASE WHEN m.type = 'INWARD' THEN 'in' ELSE 'out' END k,
+  const flows = db.prepare(`SELECT substr(m.date, 1, 7) mo, CASE WHEN m.type IN ('INWARD', 'JOB_IN') THEN 'in' ELSE 'out' END k,
       SUM(m.qty) q, SUM(m.qty * COALESCE(m.rate, i.rate, 0)) v
     FROM stock_moves m JOIN items i ON i.id = m.item_id
-    WHERE m.date >= ? AND m.date <= ? AND m.type IN ('INWARD', 'OUTWARD', 'TRANSFER') GROUP BY 1, 2`).all(months[0] + '-01', to);
+    WHERE m.date >= ? AND m.date <= ? AND m.type IN ('INWARD', 'OUTWARD', 'TRANSFER', 'JOB_OUT', 'JOB_IN') GROUP BY 1, 2`).all(months[0] + '-01', to);
   const monthly = months.map(mo => {
     const f = k => flows.find(x => x.mo === mo && x.k === k) || {};
     return { month: mo, in_qty: round2(f('in').q || 0), in_value: round2(f('in').v || 0), out_qty: round2(f('out').q || 0), out_value: round2(f('out').v || 0) };

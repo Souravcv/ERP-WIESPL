@@ -7,13 +7,15 @@ import { itemPicker } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const TABS = [['', 'All'], ['INWARD', '📥 Inward (GRN)'], ['OUTWARD', '📤 Issue / Outward'], ['TRANSFER', '🔀 Transfer (MTN)'], ['RETURN', '↩️ Return'],
-  ['SCRAP', '🗑️ Scrap'], ['ADJUST', '⚖️ Adjustment'], ['PRODUCED', '🏭 Production'], ['OPENING', '🏁 Opening']];
-const PRICED = ['INWARD', 'OPENING'];
+  ['SCRAP', '🗑️ Scrap'], ['ADJUST', '⚖️ Adjustment'], ['JOB_OUT', '🛠️ Job Work Outward'], ['JOB_IN', '🛠️ Job Work Inward'], ['PRODUCED', '🏭 Production'], ['OPENING', '🏁 Opening']];
+const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const printUrl = r => `#/print/stockdoc/${r.type}?doc=${encodeURIComponent(r.doc_no || '')}`;
 const editUrl = r => `#/grn-edit?doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`;
 const party = r => ({
   INWARD: [r.vendor || r.supplier, r.invoice_no && `inv. ${r.invoice_no}`],
   TRANSFER: [r.to_location && `→ ${r.to_location}`, r.project],
+  JOB_OUT: [r.to_location && `→ ${r.to_location}`, r.project],
+  JOB_IN: [r.vendor || r.supplier, r.invoice_no && `inv. ${r.invoice_no}`],
 }[r.type] || [r.project, r.issued_to]).filter(Boolean).join(' · ') + (r.projects > 1 ? ` (+${r.projects - 1} projects)` : '');
 
 export async function stockMovementsView(root) {
@@ -26,7 +28,7 @@ export async function stockMovementsView(root) {
     po: h('select', { style: { width: 'auto' } }, h('option', { value: '' }, 'With and without PO'), h('option', { value: 'without' }, 'GRNs without a PO'), h('option', { value: 'with' }, 'GRNs against a PO')),
   };
   f.po.value = p.po || '';
-  const tabs = h('div.tabs');
+  const tabs = h('div.tabs.wrap');
   const out = h('div');
   const open = new Set();
 

@@ -291,16 +291,16 @@ function parseStoreWorkbook(wb, plan) {
   jobWork('Job Work Outward', ['date', 'qtysent'], 'fgpartcode', g => {
     const vendor = str(g('vendername', 'vendorname'));
     const why = str(g('projectpurpose'));
-    return { type: 'TRANSFER', date: date(g('date')), doc_no: str(g('vendordcno', 'dcno')) || null, code: code(g('fgpartcode')), name: str(g('fgpartname')), qty: num(g('qtysent')),
+    return { type: 'JOB_OUT', date: date(g('date')), doc_no: str(g('vendordcno', 'dcno')) || null, code: code(g('fgpartcode')), name: str(g('fgpartname')), qty: num(g('qtysent')),
       uom: uom(g('uom')), rate: 0, from_location: 'Store', to_location: vendor || 'Job work vendor', vendor_id: L.vendorByName.get(norm(vendor)) || null,
-      purpose: why ? `Job work: ${why}` : 'Job work' };
+      purpose: why || null };
   });
   jobWork('Job Work Inward', ['receiptdate', 'qtyreceived'], 'fgpartcode', g => {
     const d = date(g('receiptdate'));
     const vendor = str(g('vendorname', 'vendername'));
-    return { type: 'INWARD', date: d, doc_no: seqDoc(g('grnno'), d), code: code(g('fgpartcode')), name: str(g('fgpartname')), category: 'Finished Goods', qty: num(g('qtyreceived')),
+    return { type: 'JOB_IN', date: d, doc_no: seqDoc(g('grnno'), d), code: code(g('fgpartcode')), name: str(g('fgpartname')), category: 'Finished Goods', qty: num(g('qtyreceived')),
       uom: uom(g('uom')), rate: num(g('price')) ?? 0, supplier: vendor || null, vendor_id: L.vendorByName.get(norm(vendor)) || null, invoice_no: str(g('invoiceno')) || null,
-      remarks: ['Job work', str(g('process')), str(g('remark'))].filter(Boolean).join(': ') || null };
+      purpose: str(g('process')) || null, remarks: str(g('remark')) || null };
   });
   moveSheet('Return Material', ['date', 'returnqty'], g => {
     const u = str(g('uom'));

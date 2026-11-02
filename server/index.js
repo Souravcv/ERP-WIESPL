@@ -561,7 +561,7 @@ api.post('/stock/entry', need('stock_moves'), wrap(req => {
 function postStockEntry(reqBody, user) {
   const req = { body: reqBody, user };
   const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
-  if (['OUTWARD', 'TRANSFER', 'SCRAP'].includes(body.type)) {
+  if (['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(body.type)) {
     reservedCheck(body, body.lines, { projectId: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id), bomId: body.bom_id });
   }
   // Outward against a BOQ: the delivery challan is created automatically with the issue.
@@ -941,6 +941,7 @@ api.post('/:entity', wrap(req => {
   if (req.params.entity === 'boms' && ['Design Review', 'Final'].includes(req.body?.status)) throw new HttpError(400, 'Save the BOQ as Draft; Design Review and Final are set with the buttons on the BOQ');
   if (req.params.entity === 'enquiries') enq.checkMandatory(req.body || {});
   const row = insertRow(req.params.entity, req.body || {}, req.user);
+  if (req.params.entity === 'employees') return hrf.ensureLogin(row, req.user);
   notify.notifyNew(req.params.entity, row, req.user);
   if (req.params.entity === 'bom_items') flow.touchReview(row.bom_id, [row.department], req.user);
   return row;
@@ -983,6 +984,7 @@ api.put('/:entity/:id', wrap(req => {
       if (to !== undefined && to !== cur.status && !['Final', 'In Progress', 'Completed', 'On Hold'].includes(to)) throw new HttpError(400, `A Final BOQ cannot go back to ${to}; use “Reopen”`);
     }
   }
+  if (entity === 'employees') return hrf.ensureLogin(updateRow(entity, id, body, req.user), req.user);
   return updateRow(entity, id, body, req.user);
 }));
 api.delete('/:entity/:id', wrap(req => {

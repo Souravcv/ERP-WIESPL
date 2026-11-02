@@ -5,8 +5,9 @@ import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker, bomRows } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
-const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST'];
-const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment' };
+const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
+const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
+const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
 const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type'];
@@ -176,7 +177,7 @@ export async function stockEntryView(root) {
     const date = v('date', h('input', { type: 'date' }));
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
     const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
-      : field({ INWARD: 'GRN No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
+      : field({ INWARD: 'GRN No', JOB_IN: 'GRN No', JOB_OUT: 'Vendor DC No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
       F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
@@ -185,6 +186,12 @@ export async function stockEntryView(root) {
       if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'an approved PO in the CRM'),
         h('label.span-2', 'Reason for receiving without a PO (if there is no PO) *', h('span.hint', 'Purchase, Accounts and the GM are told, so the PO can be raised or attached'),
           v('reason', h('input', { placeholder: 'e.g. urgent site requirement – PO to follow' }))));
+    }
+    // Job work: parts sent to a vendor for a process, and parts received from the vendor
+    if (['JOB_OUT', 'JOB_IN'].includes(type)) {
+      F.push(pick('vendor_id', vendors, 'Job work vendor *'), field('Vendor name (if not in list)', v(type === 'JOB_OUT' ? 'to_location' : 'supplier', h('input'))));
+      if (type === 'JOB_IN') F.push(field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))), field('Process', sv('purpose', ['Powder coating', 'Fabrication', 'Perforation', 'Bending', 'Laser cutting'])));
+      else F.push(pick('project_id', projects, 'Project'), field('Project / Purpose', sv('purpose', ['Powder coating', 'Fabrication', 'Perforation', 'Bending', 'Laser cutting'])));
     }
     if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
     if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
@@ -217,15 +224,15 @@ export async function stockEntryView(root) {
 
   const body = h('div');
   function render() {
-    const priced = ['INWARD', 'OPENING'].includes(type);
+    const priced = PRICED.includes(type);
     const totalValue = h('b');
     const recalc = () => { totalValue.textContent = money(lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.rate ?? itemById.get(l.item_id)?.rate) || 0), 0)); };
     const rows = lines.map((l, i) => {
       const it = itemById.get(l.item_id);
       const stockCell = h('td.num', it ? `${round2(it.stock)} ${it.uom || ''}` : '');
-      const short = () => ['OUTWARD', 'TRANSFER', 'SCRAP'].includes(type) && it && Number(l.qty) > it.stock;
+      const short = () => ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(type) && it && Number(l.qty) > it.stock;
       const qty = h('input', { type: 'number', step: 'any', value: l.qty ?? '', style: { width: '90px' } });
-      const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? '', placeholder: 'required', style: { width: '110px' } });
+      const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? '', placeholder: type === 'JOB_IN' ? 'if charged' : 'required', style: { width: '110px' } });
       const value = h('td.num');
       const upd = () => {
         value.textContent = inr((Number(l.qty) || 0) * (Number(l.rate ?? it?.rate) || 0));
@@ -252,7 +259,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
@@ -281,9 +288,11 @@ export async function stockEntryView(root) {
   async function save(allowNegative = false, allowReserved = false) {
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: ['INWARD', 'OPENING'].includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
+    if (type === 'JOB_OUT' && !header.vendor_id && !String(header.to_location || '').trim()) throw new Error('Choose the job work vendor (or type the name)');
+    if (type === 'JOB_IN' && !header.vendor_id && !String(header.supplier || '').trim()) throw new Error('Choose the job work vendor (or type the name)');
     if (type === 'INWARD' && !po && !String(header.po_no || '').trim()) {
       if (!header.vendor_id && !String(header.supplier || '').trim()) throw new Error('Without a PO, choose the supplier (or type its name)');
       if (!String(header.reason || '').trim()) throw new Error('Without a PO, write the reason for receiving without one');
@@ -328,7 +337,7 @@ export async function stockEntryView(root) {
   const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
   const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
   saveLabel();
-  const tabs = h('div.tabs', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const tabs = h('div.tabs.wrap', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
     tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', ENTRY_TYPES[i] === type));
     saveLabel();
@@ -339,7 +348,7 @@ export async function stockEntryView(root) {
       h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'), h('a.btn', { href: '#/stock-movements' }, '🗂️ All movements'),
       canWrite('stock_moves', state.user.role) ? h('a.btn', { href: '#/import?kind=items', title: 'Upload the WIESPL Smart Store workbook (items, opening stock and all inward / outward / transfer / return / scrap entries), or a stock movements sheet' }, '📥 Import Excel') : null,
       canWrite('stock_moves', state.user.role) ? saveBtn : null)),
-    h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap. Issue slips, dispatch challans and transfers are saved as a draft and reduce the stock only when the store posts them. Numbers like 001/2026-27 are given per type and restart every April (Settings → Document numbers to continue your own series).'),
+    h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap − Job Work Outward + Job Work Inward. Issue slips, dispatch challans and transfers are saved as a draft and reduce the stock only when the store posts them. Numbers like 001/2026-27 are given per type and restart every April (Settings → Document numbers to continue your own series).'),
     tabs, body);
   render();
 }
@@ -363,7 +372,7 @@ export async function stockSummaryView(root) {
   const query = () => new URLSearchParams(Object.fromEntries(Object.entries(f).map(([k, el]) => [k, el.value]).filter(([, v]) => v))).toString();
   let page = 0, data = null, sort = null;
   const COLS = [['code', 'Code'], ['name', 'Item'], ['category', 'Category'], ['abc', 'ABC'], ['fsn', 'FSN'], ['uom', 'UOM'], ['rate', 'Price', 1], ['opening', 'Opening', 1], ['inward', 'Inward', 1],
-    ['outward', 'Outward', 1], ['transfer', 'Transfer', 1], ['return', 'Return', 1], ['scrap', 'Scrap', 1], ['closing', 'Closing', 1], ['closing_value', 'Closing Value', 1], ['last_out', 'Last Issued']];
+    ['outward', 'Outward', 1], ['transfer', 'Transfer', 1], ['return', 'Return', 1], ['scrap', 'Scrap', 1], ['job_out', 'Job Work Out', 1], ['job_in', 'Job Work In', 1], ['closing', 'Closing', 1], ['closing_value', 'Closing Value', 1], ['last_out', 'Last Issued']];
   function draw() {
     let rows = data.rows;
     if (sort) rows = [...rows].sort((a, b) => (typeof a[sort.k] === 'number' ? a[sort.k] - b[sort.k] : String(a[sort.k] ?? '').localeCompare(String(b[sort.k] ?? ''), undefined, { numeric: true })) * sort.d);

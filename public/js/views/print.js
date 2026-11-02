@@ -454,16 +454,16 @@ function challanDoc(c, s, codes = {}) {
     footer()));
 }
 
-const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE (MTN)', PRODUCED: 'PRODUCTION NOTE (FINISHED GOODS MADE)', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
+const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE (MTN)', JOB_OUT: 'JOB WORK OUTWARD – DC TO VENDOR', JOB_IN: 'JOB WORK INWARD (GRN)', PRODUCED: 'PRODUCTION NOTE (FINISHED GOODS MADE)', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
 function stockSlipDoc(type, docNo, moves, s, lotsOf) {
-  if (!['INWARD', 'OPENING'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s, lotsOf);
+  if (!['INWARD', 'OPENING', 'JOB_IN'].includes(type)) return stockSlipNoPrice(type, docNo, moves, s, lotsOf);
   const m0 = moves[0] || {};
   const total = moves.reduce((a, m) => a + (Number(m.value) || 0), 0);
   const info = [
     ['No', docNo], ['Date', fmtDate(m0.date)],
-    type === 'INWARD' && ['Supplier', m0.vendor_id_label || m0.supplier], type === 'INWARD' && ['Invoice', [m0.invoice_no, fmtDate(m0.invoice_date)].filter(Boolean).join(' dt. ')],
+    ['INWARD', 'JOB_IN'].includes(type) && ['Supplier', m0.vendor_id_label || m0.supplier], ['INWARD', 'JOB_IN'].includes(type) && ['Invoice', [m0.invoice_no, fmtDate(m0.invoice_date)].filter(Boolean).join(' dt. ')],
     type === 'INWARD' && ['PO No', [...new Set(moves.map(m => m.po_no || m.po_id_label).filter(Boolean))].join(', ') || 'not linked'], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
-    type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
+    ['TRANSFER', 'JOB_OUT'].includes(type) && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
     ['Reason', m0.reason], ['Purpose', m0.purpose]].filter(x => x && x[1]);
   return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
     companyHead(s, SLIP_TITLES[type] || type),
@@ -482,7 +482,7 @@ function stockSlipDoc(type, docNo, moves, s, lotsOf) {
 function stockSlipNoPrice(type, docNo, moves, s, lotsOf = {}) {
   const m0 = moves[0] || {};
   const info = [['No', docNo], ['Date', fmtDate(m0.date)], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
-    type === 'TRANSFER' && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
+    ['TRANSFER', 'JOB_OUT'].includes(type) && ['From → To', `${m0.from_location || 'Store'} → ${m0.to_location || ''}`], ['Requested by', m0.requested_by], ['Original Issue No', m0.against_issue_no],
     ['Reason', m0.reason], ['Purpose', m0.purpose]].filter(x => x && x[1]);
   return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
     companyHead(s, SLIP_TITLES[type] || type),
@@ -577,7 +577,7 @@ export async function printView(root, kind, id) {
     if (!moves.length) throw new Error(`No ${id} entries with number ${docNo}`);
     moves.sort((a, b) => a.id - b.id);
     title = `${SLIP_TITLES[id] || id} ${docNo}`;
-    const lotsOf = ['OUTWARD', 'TRANSFER', 'SCRAP'].includes(id) ? await api(`/lots/for-doc?type=${encodeURIComponent(id)}&doc=${encodeURIComponent(docNo)}`).catch(() => ({})) : {};
+    const lotsOf = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(id) ? await api(`/lots/for-doc?type=${encodeURIComponent(id)}&doc=${encodeURIComponent(docNo)}`).catch(() => ({})) : {};
     doc = stockSlipDoc(id, docNo, moves, s, lotsOf);
   } else if (['bond', 'onboarding', 'probation', 'confirmation', 'acceptance', 'relieving', 'fnf', 'exitinterview'].includes(kind)) {
     const { hrDoc } = await import('./hrprint.js');

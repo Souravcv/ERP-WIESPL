@@ -163,7 +163,7 @@ export function fieldInput(f, value, { readonly = false, onChange } = {}) {
     }
     case 'select': case 'yn': {
       const opts = f.type === 'yn' ? ['', 'Yes', 'No'] : f.options;
-      el = h('select', { ...common, disabled: ro }, opts.map(o => h('option', { value: o }, o || '—')));
+      el = h('select', { ...common, disabled: ro }, opts.map(o => h('option', { value: o }, f.optionLabels?.[o] || o || '—')));
       if (value != null && value !== '' && !opts.includes(value)) el.append(h('option', { value }, value));
       el.value = value ?? ''; get = () => el.value; break;
     }

@@ -7,6 +7,35 @@ import { getRow, insertRow, updateRow, HttpError } from './crud.js';
 import { hasFunction } from '../public/js/schema.js';
 import { notify } from './notify.js';
 import { BOND_TEMPLATE } from './hrbond.js';
+import { hashPassword } from './auth.js';
+import crypto from 'node:crypto';
+
+// The CRM login made from the employee form: a CRM role chosen and no account with this username yet creates the account
+// with a temporary password (changed at the first sign-in), shown once to the person saving. No username: one is made from
+// the name. HR may not make Administrator or GM logins (those stay under Admin → Users).
+export function ensureLogin(row, actor) {
+  const role = row.login_role;
+  if (!role) return row;
+  const taken = u => db.prepare('SELECT 1 FROM users WHERE lower(username) = lower(?)').get(u) || db.prepare('SELECT 1 FROM employees WHERE lower(login) = lower(?) AND id <> ?').get(u, row.id);
+  if (row.login && db.prepare('SELECT 1 FROM users WHERE lower(username) = lower(?)').get(row.login)) return row; // already has an account
+  if (actor.role !== 'admin' && !hasFunction(actor.role, 'hr_manage')) throw new HttpError(403, 'The employee is saved. Only HR, the GM or an administrator can create the CRM login.');
+  if (!db.prepare('SELECT 1 FROM roles WHERE name = ?').get(role)) throw new HttpError(400, 'The employee is saved. Choose a valid CRM role for the login.');
+  if (['admin', 'manager'].includes(role) && actor.role !== 'admin') throw new HttpError(403, 'The employee is saved. Administrator and GM logins are made by an administrator under Admin → Users.');
+  let username = row.login;
+  if (!username) {
+    const base = String(row.name || '').toLowerCase().replace(/^(dr|mr|mrs|ms)\.?\s+/, '').trim().split(/\s+/).map(w => w.replace(/[^a-z0-9]/g, '')).filter(Boolean).join('.') || `emp${row.id}`;
+    username = base;
+    for (let i = 2; taken(username); i++) username = `${base}${i}`;
+  }
+  const password = crypto.randomBytes(9).toString('base64url');
+  return tx(() => {
+    const info = db.prepare('INSERT INTO users (username, name, role, email, phone, pass_hash, must_change) VALUES (?, ?, ?, ?, ?, ?, 1)')
+      .run(username, row.name, role, row.email || null, row.mobile || null, hashPassword(password));
+    if (username !== row.login) db.prepare('UPDATE employees SET login = ? WHERE id = ?').run(username, row.id);
+    audit(actor.name, 'users', Number(info.lastInsertRowid), 'create', `${username} (from employee ${row.emp_code || row.id})`);
+    return { ...getRow('employees', row.id), login_created: { username, password, role } };
+  });
+}
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };

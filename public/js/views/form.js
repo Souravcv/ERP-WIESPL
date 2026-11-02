@@ -1,5 +1,5 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS } from '../schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS, ROLE_INFO } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
@@ -390,6 +390,20 @@ async function briefDialog(row) {
   [{ label: 'Close', value: true }]);
 }
 
+// The 3D view of an enquiry's CAD drawing: one drawing opens at once, several ask which; none goes to the file upload.
+async function open3d(id) {
+  const cad = (await api(`/attachments/enquiries/${id}`)).filter(a => /\.(dwg|dxf)$/i.test(a.filename));
+  const go = a => { location.hash = `#/plan3d/${a.id}?n=${encodeURIComponent(a.filename)}`; };
+  if (cad.length === 1) return go(cad[0]);
+  if (cad.length) {
+    const pick = await modal('🧊 Which drawing?', h('p', 'This enquiry has more than one CAD drawing.'), [...cad.map(a => ({ label: a.filename, value: a })), { label: 'Cancel', value: null }]);
+    return pick ? go(pick) : undefined;
+  }
+  const files = document.querySelector('.sec-files');
+  if (files) { files.closest('details').open = true; files.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+  toast('No CAD drawing yet: attach the DWG / DXF file here, then press 🧊 3D', true);
+}
+
 // ---------------------------------------------------------------- actions per module
 function actionsFor(entity, row, reload, ctx = {}) {
   const id = row.id;
@@ -421,6 +435,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('enquiries')) A.push(h('button.btn', { onclick: busy(() => briefDialog(row).catch(fail)) }, '📋 Detailed requirement form'));
       if (can('enquiries')) A.push(h('button.btn', { onclick: () => profileDialog(row, reload).catch(fail) }, '🧭 Client profile questionnaire'));
       A.push(h('a.btn', { href: `#/print/techsheet/${id}`, target: '_blank' }, '📄 Techno-commercial sheet'));
+      A.push(h('button.btn', { title: 'Show the DWG / DXF drawing of this enquiry in 3D', onclick: busy(() => open3d(id).catch(fail)) }, '🧊 3D CAD drawing'));
       if (!row.customer_id && can('customers') && row.hospital_name) {
         A.push(h('button.btn', { onclick: go(async () => {
           const c = await api('/customers', { method: 'POST', body: { name: row.hospital_name, place: row.place, state: row.state || undefined, pincode: row.pin_code || undefined, contact_person: row.client_name, phone: row.client_phone } });
@@ -1121,6 +1136,7 @@ function itemSummary(itemId) {
     box.replaceChildren(h('h2', `Stock summary ${fmtDate(from)} – ${fmtDate(to)}`), h('div.kpis', { style: { marginBottom: 0 } },
       tile('Opening', r.opening, r.uom), tile('Inward', r.inward, money(r.inward_value)), tile('Outward', r.outward), tile('Transfer', r.transfer),
       tile('Return', r.return), tile('Scrap', r.scrap), r.adjust ? tile('Adjust', r.adjust) : null,
+      r.job_out ? tile('Job Work Out', r.job_out) : null, r.job_in ? tile('Job Work In', r.job_in) : null,
       tile('Closing', h('span', { style: { color: r.closing < 0 ? 'var(--bad)' : r.low ? 'var(--warn)' : '' } }, r.closing), money(r.closing_value)),
       tile('Class', `${r.abc} · ${r.fsn}`, r.last_out ? `last issued ${fmtDate(r.last_out)}` : 'never issued')));
   }).catch(() => box.remove());
@@ -1314,6 +1330,7 @@ export async function recordView(root, entity, id) {
       : await api(`/${entity}/${id}`, { method: 'PUT', body });
     keep.drop();
     clearRefCache(entity);
+    if (saved.login_created) await loginCreated(saved.login_created);
     if (isNew) {
       // From here on this page edits the saved record, so saving again never makes a copy.
       isNew = false; id = saved.id;
@@ -1388,6 +1405,18 @@ export async function recordView(root, entity, id) {
   );
   // Ctrl+S saves
   root.onkeydown = e => { if ((e.ctrlKey || e.metaKey) && e.key === 's' && writable) { e.preventDefault(); if (!e.repeat) save().catch(fail); } };
+}
+
+// A CRM login was made with the employee: the temporary password is shown only here.
+async function loginCreated({ username, password, role }) {
+  state.people = await api('/people').catch(() => state.people);
+  const text = `CRM login\nAddress: ${location.origin}\nUsername: ${username}\nTemporary password: ${password}\nThe CRM asks for a new password at the first sign-in.`;
+  await modal('🔑 CRM login created', h('div.grid',
+    h('p', `Role: ${ROLE_INFO[role]?.label || role}. Give these details to the employee. The CRM asks for a new password at the first sign-in.`),
+    h('table.data', h('tbody', h('tr', h('th', 'Username'), h('td', h('b', username))), h('tr', h('th', 'Temporary password'), h('td', h('b', { style: { fontFamily: 'monospace', fontSize: '15px' } }, password))))),
+    h('p', { style: { color: 'var(--warn)' } }, 'This password is shown only once. An administrator can set a new one under Admin → Users.'),
+    h('div.toolbar', h('button.btn', { onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch { toast('Select the text and copy it', true); } } }, '📋 Copy details'))),
+  [{ label: 'Close', cls: 'primary', value: true }]);
 }
 
 // ---------------------------------------------------------------- the document inside its approval request

@@ -1,6 +1,10 @@
 // Marathi for the CRM screens, part 1: the most used labels, statuses and module names.
 // English (exactly as on the screen) → Marathi. Short forms used in the office (BOQ, PO, GST, AHU …) stay as they are.
 export default {
+  // job work and employee login, 2 Nov 2026
+  '🛠️ Job Work Outward': '🛠️ जॉब वर्क बाहेर', '🛠️ Job Work Inward': '🛠️ जॉब वर्क आत', 'Job Work Outward': 'जॉब वर्क बाहेर', 'Job Work Inward': 'जॉब वर्क आत', 'Job Work Out': 'जॉब वर्क बाहेर', 'Job Work In': 'जॉब वर्क आत',
+  'Job work vendor *': 'जॉब वर्क विक्रेता *', 'Vendor name (if not in list)': 'विक्रेत्याचे नाव (यादीत नसल्यास)', 'Vendor DC No': 'विक्रेता DC क्र.', 'Process': 'प्रक्रिया', 'Project / Purpose': 'प्रकल्प / उद्देश',
+  'CRM Role (makes the login)': 'CRM भूमिका (लॉगिन तयार होते)', '🔑 CRM login created': '🔑 CRM लॉगिन तयार झाले', 'Temporary password': 'तात्पुरता पासवर्ड', '🧊 3D CAD drawing': '🧊 3D CAD ड्रॉइंग',
   // enquiry form sections, 30 Oct 2026
   'Files and Client Form Answers': 'फाइल्स व क्लायंटच्या फॉर्मची उत्तरे', 'Technical Requirements (OT and AHU)': 'तांत्रिक गरजा (OT व AHU)', 'Required': 'आवश्यक',
   'Attach the drawings and other files here. The answers from the website form and the detailed requirement form are read only.': 'ड्रॉइंग व इतर फाइल्स येथे जोडा. वेबसाइट फॉर्म व सविस्तर गरजांच्या फॉर्ममधील उत्तरे फक्त वाचण्यासाठी आहेत.',

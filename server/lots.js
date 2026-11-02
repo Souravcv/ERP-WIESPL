@@ -11,8 +11,8 @@ import { scarFromIqc } from './vendors.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const now = () => new Date().toLocaleString('sv-SE').slice(0, 19);
-const IN_TYPES = ['INWARD', 'RETURN', 'PRODUCED'];
-const OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP'];
+const IN_TYPES = ['INWARD', 'RETURN', 'PRODUCED', 'JOB_IN'];
+const OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
 export const QC = ['Pending', 'Accepted', 'Partly accepted', 'Rejected', 'Hold'];
 
 export function setupLots() {
@@ -36,7 +36,7 @@ function rebuild(itemId) {
   db.prepare('DELETE FROM lot_allocations WHERE item_id = ?').run(itemId);
   if (!it) return;
   const moves = db.prepare(`SELECT id, type, date, qty, qc_status, qc_rejected FROM stock_moves WHERE item_id = ?
-    ORDER BY date, CASE WHEN type = 'OPENING' THEN 0 WHEN type IN ('INWARD', 'RETURN', 'PRODUCED') OR (type = 'ADJUST' AND qty >= 0) THEN 1 ELSE 2 END, id`).all(itemId);
+    ORDER BY date, CASE WHEN type = 'OPENING' THEN 0 WHEN type IN ('INWARD', 'RETURN', 'PRODUCED', 'JOB_IN') OR (type = 'ADJUST' AND qty >= 0) THEN 1 ELSE 2 END, id`).all(itemId);
   const lots = [];
   const hasOpening = moves.some(m => m.type === 'OPENING');
   if (!hasOpening && Number(it.opening_stock) > 0) lots.push({ lot_id: 0, qty: Number(it.opening_stock), rejected: 0, issued: 0, hold: false });
@@ -83,7 +83,7 @@ export function ensureLots(itemIds = null) {
   return stale.length;
 }
 
-const lotLabel = r => r.lot_id === 0 ? 'Opening stock (old)' : `${r.type === 'INWARD' ? 'GRN' : r.type === 'OPENING' ? 'Opening' : r.type === 'RETURN' ? 'Return' : r.type === 'PRODUCED' ? 'Production' : r.type} ${r.doc_no || '#' + r.lot_id}${r.batch_no ? ' · batch ' + r.batch_no : ''}`;
+const lotLabel = r => r.lot_id === 0 ? 'Opening stock (old)' : `${r.type === 'INWARD' ? 'GRN' : r.type === 'JOB_IN' ? 'Job work GRN' : r.type === 'OPENING' ? 'Opening' : r.type === 'RETURN' ? 'Return' : r.type === 'PRODUCED' ? 'Production' : r.type} ${r.doc_no || '#' + r.lot_id}${r.batch_no ? ' · batch ' + r.batch_no : ''}`;
 const statusOf = (r, low) => r.superseded ? 'CLOSED (1 April opening)' : r.balance <= 0.0001 ? 'EXHAUSTED' : r.qc_status === 'Hold' ? 'HOLD'
   : r.qc_status === 'Pending' ? 'IQC PENDING' : low ? 'LOW STOCK' : 'ACTIVE';
 

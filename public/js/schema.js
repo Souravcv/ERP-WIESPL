@@ -38,7 +38,9 @@ export const ITEM_CATEGORIES = ['Bought-out', 'HVAC', 'Electrical (BGM)', 'R&D (
 export const UOMS = ['Nos', 'Set', 'Pair', 'Kg', 'Mtr', 'RFt', 'Ft', 'Sq. Ft', 'Sq. Mtr', 'Roll', 'Sheet', 'TR', 'Ltr', 'Pkt', 'Box', 'Tin', 'Coil', 'Cyl', 'Bundle', 'Lot'];
 
 // Stock movement types and their effect on store stock.
-// Closing = Opening + Inward - Outward - Transfer + Return - Scrap (+/- Adjust), as in the Smart Store workbook.
+// Closing = Opening + Inward - Outward - Transfer + Return - Scrap (+/- Adjust) - Job Work Outward + Job Work Inward,
+// as in the Smart Store workbook. Job work: parts sent to a vendor for a process (powder coating, fabrication ...) and parts
+// received from the vendor; their numbers continue the transfer (vendor DC) and GRN series.
 export const MOVE_TYPES = {
   OPENING: { label: 'Opening Stock (1 April)', sign: 0, doc: 'OPN' },
   INWARD: { label: 'Inward (GRN)', sign: 1, doc: 'GRN' },
@@ -47,9 +49,11 @@ export const MOVE_TYPES = {
   RETURN: { label: 'Return Material', sign: 1, doc: 'RET' },
   SCRAP: { label: 'Scrap', sign: -1, doc: 'SCR' },
   ADJUST: { label: 'Adjustment (+/-)', sign: 1, doc: 'ADJ' },
+  JOB_OUT: { label: 'Job Work Outward', sign: -1, doc: 'TRF' },
+  JOB_IN: { label: 'Job Work Inward', sign: 1, doc: 'GRN' },
   PRODUCED: { label: 'Production (finished goods made)', sign: 1, doc: 'PRD' },
 };
-const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST','PRODUCED') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP') THEN -${m}.qty ELSE 0 END`;
+const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST','PRODUCED','JOB_IN') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP','JOB_OUT') THEN -${m}.qty ELSE 0 END`;
 // Quantity of a BOQ line sent on challans with the given statuses (challan lines carry boq_item_id).
 const BOQ_SENT = statuses => `(SELECT COALESCE(SUM(CAST(json_extract(j.value, '$.qty') AS REAL)), 0) FROM challans c, json_each(c.lines) j
   WHERE c.status IN (${statuses}) AND CAST(json_extract(j.value, '$.boq_item_id') AS INTEGER) = {t}.id)`;
@@ -1275,7 +1279,8 @@ export const ENTITIES = {
     fields: [
       { key: 'emp_code', label: 'Employee Code', type: 'text', readonly: true, hint: 'Auto: EMP-001' },
       { key: 'name', label: 'Name', type: 'text', required: true },
-      { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'The username this person signs in with: their phone attendance is booked to this employee' },
+      { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'The username this person signs in with: their phone attendance is booked to this employee. Blank with a CRM role chosen: made from the name' },
+      { key: 'login_role', label: 'CRM Role (makes the login)', type: 'select', options: ['', ...Object.keys(ROLE_INFO).filter(r => !['admin', 'manager'].includes(r))], optionLabels: Object.fromEntries(Object.entries(ROLE_INFO).map(([k, v]) => [k, v.label])), hint: 'Choose a role: Save creates the login and shows a temporary password once. Administrator and GM logins: Admin → Users' },
       { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
       { key: 'designation', label: 'Designation', type: 'text' },
       { key: 'mobile', label: 'Mobile', type: 'tel' },
@@ -2356,10 +2361,10 @@ export const ENTITIES = {
       { key: 'uom', label: 'UOM', type: 'text', hint: 'Taken from the item if blank' },
       { key: 'rate', label: 'Price per Piece (₹)', type: 'money', hint: 'Required for Inward; defaults to the item price otherwise' },
       { key: 'value', label: 'Value (₹)', type: 'money', computed: 'ROUND(COALESCE({t}.qty,0) * COALESCE({t}.rate,0), 2)' },
-      { key: 'vendor_id', label: 'Supplier', type: 'ref', ref: 'vendors', showIf: { type: ['INWARD'] } },
-      { key: 'supplier', label: 'Supplier (as on invoice)', type: 'text', showIf: { type: ['INWARD'] } },
-      { key: 'invoice_no', label: 'Supplier Invoice No', type: 'text', showIf: { type: ['INWARD'] } },
-      { key: 'invoice_date', label: 'Invoice Date', type: 'date', showIf: { type: ['INWARD'] } },
+      { key: 'vendor_id', label: 'Supplier', type: 'ref', ref: 'vendors', showIf: { type: ['INWARD', 'JOB_IN', 'JOB_OUT'] } },
+      { key: 'supplier', label: 'Supplier (as on invoice)', type: 'text', showIf: { type: ['INWARD', 'JOB_IN'] } },
+      { key: 'invoice_no', label: 'Supplier Invoice No', type: 'text', showIf: { type: ['INWARD', 'JOB_IN'] } },
+      { key: 'invoice_date', label: 'Invoice Date', type: 'date', showIf: { type: ['INWARD', 'JOB_IN'] } },
       { key: 'po_id', label: 'Against PO', type: 'ref', ref: 'purchase_orders', showIf: { type: ['INWARD'] } },
       { key: 'po_no', label: 'PO No (text)', type: 'text', showIf: { type: ['INWARD'] } },
       { key: 'po_line', label: 'PO Line', type: 'number', hidden: true },
@@ -2372,14 +2377,14 @@ export const ENTITIES = {
       { key: 'qc_remarks', label: 'IQC Remarks', type: 'text', readonly: true, showIf: { type: ['INWARD'] } },
       { key: 'hsn', label: 'HSN Code', type: 'text', showIf: { type: ['INWARD'] } },
       { key: 'gst_rate', label: 'GST %', type: 'number', showIf: { type: ['INWARD'] } },
-      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', showIf: { type: ['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'] } },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', showIf: { type: ['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP', 'JOB_OUT'] } },
       { key: 'issued_to', label: 'Issued To / Site / Department', type: 'text', showIf: { type: ['OUTWARD', 'RETURN', 'SCRAP'] } },
       { key: 'requested_by', label: 'Requested By', type: 'person', showIf: { type: ['OUTWARD', 'TRANSFER'] } },
       { key: 'from_location', label: 'From Location', type: 'text', suggest: ['Store', 'Production'], showIf: { type: ['TRANSFER'] } },
       { key: 'to_location', label: 'To Location', type: 'text', suggest: ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'], showIf: { type: ['TRANSFER'] } },
       { key: 'against_issue_no', label: 'Original Issue No', type: 'text', showIf: { type: ['RETURN'] } },
       { key: 'reason', label: 'Reason', type: 'text', suggest: ['Faulty', 'Rework', 'Excess', 'Rusting', 'Expiry', 'Cut', 'Damaged'], showIf: { type: ['RETURN', 'SCRAP', 'ADJUST'] } },
-      { key: 'purpose', label: 'Purpose', type: 'text', showIf: { type: ['TRANSFER', 'OUTWARD'] } },
+      { key: 'purpose', label: 'Purpose', type: 'text', showIf: { type: ['TRANSFER', 'OUTWARD', 'JOB_OUT', 'JOB_IN'] } },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
       { key: 'import_batch', label: 'Import Batch', type: 'text', hidden: true },
     ],
