@@ -120,10 +120,10 @@ const STEPS = [
   { id: 'specialty', render: stepSpecialty, when: () => needsOts() || needsBeds() },
   { id: 'room', render: stepRoom, when: needsOts },
   { id: 'standards', render: stepStandards },
-  { id: 'site', render: stepSite },
-  { id: 'plan', render: stepPlan },
   { id: 'features', render: stepFeatures },
-  { id: '3d', render: step3D, when: () => can3D() && D.want3d },
+  { id: '3d', render: step3D, when: can3D },
+  { id: 'plan', render: stepPlan },
+  { id: 'site', render: stepSite },
   { id: 'contact', render: stepContact, valid: () => (D.name || '').trim() && String(D.phone || '').replace(/\D/g, '').length >= 10 },
 ];
 const active = () => STEPS.filter(s => !s.when || s.when());
@@ -135,10 +135,14 @@ function feedback(text) {
   f.classList.toggle('show', !!text);
 }
 
+const STEP_ART = { types: '🏥', size: '📐', specialty: '🩺', room: '🌡️', standards: '🏅', features: '✨', '3d': '🧊', plan: '🗓️', site: '🏗️', contact: '📨' };
+const NEED_ART = { ot_temp: '🌡️', ot_humidity: '💧', radiation_use: '☢️', lead_lining: '🛡️', standards: '🏅', digital: '🎥', hvac_ahu: '❄️', hvac_outdoor: '🌤️', hvac_shaft: '🔧', future: '🚀' };
+const question = (art, label, control) => h('div.eq-q', h('div.eq-label', h('span.eq-q-art', art), h('span', label)), control);
+
 function card(step, total, title, sub, body, { next = 'Next', canNext = true, onNext, skip } = {}) {
   const nextBtn = h('button.eq-btn.primary', { type: 'button', disabled: !canNext, onclick: () => (onNext ? onNext() : go(1)) }, next);
   return h('section.eq-card',
-    h('div.eq-step', `Step ${step} of ${total}`), h('h1', title), sub ? h('p.eq-sub', sub) : null,
+    h('div.eq-head', h('span.eq-art', STEP_ART[active()[step - 1]?.id] || '🏥'), h('div', h('div.eq-step', `Step ${step} of ${total}`), h('h1', title))), sub ? h('p.eq-sub', sub) : null,
     body, h('div.eq-feedback'), h('div.eq-err', { id: 'eq-err' }),
     h('div.eq-nav', step > 1 ? h('button.eq-btn', { type: 'button', onclick: () => go(-1) }, '‹ Back') : null,
       skip ? h('button.eq-btn.link', { type: 'button', onclick: () => go(1) }, skip) : null, nextBtn));
@@ -162,7 +166,7 @@ function stepTypes(n, total) {
     return b;
   }));
   return card(n, total, 'What are you planning?', 'Choose one or more.', [
-    h('div.eq-hello', '👋 About 2 minutes. Just tap: no typing until the last step, and “Not sure” is always fine.'),
+    h('div.eq-hello', '👋 About 3 minutes. Just tap: no typing until the last step, and “Not sure” is always fine.'),
     cards, otherBox], { canNext: STEPS[0].valid() });
 }
 
@@ -177,8 +181,8 @@ function stepSize(n, total) {
   if (needsOts() && D.ots == null) D.ots = 1;
   if (needsBeds() && D.beds == null) D.beds = 6;
   return card(n, total, 'About your project', 'A rough idea is enough.', [
-    h('div.eq-label', 'New building or existing space?'), chipGroup(BUILDS, 'build'),
-    h('div', { style: { height: '14px' } }),
+    question('🏗️', 'New building or existing space?', chipGroup(BUILDS, 'build')),
+    h('div', { style: { height: '10px' } }),
     needsOts() ? stepper(has('cathlab') && !has('ot') ? 'Cath labs' : 'Operation theatres', 'number of rooms', 'ots', 40) : null,
     needsBeds() ? stepper(has('nicu') && !has('icu', 'picu') ? 'NICU beds / incubators' : 'ICU / ward beds', 'total beds', 'beds', 200) : null]);
 }
@@ -218,7 +222,7 @@ function otSpecBlock() {
     }
     const set = (s, v) => { if (v < 0 || v - (D.ot_specs[s] || 0) + assigned() > count) return; if (v) D.ot_specs[s] = v; else delete D.ot_specs[s]; syncSpecs(); draw(); };
     box.replaceChildren(h('p.eq-skip', `${assigned()} of ${count} OTs chosen`),
-      ...list.map(s => h('div.eq-num.eq-num-s', h('div.lbl', h('b', specName(s))),
+      ...list.map(s => h('div.eq-num.eq-num-s' + (D.ot_specs[s] ? '.on' : ''), h('div.lbl', h('b', specName(s))),
         h('div.eq-stepper', h('button', { type: 'button', 'aria-label': `Fewer ${specName(s)}`, onclick: () => set(s, (D.ot_specs[s] || 0) - 1) }, '−'), h('output', String(D.ot_specs[s] || 0)),
           h('button', { type: 'button', 'aria-label': `More ${specName(s)}`, onclick: () => set(s, (D.ot_specs[s] || 0) + 1) }, '+')))),
       h('div', { style: { marginTop: '10px' } }, more), other || '');
@@ -241,7 +245,7 @@ function needsBlock(keys) {
   const box = h('div');
   const draw = () => box.replaceChildren(...NEEDS.filter(f => keys.includes(f.key) && (!f.show || f.show(D.needs))).map(f => (f.plain
     ? h('label.eq-field', { style: { marginTop: '12px' } }, f.label, h('input', { value: D.needs[f.key] || '', oninput: e => { D.needs[f.key] = e.target.value; sync(); } }))
-    : h('div', h('div.eq-label', f.label), chipsFor(h, f, D.needs, () => { sync(); summary(); draw(); })))));
+    : question(NEED_ART[f.key] || '•', f.label, chipsFor(h, f, D.needs, () => { sync(); summary(); draw(); })))));
   draw();
   return box;
 }
@@ -252,7 +256,7 @@ function stepStandards(n, total) {
   return card(n, total, needsOts() ? 'Standards and digital OR' : 'Standards', 'Tap all that apply.', needsBlock(['standards', 'standards_other', ...(needsOts() ? ['digital'] : [])]));
 }
 function stepSite(n, total) {
-  return card(n, total, 'Space at your site', '“Not sure” is fine: our engineer checks this at the site visit.', [needsBlock(['hvac_ahu', 'hvac_outdoor', 'hvac_shaft']), h('div.eq-label', 'Layout or drawing (optional)'), filesBlock()]);
+  return card(n, total, 'Space at your site', '“Not sure” is fine: our engineer checks this at the site visit.', [needsBlock(['hvac_ahu', 'hvac_outdoor', 'hvac_shaft']), question('📐', 'Layout or drawing (optional)', filesBlock())]);
 }
 
 function stepFeatures(n, total) {
@@ -276,8 +280,7 @@ function stepFeatures(n, total) {
   return card(n, total, 'What should we include?', 'Most clients leave this to us.', [
     h('div.eq-big', mode(!!D.features_unsure, 'Recommended package', 'NABH-ready. Our engineer suggests the items for your rooms.', '✅', () => choose(false)),
       mode(!D.features_unsure, 'Let me choose the items', 'Walls, doors, pendants, lights and more.', '📝', () => choose(true))),
-    D.features_unsure ? null : h('div', { style: { height: '12px' } }), chooser,
-    can3D() ? h('div', { style: { marginTop: '14px' } }, h('button.eq-btn', { type: 'button', onclick: () => { D.want3d = true; go(1); } }, '🧊 See your OT in 3D (optional)')) : null]);
+    D.features_unsure ? null : h('div', { style: { height: '12px' } }), chooser]);
 }
 
 let viewer = null;
@@ -346,8 +349,8 @@ const chipGroup = (items, key, after) => h('div.eq-chips', items.map(([k, label]
 }));
 function stepPlan(n, total) {
   return card(n, total, 'Timeline, budget and future plans', 'Ranges are fine.', [
-    h('div.eq-label', 'When would you like to start?'), chipGroup(TIMELINES, 'timeline'),
-    h('div.eq-label', 'Budget'), chipGroup(BUDGETS, 'budget'),
+    question('🗓️', 'When would you like to start?', chipGroup(TIMELINES, 'timeline')),
+    question('💰', 'Budget', chipGroup(BUDGETS, 'budget')),
     needsBlock(['future'])]);
 }
 
@@ -405,7 +408,7 @@ function summaryItems() {
   const size = [D.ots && needsOts() && `${D.ots} ${has('ot') ? 'OT' : 'room'}${D.ots > 1 ? 's' : ''}`, D.beds && needsBeds() && `${D.beds} beds`, D.area && `${D.area} sq ft`].filter(Boolean).join(' · ');
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
-    D.specialties.length && ['Specialty', D.specialties.map(x => (D.ot_specs[x] > 1 ? `${specName(x)} × ${D.ot_specs[x]}` : specName(x))).join(', ')], D.needs.standards && ['Standards', D.needs.standards], (D.features.length || D.features_unsure) && ['Includes', D.features.length ? `${D.features.length} selected` : 'Recommended package'],
+    D.specialties.length && ['Specialty', D.specialties.map(x => (D.ot_specs[x] > 1 ? `${specName(x)} × ${D.ot_specs[x]}` : specName(x))).join(', ')], D.needs.standards && ['Standards', D.needs.standards], D.types.length && (D.features.length || D.features_unsure) && ['Includes', D.features.length ? `${D.features.length} selected` : 'Recommended package'],
     D.wall_finish && ['Walls', wallName()], D.opts?.door_type && ['Door', DOOR_TYPES.find(x => x[0] === D.opts.door_type)?.[1]], D.opts?.floor_type && ['Floor type', FLOOR_TYPES.find(x => x[0] === D.opts.floor_type)?.[1]], Object.keys(D.videos || {}).length && ['Videos', Object.keys(D.videos).map(k => VIDEOS[k]?.title.split(' –')[0].replace('The ', '').replace(', explained', '')).join(', ')], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
