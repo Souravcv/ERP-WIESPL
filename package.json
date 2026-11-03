@@ -16,6 +16,7 @@
   "dependencies": {
     "@mlightcad/libredwg-web": "0.8.2",
     "exceljs": "4.4.0",
-    "express": "5.2.1"
+    "express": "5.2.1",
+    "nodemailer": "10.3.1"
   }
 }

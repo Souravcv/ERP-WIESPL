@@ -131,6 +131,9 @@ const SETTINGS_FORM = [
     ['po_term_jurisdiction', 'Jurisdiction', 'ta'], ['po_term_extra', 'Additional terms', 'ta']]],
   ['Client website enquiry form (enquire.html)', [['web_next_steps', 'What happens next (thank-you screen)', 'ta'], ['web_trust', 'Trust points beside the form (one per line)', 'list'], ['web_whatsapp', 'Company WhatsApp number (e.g. 919876543210)'], ['web_brochure_url', 'Brochure link (PDF)'],
     ['web_show_estimate', 'Show an indicative price range at the end', 'yn'], ['web_estimates', 'Ranges, one per line: Modular OT | 4500000 | 8500000 | per OT', 'list']]],
+  ['Automatic email to the client after the enquiry form', [['web_mail_on', 'Send the email', 'yn'], ['web_mail_from', 'From address (e.g. sales@wiespl.com)'], ['web_mail_host', 'Mail server (SMTP), from your email provider'], ['web_mail_port', 'Port (usually 587, or 465)'],
+    ['web_mail_user', 'Mail login (usually the From address)'], ['web_mail_pass', 'Mail password', 'pw'], ['web_mail_bcc', 'Copy every email to (optional)'], ['web_mail_subject', 'Subject'],
+    ['web_mail_body', 'Email text. Filled in: {{name}} {{hospital}} {{enquiry_no}} {{drawings}}. Sentences saying “attached” are left out when no file is added below', 'tall']]],
   ['Quotation defaults', [['default_subject', 'Default subject'], ['letter_greeting', 'Greeting'], ['letter_intro', 'Opening paragraph', 'ta'], ['letter_body', 'Body paragraph', 'ta'], ['letter_closing', 'Closing lines', 'ta'],
     ['usp_title', 'USP heading'], ['usp', 'USP points (one per line)', 'list'], ['terms', 'Default terms (one per line)', 'list'], ['client_scope', 'Default client scope', 'ta'], ['boq_note', 'Note under BOQ'], ['invoice_terms', 'Invoice terms', 'ta']]],
 ];
@@ -140,21 +143,50 @@ export async function settingsView(root) {
   const inputs = {};
   const sections = SETTINGS_FORM.map(([title, fields]) => h('div.card', h('h2', title), h('div.form-grid', fields.map(([k, label, type]) => {
     let el;
-    if (type === 'ta' || type === 'list') { el = h('textarea', { rows: type === 'list' ? 10 : 3 }); el.value = type === 'list' ? (s[k] || []).join('\n') : s[k] ?? ''; }
+    if (type === 'ta' || type === 'list' || type === 'tall') { el = h('textarea', { rows: type === 'tall' ? 22 : type === 'list' ? 10 : 3 }); el.value = type === 'list' ? (s[k] || []).join('\n') : s[k] ?? ''; }
+    else if (type === 'pw') el = h('input', { type: 'password', autocomplete: 'new-password', placeholder: s.web_mail_pass_set ? 'Saved. Leave blank to keep it' : '' });
     else if (type === 'yn') { el = h('select', h('option', 'Yes'), h('option', 'No')); el.value = s[k] || 'Yes'; }
     else el = h('input', { value: s[k] ?? '' });
     inputs[k] = [el, type];
-    return h('label' + (type === 'ta' || type === 'list' ? '.span-2' : ''), label, el);
+    return h('label' + (type === 'ta' || type === 'list' || type === 'tall' ? '.span-2' : ''), label, el);
   }))));
+  const mailCard = mailFilesCard();
   const save = async () => {
     const body = {};
     for (const [k, [el, type]] of Object.entries(inputs)) body[k] = type === 'list' ? el.value.split('\n').map(x => x.trim()).filter(Boolean) : el.value;
     state.settings = await api('/settings', { method: 'PUT', body });
+    if (inputs.web_mail_pass) inputs.web_mail_pass[0].value = '';
     toast('Settings saved');
+    mailCard.refresh();
   };
   root.replaceChildren(h('div.page-head', h('h1', '⚙️ Company & Quotation Settings'), h('div.actions', h('button.btn.primary', { onclick: () => save().catch(fail) }, '💾 Save settings'))),
     h('p.muted', 'The scope sheet matrix and per-quotation text can be edited inside each quotation (Letter, Terms & Scope tab). Changes here apply to new quotations.'),
-    sections, await docNumbersCard(), signCard(), photosCard());
+    sections, mailCard, await docNumbersCard(), signCard(), photosCard());
+}
+
+// Files sent with the automatic email, what is still missing, and a test.
+function mailFilesCard() {
+  const list = h('div'), state2 = h('p');
+  const file = h('input', { type: 'file', multiple: true, accept: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.jpg,.jpeg,.png' });
+  const to = h('input', { type: 'email', placeholder: 'Your own email address' });
+  const refresh = async () => {
+    const r = await api('/settings/mail-files');
+    state2.textContent = r.missing.length ? `Not ready. Still needed: ${r.missing.join(', ')}.` : 'Ready. Save the settings first, then send yourself a test.';
+    state2.style.color = r.missing.length ? 'var(--bad)' : 'var(--good)';
+    list.replaceChildren(...(r.files.length ? r.files.map(n => h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', margin: '4px 0' } }, h('span', `📎 ${n}`),
+      h('button.btn.sm', { onclick: async () => { if (!(await confirmBox(`Remove ${n} from the email?`))) return; await api(`/settings/mail-files/${encodeURIComponent(n)}`, { method: 'DELETE' }); refresh().catch(fail); } }, 'Remove'))) : [h('p.muted', 'No files yet.')]));
+  };
+  const upload = async () => {
+    if (!file.files.length) { toast('Choose a file'); return; }
+    for (const f of file.files) await api(`/settings/mail-files?name=${encodeURIComponent(f.name)}`, { method: 'POST', raw: await f.arrayBuffer() });
+    file.value = ''; toast('Added to the email'); await refresh();
+  };
+  refresh().catch(fail);
+  const card = h('div.card', h('h2', '📧 Files and test for the automatic email'), state2, h('h3', 'Files sent with the email'), list,
+    h('div.toolbar', file, h('button.btn', { onclick: () => upload().catch(fail) }, '⬆ Add')),
+    h('h3', 'Send a test'), h('div.toolbar', to, h('button.btn', { onclick: () => api('/settings/mail-test', { method: 'POST', body: { to: to.value } }).then(() => toast('Test email sent: check that inbox')).catch(fail) }, '📨 Send test')));
+  card.refresh = () => refresh().catch(fail);
+  return card;
 }
 
 // Company stamp, and signatures of people who approve but do not use the CRM themselves (everyone else adds their own with ✍️ My signature).

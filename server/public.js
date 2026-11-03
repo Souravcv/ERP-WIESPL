@@ -6,6 +6,7 @@ import { db, getSettings } from './db.js';
 import { insertRow, HttpError, toList } from './crud.js';
 import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
+import { sendEnquiryMail } from './mail.js';
 import { briefText, cleanBrief, newRoom, SPECIALTIES, NEEDS, SPEC_LABEL } from '../public/js/brief-fields.js';
 import { VIDEOS } from '../public/js/explainers.js';
 import { publicPhotos, photoFile } from './photos.js';
@@ -194,6 +195,7 @@ export function publicRouter() {
       .run(token || crypto.randomBytes(18).toString('base64url'), JSON.stringify(d), d.name, d.phone, String(req.ip || '').slice(0, 60), enq.id);
     notify({ fn: 'notify_enquiry', kind: 'enquiries', title: `🌐 New ${grade(score).toLowerCase()} website enquiry: ${types.join(', ')}${d.city ? ` – ${d.city}` : ''}`,
       body: `${d.name}${d.hospital ? `, ${d.hospital}` : ''} · ${d.phone}${d.whatsapp ? ' (WhatsApp)' : ''} · score ${score}`, link: `#/view/enquiries/${enq.id}` }, SYSTEM_USER);
+    sendEnquiryMail(enq, d).catch(e => console.error('Enquiry email failed:', e));
     return { ref: enq.enquiry_no, score, estimate: estimate(d), brief: briefFor(enq.id, d) };
   }));
 

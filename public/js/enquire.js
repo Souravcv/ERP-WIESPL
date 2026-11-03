@@ -385,7 +385,7 @@ function stepContact(n, total) {
     h('div.eq-row2', field('name', 'Your name', { autocomplete: 'name', placeholder: 'Dr. …' }, true), field('phone', 'Mobile number', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: '98xxxxxxxx' }, true)),
     h('label.eq-check', wa, 'I use WhatsApp on this number'),
     h('div.eq-row2', field('hospital', 'Hospital / clinic', { autocomplete: 'organization' }), field('city', 'City', { autocomplete: 'address-level2' })),
-    field('email', 'Email (optional)', { type: 'email', autocomplete: 'email' }),
+    field('email', 'Email (we will send you our company details here)', { type: 'email', autocomplete: 'email' }),
     h('label.eq-field', notes),
     h('p.eq-skip', '🔒 We use these details only to reply to your enquiry.')],
   { next: 'Send my enquiry', canNext: !!STEPS.at(-1).valid(), onNext: submit });

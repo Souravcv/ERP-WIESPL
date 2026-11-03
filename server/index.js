@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { db, migrate, getSettings, setSettings, audit, RESTORE_FILE, DATA_DIR } from './db.js';
+import * as mail from './mail.js';
 import * as stock from './stock.js';
 import * as importer from './importer.js';
 import * as dispatch from './dispatch.js';
@@ -117,8 +118,8 @@ const pickable = (entity, role) => canView(entity, role) || Object.entries(ENTIT
 // Settings: printed documents and forms need the company, bank, PO and quotation text; limits, margins, HR rules and the
 // client web form are for the Settings page (the admin); the bond text is printed from the employee.
 const settingsFor = role => {
-  const all = getSettings();
-  if (role === 'admin') return all;
+  const { web_mail_pass, ...all } = getSettings(); // the mail password goes in and never comes back out
+  if (role === 'admin') return { ...all, web_mail_pass_set: !!web_mail_pass };
   const out = Object.fromEntries(Object.entries(all).filter(([k]) => !/^(hr_|web_)|^(payment_approval_limit|expense_po_limit|bill_tolerance_pct|sales_margin_pct|service_margin_pct)$/.test(k)));
   if (canView('employees', role)) out.hr_bond_template = all.hr_bond_template;
   return out;
@@ -236,7 +237,14 @@ migratePhotos();
 api.get('/part-photos', requireRole(), wrap(() => listPhotos()));
 api.post('/part-photos', requireRole(), express.raw({ type: () => true, limit: '9mb' }), wrap(req => addPhoto(String(req.query.part || ''), String(req.query.name || ''), String(req.query.caption || ''), req.body, req.user)));
 api.delete('/part-photos/:id', requireRole(), wrap(req => removePhoto(req.params.id)));
-api.put('/settings', requireRole(), wrap(req => { setSettings(req.body || {}); audit(req.user.name, 'settings', null, 'update', Object.keys(req.body || {}).join(', ')); return getSettings(); }));
+api.put('/settings', requireRole(), wrap(req => { const { web_mail_pass_set, ...b } = req.body || {}; if (!b.web_mail_pass) delete b.web_mail_pass; setSettings(b); audit(req.user.name, 'settings', null, 'update', Object.keys(b).join(', ')); return settingsFor(req.user.role); }));
+// Files sent with the automatic email to the client (data/email-attachments, not in git)
+const MAIL_FILE_NAME = /^[^\\/:*?"<>|]+\.(pdf|docx?|pptx?|xlsx?|jpe?g|png)$/i;
+const mailFileName = n => { const name = String(n || '').trim().slice(0, 120); if (!MAIL_FILE_NAME.test(name) || name.startsWith('.')) throw new HttpError(400, 'Allowed: PDF, Word, PowerPoint, Excel or images'); return name; };
+api.get('/settings/mail-files', requireRole(), wrap(() => ({ files: mail.mailFiles(), missing: mail.mailProblems() })));
+api.post('/settings/mail-files', requireRole(), express.raw({ type: () => true, limit: '15mb' }), wrap(req => { const name = mailFileName(req.query.name); fs.mkdirSync(mail.MAIL_FILES, { recursive: true }); fs.writeFileSync(path.join(mail.MAIL_FILES, name), req.body); audit(req.user.name, 'settings', null, 'update', `email attachment added: ${name}`); return { files: mail.mailFiles() }; }));
+api.delete('/settings/mail-files/:name', requireRole(), wrap(req => { const name = mailFileName(req.params.name); fs.rmSync(path.join(mail.MAIL_FILES, name), { force: true }); audit(req.user.name, 'settings', null, 'update', `email attachment removed: ${name}`); return { files: mail.mailFiles() }; }));
+api.post('/settings/mail-test', requireRole(), wrap(async req => { try { await mail.sendTestMail(req.body?.to); } catch (e) { throw new HttpError(400, `Email not sent: ${String(e.message).slice(0, 200)}`); } audit(req.user.name, 'settings', null, 'email', `test email to ${req.body.to}`); return { ok: true }; }));
 // Document numbering: continue any series from your own number (challan book, Smart Store GRN / issue numbers …).
 // fmt(n, fy) is the same format the numbering in hooks.js / stock.js uses; "used" is the highest number of this FY in the CRM.
 const pfx = () => getSettings().quote_prefix || 'WIESPL';
