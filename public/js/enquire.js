@@ -5,7 +5,8 @@ import { VIDEOS, videoSecs, fmtSecs } from './explainers.js';
 import { partPanel } from './partpanel.js';
 import { DOOR_TYPES, FLOOR_TYPES } from './parts.js';
 import { PANELS } from './panels.js';
-import { otNorms, otType, protocolFor, NABH_SOURCE } from './nabh.js';
+import { otNorms, protocolFor, NABH_SOURCE } from './nabh.js';
+import { NEEDS, chipsFor, MAIN_SPECIALTIES, SPEC_LABEL } from './brief-fields.js';
 
 const $ = id => document.getElementById(id);
 function h(tag, attrs, ...kids) {
@@ -48,9 +49,8 @@ const TYPES = [
   ['cathlab', 'Cath Lab', 'Cardiac / X-ray'], ['isolation', 'Isolation Room', 'Infection control'], ['ivf', 'IVF Lab', 'Embryology'], ['cssd', 'CSSD', 'Sterilisation'],
   ['cleanroom', 'Clean Room', 'Pharma / lab'], ['other', 'Something else', 'Tell us below'],
 ];
-const OT_SPECIALTY = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care'];
+const OT_SPECIALTY = [...MAIN_SPECIALTIES, 'Multi-specialty', 'Transplant', 'Plastic surgery', 'Ophthalmic', 'ENT', 'Robotic', 'Day care'];
 const ICU_TYPE = ['Medical ICU', 'Surgical ICU', 'Cardiac ICU', 'Neuro ICU', 'Burns ICU', 'Covid / isolation ICU', 'NICU Level II', 'NICU Level III', 'PICU'];
-const HIGH_LAF = ['Multi-specialty', 'Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Robotic'];
 // [key, label, hint, icon, for which projects]
 const FEATURES = [
   ['laf', 'Laminar air flow', 'A gentle downward flow of filtered air over the table keeps the surgical area particle-free.', '🌬️', ['ot', 'cathlab', 'ivf', 'cleanroom']],
@@ -83,7 +83,7 @@ const SUB_CHOICES = {
 };
 const TIMELINES = [['1m', 'Within 1 month'], ['3m', '1–3 months'], ['6m', '3–6 months'], ['6p', 'More than 6 months'], ['explore', 'Just exploring']];
 const BUDGETS = [['u50', 'Under ₹50 lakh'], ['50_100', '₹50 lakh – 1 crore'], ['100_200', '₹1 – 2 crore'], ['200_500', '₹2 – 5 crore'], ['500p', 'Above ₹5 crore'], ['guide', 'Need guidance']];
-const BEST_TIME = ['Morning', 'Afternoon', 'Evening', 'Any time'];
+const BUILDS = [['new', 'New building'], ['renovation', 'Existing space'], ['unsure', 'Not sure yet']];
 const typeName = t => TYPES.find(x => x[0] === t)?.[1] || t;
 
 // ---------------------------------------------------------------- state (kept in this browser so a visitor can come back)
@@ -94,6 +94,9 @@ const S = { step: 0, token: null, done: null, files: [], ...saved, data: { types
 S.files = []; // files cannot be kept between visits
 const D = S.data;
 D.opts ||= {};
+D.needs ||= {};
+D.ot_specs ||= {};
+if (!D.features.length && D.features_unsure === undefined) D.features_unsure = true; // the recommended package unless they choose
 if (D.features.includes('Surgeon & anaesthesia pendants')) D.features.splice(D.features.indexOf('Surgeon & anaesthesia pendants'), 1, "Surgeon's pendant", 'Anaesthesia pendant');
 D.features = D.features.filter(l => !['Medical gas pipeline (MGPS)', 'Incubator & warmer bays', 'Nurse station'].includes(l)).map(l => ({ 'Hermetic sliding doors': 'OT doors', 'Antistatic seamless flooring': 'Seamless flooring' }[l] || l));
 const persist = () => { try { localStorage.setItem(KEY, JSON.stringify({ step: S.step, token: S.token, data: D, done: S.done })); } catch { /* ignore */ } };
@@ -113,13 +116,14 @@ const can3D = () => has('ot', 'icu', 'nicu', 'picu', 'cathlab', 'isolation');
 const featuresFor = () => FEATURES.filter(f => f[4].includes('*') || f[4].some(t => D.types.includes(t)));
 const STEPS = [
   { id: 'types', render: stepTypes, valid: () => D.types.length > 0 && (!D.types.includes('other') || D.types.length > 1 || (D.other_type || '').trim()) },
-  { id: 'build', render: stepBuild, valid: () => !!D.build },
   { id: 'size', render: stepSize },
   { id: 'specialty', render: stepSpecialty, when: () => needsOts() || needsBeds() },
-  { id: 'features', render: stepFeatures },
-  { id: '3d', render: step3D, when: can3D },
+  { id: 'room', render: stepRoom, when: needsOts },
+  { id: 'standards', render: stepStandards },
+  { id: 'site', render: stepSite },
   { id: 'plan', render: stepPlan },
-  { id: 'files', render: stepFiles },
+  { id: 'features', render: stepFeatures },
+  { id: '3d', render: step3D, when: () => can3D() && D.want3d },
   { id: 'contact', render: stepContact, valid: () => (D.name || '').trim() && String(D.phone || '').replace(/\D/g, '').length >= 10 },
 ];
 const active = () => STEPS.filter(s => !s.when || s.when());
@@ -158,20 +162,8 @@ function stepTypes(n, total) {
     return b;
   }));
   return card(n, total, 'What are you planning?', 'Choose one or more.', [
-    h('div.eq-hello', '👋 Takes about 2 minutes. No technical knowledge needed: pick what fits, or choose “I\'m not sure” and we will guide you.'),
+    h('div.eq-hello', '👋 About 2 minutes. Just tap: no typing until the last step, and “Not sure” is always fine.'),
     cards, otherBox], { canNext: STEPS[0].valid() });
-}
-
-function stepBuild(n, total) {
-  const opt = (k, title, sub, icon) => h('button.eq-pick', { type: 'button', 'aria-pressed': String(D.build === k), onclick: () => {
-    D.build = k; sync(); summary();
-    feedback(k === 'renovation' ? 'Renovations are everyday work for us: we will survey your existing space first.' : k === 'new' ? 'Perfect, starting early lets us plan ducts, gases and electricals with your architect.' : 'No problem, we will help you decide.');
-    setTimeout(() => go(1), 450);
-  } }, h('span', { style: { fontSize: '30px' } }, icon), h('span', h('b', title), h('small', sub)));
-  return card(n, total, 'Is it a new building or an existing space?', null,
-    h('div.eq-big', opt('new', 'New construction', 'Building is being planned or built', '🏗️'), opt('renovation', 'Renovation', 'Upgrading an existing OT / ward', '🛠️'),
-      opt('unsure', 'I\'m not sure yet', 'We will help you decide', '🤔')),
-    { canNext: !!D.build });
 }
 
 function stepper(label, small, key, max) {
@@ -184,13 +176,11 @@ function stepper(label, small, key, max) {
 function stepSize(n, total) {
   if (needsOts() && D.ots == null) D.ots = 1;
   if (needsBeds() && D.beds == null) D.beds = 6;
-  const area = h('input', { type: 'number', inputmode: 'numeric', min: 0, placeholder: 'e.g. 400', value: D.area || '', oninput: e => { D.area = e.target.value ? Number(e.target.value) : null; D.area_unsure = false; unsure.setAttribute('aria-pressed', 'false'); summary(); sync(); } });
-  const unsure = h('button.eq-chip.unsure', { type: 'button', 'aria-pressed': String(!!D.area_unsure), onclick: () => { D.area_unsure = !D.area_unsure; unsure.setAttribute('aria-pressed', String(D.area_unsure)); if (D.area_unsure) { D.area = null; area.value = ''; } summary(); sync(); } }, 'I\'m not sure');
-  return card(n, total, 'How big is the project?', 'A rough idea is enough.', [
+  return card(n, total, 'About your project', 'A rough idea is enough.', [
+    h('div.eq-label', 'New building or existing space?'), chipGroup(BUILDS, 'build'),
+    h('div', { style: { height: '14px' } }),
     needsOts() ? stepper(has('cathlab') && !has('ot') ? 'Cath labs' : 'Operation theatres', 'number of rooms', 'ots', 40) : null,
-    needsBeds() ? stepper(has('nicu') && !has('icu', 'picu') ? 'NICU beds / incubators' : 'ICU / ward beds', 'total beds', 'beds', 200) : null,
-    h('div.eq-label', 'Approximate area (sq ft)'), h('div.eq-row2', area, h('div', { style: { paddingTop: '6px' } }, unsure)),
-    h('p.eq-skip', { style: { marginTop: '8px' } }, 'One standard OT is about 20 × 20 ft (400 sq ft).')]);
+    needsBeds() ? stepper(has('nicu') && !has('icu', 'picu') ? 'NICU beds / incubators' : 'ICU / ward beds', 'total beds', 'beds', 200) : null]);
 }
 
 // NABH / WHO requirements for the chosen OT specialty; with `onAdd`, missing required items can be added in one tap.
@@ -211,32 +201,66 @@ function nabhCard({ checklist, onAdd } = {}) {
     checklist && !missing.length ? h('p.src', { style: { margin: '8px 0 0', color: 'var(--accent)' } }, '✔ Your plan has everything NABH requires for the air system.') : null);
 }
 
+// One OT: tap its specialty. Several: how many OTs of each, which is quicker than a list of OTs.
+const specName = s => SPEC_LABEL[s] || s;
+const syncSpecs = () => { D.specialties = [...Object.keys(D.ot_specs), ...D.specialties.filter(s => !OT_SPECIALTY.includes(s))]; summary(); sync(); };
+function otSpecBlock() {
+  const count = Math.max(1, D.ots || 1);
+  const box = h('div');
+  const assigned = () => Object.values(D.ot_specs).reduce((a, b) => a + b, 0);
+  const draw = () => {
+    const list = [...MAIN_SPECIALTIES, ...(D.more_specs ? OT_SPECIALTY.filter(s => !MAIN_SPECIALTIES.includes(s)) : [])];
+    const more = h('button.eq-chip.unsure', { type: 'button', 'aria-pressed': String(!!D.more_specs), onclick: () => { D.more_specs = !D.more_specs; draw(); } }, 'Other specialties');
+    const other = D.more_specs ? h('label.eq-field', { style: { marginTop: '10px' } }, 'Another specialty', h('input', { value: D.other_specialty || '', oninput: e => { D.other_specialty = e.target.value; sync(); } })) : null;
+    if (count === 1) {
+      box.replaceChildren(h('div.eq-chips', list.map(s => h('button.eq-chip', { type: 'button', 'aria-pressed': String(!!D.ot_specs[s]), onclick: () => { D.ot_specs = D.ot_specs[s] ? {} : { [s]: 1 }; syncSpecs(); draw(); } }, specName(s))), more), other || '');
+      return;
+    }
+    const set = (s, v) => { if (v < 0 || v - (D.ot_specs[s] || 0) + assigned() > count) return; if (v) D.ot_specs[s] = v; else delete D.ot_specs[s]; syncSpecs(); draw(); };
+    box.replaceChildren(h('p.eq-skip', `${assigned()} of ${count} OTs chosen`),
+      ...list.map(s => h('div.eq-num.eq-num-s', h('div.lbl', h('b', specName(s))),
+        h('div.eq-stepper', h('button', { type: 'button', 'aria-label': `Fewer ${specName(s)}`, onclick: () => set(s, (D.ot_specs[s] || 0) - 1) }, '−'), h('output', String(D.ot_specs[s] || 0)),
+          h('button', { type: 'button', 'aria-label': `More ${specName(s)}`, onclick: () => set(s, (D.ot_specs[s] || 0) + 1) }, '+')))),
+      h('div', { style: { marginTop: '10px' } }, more), other || '');
+  };
+  draw();
+  return box;
+}
 function stepSpecialty(n, total) {
-  const list = [...(needsOts() ? OT_SPECIALTY : []), ...(needsBeds() ? ICU_TYPE.filter(t => (has('nicu') || !t.startsWith('NICU')) && (has('picu') || t !== 'PICU')) : [])];
-  const norms = h('div');
-  const drawNorms = () => norms.replaceChildren(nabhCard() || '');
-  const chips = h('div.eq-chips', [...list, 'Not sure yet'].map(s => {
-    const b = h('button.eq-chip' + (s === 'Not sure yet' ? '.unsure' : ''), { type: 'button', 'aria-pressed': String(D.specialties.includes(s)), onclick: () => {
-      toggle(D.specialties, s); b.setAttribute('aria-pressed', String(D.specialties.includes(s))); summary(); sync(); drawNorms();
-      const high = D.specialties.find(x => HIGH_LAF.includes(x));
-      feedback(high ? `${high} needs a ${otType(high) === 'A' ? 'Type A' : 'well-equipped'} OT: laminar air flow with HEPA filters. The NABH norms are below.`
-        : D.specialties.some(x => x.startsWith('NICU')) ? 'Level III NICUs need more gas points and power per bed: we plan bays to suit.'
-          : D.specialties.length ? 'Noted. This helps us size the air system correctly.' : '');
-    } }, s);
+  const icu = needsBeds() ? h('div.eq-chips', ICU_TYPE.filter(t => (has('nicu') || !t.startsWith('NICU')) && (has('picu') || t !== 'PICU')).map(s => {
+    const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(D.specialties.includes(s)), onclick: () => { toggle(D.specialties, s); b.setAttribute('aria-pressed', String(D.specialties.includes(s))); summary(); sync(); } }, s);
     return b;
-  }));
-  drawNorms();
-  return card(n, total, needsOts() ? 'Which specialty will use it?' : 'What kind of ICU?', 'Pick all that apply.', [chips, norms], { skip: 'Skip' });
+  })) : null;
+  return card(n, total, needsOts() ? 'Specialty of each OT' : 'What kind of ICU?', needsOts() && (D.ots || 1) > 1 ? 'How many OTs of each?' : 'Tap what applies, or go next if not decided.', [
+    needsOts() ? otSpecBlock() : null,
+    needsOts() && icu ? h('div.eq-label', 'ICU type') : null, icu]);
+}
+
+// Questions from NEEDS, shown when they apply.
+function needsBlock(keys) {
+  const box = h('div');
+  const draw = () => box.replaceChildren(...NEEDS.filter(f => keys.includes(f.key) && (!f.show || f.show(D.needs))).map(f => (f.plain
+    ? h('label.eq-field', { style: { marginTop: '12px' } }, f.label, h('input', { value: D.needs[f.key] || '', oninput: e => { D.needs[f.key] = e.target.value; sync(); } }))
+    : h('div', h('div.eq-label', f.label), chipsFor(h, f, D.needs, () => { sync(); summary(); draw(); })))));
+  draw();
+  return box;
+}
+function stepRoom(n, total) {
+  return card(n, total, 'Inside the OT', 'For the surgeon\'s comfort and radiation safety.', needsBlock(['ot_temp', 'ot_humidity', 'radiation_use', 'lead_lining']));
+}
+function stepStandards(n, total) {
+  return card(n, total, needsOts() ? 'Standards and digital OR' : 'Standards', 'Tap all that apply.', needsBlock(['standards', 'standards_other', ...(needsOts() ? ['digital'] : [])]));
+}
+function stepSite(n, total) {
+  return card(n, total, 'Space at your site', '“Not sure” is fine: our engineer checks this at the site visit.', [needsBlock(['hvac_ahu', 'hvac_outdoor', 'hvac_shaft']), h('div.eq-label', 'Layout or drawing (optional)'), filesBlock()]);
 }
 
 function stepFeatures(n, total) {
   const feats = featuresFor();
-  const unsure = h('button.eq-chip.unsure', { type: 'button', 'aria-pressed': String(!!D.features_unsure), onclick: () => { D.features_unsure = !D.features_unsure; unsure.setAttribute('aria-pressed', String(D.features_unsure)); summary(); sync(); feedback(D.features_unsure ? 'No problem: our engineer will recommend what your rooms need.' : ''); } }, 'I\'m not sure – please suggest');
-  const list = h('div.eq-feats', feats.map(([k, label, hint, icon]) => {
+  const chooser = h('div.eq-feats', { hidden: !!D.features_unsure }, feats.map(([k, label, hint, icon]) => {
     const v = FEATURE_VIDEO[k];
     const b = h('button.eq-feat', { type: 'button', 'aria-pressed': String(D.features.includes(label)), onclick: () => {
       toggle(D.features, label); b.setAttribute('aria-pressed', String(D.features.includes(label))); summary(); sync();
-      feedback(D.features.length >= 6 ? 'That is a complete, NABH-ready setup. You will see it in 3D next.' : k === 'laf' && D.features.includes(label) ? 'Laminar flow + HEPA is the standard for infection-sensitive surgery.' : k === 'shrm' && D.features.includes(label) ? 'SHRM is WIESPL’s patented energy saver: you will see it inside the AHU in 3D.' : '');
     } }, h('span.ico', icon), h('span', h('b', label), h('small', hint)));
     const sc = SUB_CHOICES[k];
     const sub = sc ? h('div.eq-subchoice', { hidden: !D.features.includes(label) }, sc.list.map(([val, l]) => {
@@ -247,7 +271,13 @@ function stepFeatures(n, total) {
     if (sub) b.addEventListener('click', () => { sub.hidden = !D.features.includes(label); });
     return v || sub ? h('div.eq-featwrap' + (v ? '.has-vid' : ''), h('div.eq-featcard', b, v ? explainBtn(v, () => render()) : null), sub) : b;
   }));
-  return card(n, total, 'Which features interest you?', 'Tap to add. Each one has a one-line explanation.', [h('div', { style: { marginBottom: '12px' } }, unsure), list]);
+  const mode = (on, title, sub, icon, pick) => { const b = h('button.eq-pick', { type: 'button', 'aria-pressed': String(on), onclick: pick }, h('span', { style: { fontSize: '30px' } }, icon), h('span', h('b', title), h('small', sub))); return b; };
+  const choose = v => { D.features_unsure = !v; if (!v) D.features = []; sync(); summary(); render(); };
+  return card(n, total, 'What should we include?', 'Most clients leave this to us.', [
+    h('div.eq-big', mode(!!D.features_unsure, 'Recommended package', 'NABH-ready. Our engineer suggests the items for your rooms.', '✅', () => choose(false)),
+      mode(!D.features_unsure, 'Let me choose the items', 'Walls, doors, pendants, lights and more.', '📝', () => choose(true))),
+    D.features_unsure ? null : h('div', { style: { height: '12px' } }), chooser,
+    can3D() ? h('div', { style: { marginTop: '14px' } }, h('button.eq-btn', { type: 'button', onclick: () => { D.want3d = true; go(1); } }, '🧊 See your OT in 3D (optional)')) : null]);
 }
 
 let viewer = null;
@@ -255,7 +285,7 @@ let viewer = null;
 const FEATURE_VIDEO = { shrm: 'shrm', ahu: 'ahu', doors: 'doors', passbox: 'passbox', laf: 'laf', hepa: 'laf' };
 const watched = (key, pct) => { D.videos = { ...(D.videos || {}) }; D.videos[key] = Math.max(D.videos[key] || 0, pct); sync(); summary(); };
 const addFeature = key => { const label = FEATURES.find(f => f[0] === key)?.[1]; if (label && !D.features.includes(label)) { D.features.push(label); sync(); summary(); } };
-const featureKeys = () => D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean);
+const featureKeys = () => (D.features_unsure && !D.features.length ? featuresFor().map(f => f[0]) : D.features.map(l => FEATURES.find(f => f[1] === l)?.[0]).filter(Boolean));
 const info3D = () => Object.fromEntries(FEATURES.map(f => [f[0], { label: f[1], hint: f[2], icon: f[3] }]));
 const explainBtn = (key, after) => h('button.eq-explain', { type: 'button', onclick: e => { e.stopPropagation(); openExplainer(key, { features: featureKeys(), info: info3D(), wall: { finish: D.wall_finish, colour: D.wall_colour }, floor: { main: D.floor_main, border: D.floor_border }, onWatch: watched, onAdd: addFeature, onClose: after }); } }, `▶ Explain · ${fmtSecs(videoSecs(key))}`);
 const wallName = () => { const f = WALL_FINISHES.find(x => x.key === D.wall_finish) || WALL_FINISHES[0]; return f.colours.length > 1 && D.wall_colour ? `${f.name}, ${D.wall_colour}` : f.name; };
@@ -282,7 +312,7 @@ function step3D(n, total) {
     h('span', 'Tap a wall or the floor to change it · tap any part to learn what it does · double-tap the AHU to take it apart · 🎬 short explainer videos with English / हिंदी captions'));
   drawLook();
   const norms = h('div');
-  const drawNorms = () => norms.replaceChildren(nabhCard({ checklist: true, onAdd: () => render() }) || '');
+  const drawNorms = () => norms.replaceChildren((!D.features_unsure && nabhCard({ checklist: true, onAdd: () => render() })) || '');
   drawNorms();
   setTimeout(async () => {
     viewer?.dispose?.();
@@ -306,21 +336,22 @@ function step3D(n, total) {
     [box, partHost, bar, look, norms], { next: 'Looks good – next' });
 }
 
+const chipGroup = (items, key, after) => h('div.eq-chips', items.map(([k, label]) => {
+  const b = h('button.eq-chip' + (['guide', 'explore', 'unsure'].includes(k) ? '.unsure' : ''), { type: 'button', 'aria-pressed': String(D[key] === k), onclick: () => {
+    D[key] = D[key] === k ? null : k;
+    b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b && D[key] === k)));
+    summary(); sync(); after?.();
+  } }, label);
+  return b;
+}));
 function stepPlan(n, total) {
-  const group = (items, key, after) => h('div.eq-chips', items.map(([k, label]) => {
-    const b = h('button.eq-chip' + (k === 'guide' || k === 'explore' ? '.unsure' : ''), { type: 'button', 'aria-pressed': String(D[key] === k), onclick: () => {
-      D[key] = D[key] === k ? null : k;
-      b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b && D[key] === k)));
-      summary(); sync(); after?.();
-    } }, label);
-    return b;
-  }));
-  return card(n, total, 'When would you like to start, and what budget are you working with?', 'Ranges are fine. This only helps us suggest the right options.', [
-    h('div.eq-label', 'Timeline'), group(TIMELINES, 'timeline', () => feedback(D.timeline === '1m' ? 'Understood, we will prioritise your enquiry.' : '')),
-    h('div.eq-label', 'Budget'), group(BUDGETS, 'budget', () => feedback(D.budget === 'guide' ? 'Sure: we will share options at different price points.' : ''))], { skip: 'Skip' });
+  return card(n, total, 'Timeline, budget and future plans', 'Ranges are fine.', [
+    h('div.eq-label', 'When would you like to start?'), chipGroup(TIMELINES, 'timeline'),
+    h('div.eq-label', 'Budget'), chipGroup(BUDGETS, 'budget'),
+    needsBlock(['future'])]);
 }
 
-function stepFiles(n, total) {
+function filesBlock() {
   const input = h('input', { type: 'file', multiple: true, accept: '.pdf,.jpg,.jpeg,.png,.webp,.heic,.dwg,.dxf,.doc,.docx,.xls,.xlsx,.zip', style: { display: 'none' } });
   const list = h('ul.eq-files');
   const draw = () => list.replaceChildren(...S.files.map((f, i) => h('li', h('span', `📎 ${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`), h('button', { type: 'button', 'aria-label': `Remove ${f.name}`, onclick: () => { S.files.splice(i, 1); D.has_drawing = S.files.length > 0; draw(); } }, '✕'))));
@@ -331,31 +362,28 @@ function stepFiles(n, total) {
       S.files.push(f);
     }
     D.has_drawing = S.files.length > 0; draw(); sync();
-    if (S.files.length) feedback('Thanks, a layout helps us send an accurate proposal.');
   };
   input.onchange = () => add(input.files);
   const drop = h('div.eq-drop', { role: 'button', tabindex: '0', onclick: () => input.click(), onkeydown: e => (e.key === 'Enter' || e.key === ' ') && input.click(),
     ondragover: e => { e.preventDefault(); drop.classList.add('over'); }, ondragleave: () => drop.classList.remove('over'),
     ondrop: e => { e.preventDefault(); drop.classList.remove('over'); add(e.dataTransfer.files); } },
-  h('div', { style: { fontSize: '30px' } }, '📐'), h('b', 'Tap to add a layout, drawing or photo'), h('span.eq-skip', 'PDF, image, AutoCAD (DWG / DXF) · up to 25 MB each'));
+  h('b', '📐 Tap to add a layout, sketch or photo'), h('span.eq-skip', 'PDF, image, AutoCAD · up to 25 MB each'));
   draw();
-  return card(n, total, 'Do you have a layout or drawing?', 'Optional. A floor plan, a hand sketch or a photo of the space all help.', [drop, input, list], { skip: S.files.length ? null : 'I don\'t have one', next: S.files.length ? 'Next' : 'Next' });
+  return h('div', drop, input, list);
 }
 
 function stepContact(n, total) {
   const field = (key, label, attrs = {}, req) => h('label.eq-field', label, req ? h('span.req', ' *') : null,
     h('input', { value: D[key] || '', ...attrs, oninput: e => { D[key] = e.target.value; summary(); sync(); setNext(STEPS.at(-1).valid()); } }));
   const wa = h('input', { type: 'checkbox', ...(D.whatsapp !== false ? { checked: true } : {}), onchange: e => { D.whatsapp = e.target.checked; sync(); } });
-  const times = h('div.eq-chips', BEST_TIME.map(t => { const b = h('button.eq-chip', { type: 'button', 'aria-pressed': String(D.best_time === t), onclick: () => { D.best_time = D.best_time === t ? '' : t; b.parentElement.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b && D.best_time === t))); sync(); } }, t); return b; }));
-  const notes = h('textarea', { rows: 3, placeholder: 'Anything else we should know (optional)', oninput: e => { D.notes = e.target.value; sync(); } });
+  const notes = h('input', { placeholder: 'Anything else? (optional)', oninput: e => { D.notes = e.target.value; sync(); } });
   notes.value = D.notes || '';
-  return card(n, total, 'Where should we send your proposal?', 'Only your name and phone are needed.', [
+  return card(n, total, 'Where should we send your proposal?', 'Only your name and mobile are needed.', [
     h('div.eq-row2', field('name', 'Your name', { autocomplete: 'name', placeholder: 'Dr. …' }, true), field('phone', 'Mobile number', { type: 'tel', inputmode: 'tel', autocomplete: 'tel', placeholder: '98xxxxxxxx' }, true)),
     h('label.eq-check', wa, 'I use WhatsApp on this number'),
     h('div.eq-row2', field('hospital', 'Hospital / clinic', { autocomplete: 'organization' }), field('city', 'City', { autocomplete: 'address-level2' })),
     field('email', 'Email (optional)', { type: 'email', autocomplete: 'email' }),
-    h('div.eq-label', 'Best time to call'), times,
-    h('label.eq-field', { style: { marginTop: '14px' } }, 'Notes', notes),
+    h('label.eq-field', notes),
     h('p.eq-skip', '🔒 We use these details only to reply to your enquiry.')],
   { next: 'Send my enquiry', canNext: !!STEPS.at(-1).valid(), onNext: submit });
 }
@@ -377,7 +405,7 @@ function summaryItems() {
   const size = [D.ots && needsOts() && `${D.ots} ${has('ot') ? 'OT' : 'room'}${D.ots > 1 ? 's' : ''}`, D.beds && needsBeds() && `${D.beds} beds`, D.area && `${D.area} sq ft`].filter(Boolean).join(' · ');
   return [
     types.length && ['Project', types.join(', ')], D.build && ['Type', { new: 'New build', renovation: 'Renovation', unsure: 'Not sure' }[D.build]], size && ['Size', size],
-    D.specialties.length && ['Specialty', D.specialties.join(', ')], (D.features.length || D.features_unsure) && ['Features', D.features.length ? `${D.features.length} selected` : 'needs advice'],
+    D.specialties.length && ['Specialty', D.specialties.map(x => (D.ot_specs[x] > 1 ? `${specName(x)} × ${D.ot_specs[x]}` : specName(x))).join(', ')], D.needs.standards && ['Standards', D.needs.standards], (D.features.length || D.features_unsure) && ['Includes', D.features.length ? `${D.features.length} selected` : 'Recommended package'],
     D.wall_finish && ['Walls', wallName()], D.opts?.door_type && ['Door', DOOR_TYPES.find(x => x[0] === D.opts.door_type)?.[1]], D.opts?.floor_type && ['Floor type', FLOOR_TYPES.find(x => x[0] === D.opts.floor_type)?.[1]], Object.keys(D.videos || {}).length && ['Videos', Object.keys(D.videos).map(k => VIDEOS[k]?.title.split(' –')[0].replace('The ', '').replace(', explained', '')).join(', ')], D.floor_main && ['Floor', `${D.floor_main} / ${D.floor_border}`],
     D.timeline && ['Timeline', TIMELINES.find(t => t[0] === D.timeline)[1]], D.budget && ['Budget', BUDGETS.find(t => t[0] === D.budget)[1]],
   ].filter(Boolean);
@@ -436,8 +464,8 @@ function thanks() {
     d.files && d.uploaded < d.files ? h('p.eq-err', 'Some files could not be uploaded; please send them on WhatsApp or email.') : null,
     d.estimate ? h('div.eq-range', h('div', 'Projects like yours typically fall between'), h('b', `${inrShort(d.estimate.low)} – ${inrShort(d.estimate.high)}`), h('div.eq-skip', 'Indicative only. Your exact price depends on the layout and the features you choose.')) : null,
     h('div', { style: { margin: '6px 0 4px' } }, h('button.eq-btn', { type: 'button', onclick: () => openExplainer('delivery', { onWatch: watched }) }, `🎬 What you receive from WIESPL · ${fmtSecs(videoSecs('delivery'))}`)),
-    d.brief ? h('div.eq-range', h('b', { style: { fontSize: '16px' } }, '📋 Are you the surgeon or from the hospital team?'), h('div', 'Add the detailed requirements now (room sizes, specialty, wall and floor finish, equipment). It takes about 5 minutes and gets you an exact proposal.'),
-      h('a.eq-btn.primary', { href: `brief.html?t=${encodeURIComponent(d.brief)}`, style: { display: 'inline-block', marginTop: '10px', textDecoration: 'none' } }, 'Fill the detailed requirements ›')) : null,
+    d.brief ? h('div.eq-range', h('b', { style: { fontSize: '16px' } }, '📋 Know your OT sizes?'), h('div', 'Add the room sizes for a more exact proposal. It takes about a minute, and you can do it later.'),
+      h('a.eq-btn.primary', { href: `brief.html?t=${encodeURIComponent(d.brief)}`, style: { display: 'inline-block', marginTop: '10px', textDecoration: 'none' } }, 'Add OT sizes ›')) : null,
     h('div.eq-actions',
       config.brochure_url ? h('a.eq-btn', { href: config.brochure_url, target: '_blank', rel: 'noopener' }, '📄 Download brochure') : null,
       wa ? h('a.eq-btn', { href: wa, target: '_blank', rel: 'noopener' }, '💬 WhatsApp us') : null,

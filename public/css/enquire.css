@@ -243,3 +243,14 @@ button { font: inherit; color: inherit; }
 .eq-lightbox .cap { position: absolute; bottom: 18px; left: 0; right: 0; text-align: center; color: #fff; font-size: 14px; }
 .eq-lightbox button { position: absolute; border: none; background: rgba(255,255,255,.15); color: #fff; width: 44px; height: 44px; border-radius: 50%; font-size: 26px; cursor: pointer; }
 .eq-lightbox .x { top: 16px; right: 16px; } .eq-lightbox .prev { left: 16px; top: 50%; } .eq-lightbox .next { right: 16px; top: 50%; }
+
+/* client form: short lists, engineers' part folded away */
+.eq-num-s { padding: 8px 12px; margin-bottom: 6px; }
+.eq-num-s .eq-stepper button { width: 36px; height: 36px; font-size: 20px; }
+.eq-num-s .eq-stepper output { min-width: 28px; font-size: 17px; }
+.eq-feats[hidden] { display: none; }
+.bf-tech { margin-top: 16px; border: 1.5px solid var(--border); border-radius: 12px; padding: 10px 14px; background: var(--surface); }
+.bf-tech > summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--muted); }
+.bf-tech[open] > summary { margin-bottom: 12px; }
+.bf-row { margin-top: 12px; }
+.eq-chip.unsure[aria-pressed="true"] { background: var(--chip-on); border-style: solid; }

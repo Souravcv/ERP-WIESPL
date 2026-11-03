@@ -6,7 +6,7 @@ import { db, getSettings } from './db.js';
 import { insertRow, HttpError, toList } from './crud.js';
 import { saveAttachment } from './roles.js';
 import { notify } from './notify.js';
-import { briefText, cleanBrief, newRoom, SPECIALTIES } from '../public/js/brief-fields.js';
+import { briefText, cleanBrief, newRoom, SPECIALTIES, NEEDS, SPEC_LABEL } from '../public/js/brief-fields.js';
 import { VIDEOS } from '../public/js/explainers.js';
 import { publicPhotos, photoFile } from './photos.js';
 import { PANELS, panelByKey } from '../public/js/panels.js';
@@ -64,6 +64,8 @@ function cleanData(d = {}) {
     build: ['new', 'renovation', 'unsure'].includes(d.build) ? d.build : null,
     ots: n(d.ots), beds: n(d.beds), area: n(d.area), area_unsure: !!d.area_unsure,
     specialties: arr(d.specialties).map(s => clip(s, 40)), features: arr(d.features).map(s => clip(s, 40)), features_unsure: !!d.features_unsure,
+    ot_specs: Object.fromEntries(Object.entries(d.ot_specs && typeof d.ot_specs === 'object' ? d.ot_specs : {}).slice(0, 30).map(([k, v]) => [clip(k, 40), n(v)]).filter(([k, v]) => k && v)), other_specialty: clip(d.other_specialty, 60),
+    needs: Object.fromEntries(NEEDS.map(f => [f.key, clip(d.needs?.[f.key], 120)]).filter(([, v]) => v)),
     timeline: TIMELINES[d.timeline] ? d.timeline : null, budget: BUDGETS[d.budget] ? d.budget : null,
     name: clip(d.name, 80), hospital: clip(d.hospital, 120), city: clip(d.city, 60), phone: clip(digits(d.phone), 16),
     whatsapp: !!d.whatsapp, email: clip(d.email, 120), best_time: clip(d.best_time, 40), contact_by: clip(d.contact_by, 20), notes: clip(d.notes, 1000),
@@ -98,9 +100,11 @@ export function summaryText(d) {
     `Project: ${types.join(', ') || '—'}`,
     d.build && `Construction: ${{ new: 'New construction', renovation: 'Renovation of an existing space', unsure: 'Not sure yet' }[d.build]}`,
     (d.ots || d.beds) && `Size: ${[d.ots && `${d.ots} OT(s)`, d.beds && `${d.beds} bed(s)`].filter(Boolean).join(', ')}`,
-    `Area: ${d.area ? `about ${d.area} sq ft` : d.area_unsure ? 'not sure' : '—'}`,
-    d.specialties.length && `Specialty: ${d.specialties.join(', ')}`,
-    `Features: ${d.features.length ? d.features.join(', ') : d.features_unsure ? 'needs guidance' : '—'}`,
+    d.area && `Area: about ${d.area} sq ft`,
+    d.specialties.length && `Specialty: ${d.specialties.map(s => (d.ot_specs?.[s] > 1 ? `${SPEC_LABEL[s] || s} × ${d.ot_specs[s]}` : SPEC_LABEL[s] || s)).join(', ')}`,
+    d.other_specialty && `Other specialty: ${d.other_specialty}`,
+    ...NEEDS.filter(f => d.needs?.[f.key]).map(f => `${f.label}: ${d.needs[f.key]}`),
+    `Features: ${d.features.length ? d.features.join(', ') : d.features_unsure ? 'recommended package' : '—'}`,
     d.timeline && `Timeline: ${TIMELINES[d.timeline]}`,
     d.budget && `Budget: ${BUDGETS[d.budget]}`,
     `Contact: ${[d.phone, d.whatsapp && '(WhatsApp)', d.email].filter(Boolean).join(' ')}${d.best_time ? ` · best time: ${d.best_time}` : ''}${d.contact_by ? ` · prefers ${d.contact_by}` : ''}`,
@@ -254,8 +258,10 @@ export function briefFor(enquiryId, d) {
   if (old) return old.token;
   const token = crypto.randomBytes(18).toString('base64url');
   const e = db.prepare('SELECT hospital_name, place, client_name, client_phone, capacity FROM enquiries WHERE id = ?').get(enquiryId) || {};
-  const n = Math.max(1, Math.min(12, Number(d?.ots) || Number(String(e.capacity || '').match(/(\d+)\s*OT/i)?.[1]) || 1));
-  const specs = (d?.specialties || []).filter(s => SPEC_OK.includes(s));
+  const n = Math.max(1, Math.min(30, Number(d?.ots) || Number(String(e.capacity || '').match(/(\d+)\s*OT/i)?.[1]) || 1));
+  // "2 Neuro, 1 Urology" from the client form gives each OT its specialty
+  const counted = Object.entries(d?.ot_specs || {}).filter(([s]) => SPEC_OK.includes(s)).flatMap(([s, c]) => Array(c).fill(s));
+  const specs = counted.length ? counted : (d?.specialties || []).filter(s => SPEC_OK.includes(s));
   const rooms = Array.from({ length: n }, (_, i) => {
     const r = newRoom(i, null);
     if (specs.length) Object.assign(r, newRoom(i, { ...r, specialty: specs[i % specs.length], laf: undefined, air7: undefined, co2: undefined }), { name: `OT ${i + 1}` });
@@ -278,9 +284,10 @@ export function briefFor(enquiryId, d) {
     if (o.scrub_tap) r.scrub_type = { sensor: 'Sensor', foot: 'Foot-operated', elbow: 'Elbow' }[o.scrub_tap];
     if (o.passage_finish) r.passage_wall = { wood: 'Wooden finish (HPL)', ss: 'SS 304', ppgi: 'PPGL', glass: 'Toughened glass' }[o.passage_finish];
     if (d?.features?.includes('SHRM – Smart Heat Recovery (WIESPL patent)')) r.shrm = 'Yes';
+    if (d?.needs?.lead_lining === 'Yes') r.lead = 'Yes';
     return r;
   });
-  const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.client_name, phone: e.client_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build] }, rooms });
+  const data = cleanBrief({ project: { hospital: e.hospital_name, city: e.place, doctor: e.client_name, phone: e.client_phone, build: { new: 'New construction', renovation: 'Renovation of an existing OT' }[d?.build], ...(d?.needs || {}) }, rooms });
   db.prepare('INSERT INTO design_briefs (token, enquiry_id, data) VALUES (?, ?, ?)').run(token, enquiryId, JSON.stringify(data));
   return token;
 }

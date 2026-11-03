@@ -3,7 +3,7 @@
 export const NABH_SOURCE = 'NABH Revised Guidelines for Air Conditioning in Operation Theatres (2018) · WHO Global Guidelines for the Prevention of Surgical Site Infection';
 
 // Type A (erstwhile super-specialty): neurosciences, joint replacement orthopaedics, cardiothoracic, transplant.
-const TYPE_A = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Multi-specialty']; // multi-specialty: designed for its most sensitive use
+const TYPE_A = ['Orthopaedics', 'Cardiac', 'Neuro', 'Transplant', 'Multi-specialty', 'Cath Lab / Hybrid OT']; // multi-specialty: designed for its most sensitive use
 export const otType = specs => ([].concat(specs || []).some(s => TYPE_A.includes(s)) ? 'A' : 'B');
 
 // [feature key, why it is needed, required (true) or recommended]
@@ -42,7 +42,7 @@ export function otNorms(specs) {
 
 // Infection-sensitivity protocols used by WIESPL (MD's direction, 13 Oct 2026). Multi-specialty OTs are designed
 // for the most sensitive specialty that will use them.
-const HIGH = ['Transplant', 'Cardiac', 'Neuro', 'Orthopaedics', 'Multi-specialty'];
+const HIGH = ['Transplant', 'Cardiac', 'Neuro', 'Orthopaedics', 'Multi-specialty', 'Cath Lab / Hybrid OT'];
 export function protocolFor(specs) {
   const list = [].concat(specs || []);
   if (list.some(s => HIGH.includes(s))) return { level: 'High', text: 'High infection sensitivity (transplant, cardiac, neuro, orthopaedic): laminar air flow with terminal HEPA over the table, the strictest air protocol.' };

@@ -5,32 +5,67 @@ import { otNorms, otType, protocolFor } from './nabh.js';
 import { VIDEOS } from './explainers.js';
 import { PANELS } from './panels.js';
 
-export const SPECIALTIES = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Other'];
+export const SPECIALTIES = ['Multi-specialty', 'Neuro', 'Orthopaedics', 'Cardiac', 'Transplant', 'Plastic surgery', 'Gynae / Obstetrics', 'General surgery', 'Ophthalmic', 'ENT', 'Urology', 'Robotic', 'Day care', 'Cath Lab / Hybrid OT', 'Other'];
+export const MAIN_SPECIALTIES = ['Orthopaedics', 'Neuro', 'Cardiac', 'General surgery', 'Urology', 'Gynae / Obstetrics', 'Cath Lab / Hybrid OT'];
+export const SPEC_LABEL = { Orthopaedics: 'Orthopaedic', Neuro: 'Neuro Surgery', Cardiac: 'CVTS / Cardiac', 'General surgery': 'General Surgery', 'Gynae / Obstetrics': 'Gynaecology' };
 export const WALLS = ['SS 304', 'PPGL', 'Toughened glass', 'SS 304 + glass']; // OT walls; the passage can also be wood (HPL)
 export const WALL_COLOURS = { 'SS 304': ['Natural steel'], PPGL: ['Off-white'], 'Toughened glass': ['Ivory white', 'Sky blue', 'Mint green'], 'SS 304 + glass': ['Ivory white', 'Sky blue', 'Mint green'], 'Wooden finish (HPL)': ['Light oak', 'Walnut'] };
 export const FLOORS = ['Beige', 'Grey', 'Sky blue', 'Aqua green', 'Navy blue', 'Light grey'];
 const YN = ['Yes', 'No'];
 const SCOPE = ['WIESPL', 'Hospital', 'Not decided'];
 
-// field: { key, label, type: text | number | select | yn | textarea, options, def, hint, unit, show(room) }
+// What the surgeon decides, in one place: asked by tapping on the client form and on the requirement form (filled there
+// with what the client form already knows). Everything else has a default and is for the engineers.
+const ADVISE = 'WIESPL to advise';
+const SPACE = ['Available', 'Not available', 'Not sure'];
+const has_ = (v, x) => String(v || '').split(', ').includes(x);
+export const NEEDS = [
+  { key: 'ot_temp', need: true, label: 'Preferred operating temperature', type: 'chips', options: ['18–20 °C', '20–22 °C', '22–24 °C', ADVISE] },
+  { key: 'ot_humidity', need: true, label: 'Humidity for long surgeries', type: 'chips', options: ['Standard (up to 55%)', 'Drier (up to 50%)', ADVISE] },
+  { key: 'radiation_use', need: true, label: 'Will any OT use C-Arm, Hybrid, Orthopaedic, Vascular or Interventional procedures?', type: 'chips', options: ['Yes', 'No', 'Not sure'] },
+  { key: 'lead_lining', need: true, label: 'Do you need lead-lined wall protection?', type: 'chips', options: ['Yes', 'No', ADVISE], show: p => p.radiation_use === 'Yes' },
+  { key: 'standards', need: true, label: 'Standards to comply with', type: 'multi', options: ['NABH', 'JCI', 'Other', 'None'] },
+  { key: 'standards_other', need: true, label: 'Which other standard?', plain: true, show: p => has_(p.standards, 'Other') },
+  { key: 'digital', need: true, label: 'Digital OR needs', type: 'multi', options: ['Recording & live streaming', 'HIS / PACS integration', 'Telemedicine / remote teaching', 'None'] },
+  { key: 'hvac_ahu', need: true, label: 'Space for AHU installation', type: 'chips', options: SPACE },
+  { key: 'hvac_outdoor', need: true, label: 'Outdoor space for condensing units / chillers', type: 'chips', options: SPACE },
+  { key: 'hvac_shaft', need: true, label: 'Services shaft and duct route', type: 'chips', options: SPACE },
+  { key: 'future', need: true, label: 'Future plans we should design for', type: 'multi', options: ['More OTs', 'Digital integration', 'None', 'Not sure'] },
+];
+const LONE = ['None', 'Not sure', ADVISE];
+// Tap to choose, tap again to clear. Several choices are kept as "a, b". `h` is the page's element builder.
+export function chipsFor(h, f, obj, onChange) {
+  const cur = () => String(obj[f.key] || '').split(', ').filter(Boolean);
+  const wrap = h('div.eq-chips', f.options.map(o => h('button.eq-chip' + (LONE.includes(o) || o === 'Not sure' ? '.unsure' : ''), { type: 'button', 'aria-pressed': String(cur().includes(o)), onclick: () => {
+    const was = cur();
+    const v = was.includes(o) ? was.filter(x => x !== o) : f.type !== 'multi' || LONE.includes(o) ? [o] : [...was.filter(x => !LONE.includes(x)), o];
+    if (v.length) obj[f.key] = v.join(', '); else delete obj[f.key];
+    for (const c of wrap.children) c.setAttribute('aria-pressed', String(v.includes(c.textContent)));
+    onChange?.();
+  } }, o)));
+  return wrap;
+}
+
+// field: { key, label, type: text | number | select | yn | textarea | chips | multi, options, def, hint, unit, show(room), core: asked of the surgeon }
 export const PROJECT = [
   { key: 'filled_by', label: 'Filled by', type: 'select', options: ['Surgeon', 'Hospital team', 'WIESPL sales', 'Consultant / architect'] },
   { key: 'filler_name', label: 'Your name' },
-  { key: 'hospital', label: 'Hospital' }, { key: 'city', label: 'City' }, { key: 'doctor', label: 'Surgeon / contact person' }, { key: 'phone', label: 'Mobile' },
+  { key: 'hospital', label: 'Hospital', core: true }, { key: 'city', label: 'City', core: true }, { key: 'doctor', label: 'Surgeon / contact person', core: true }, { key: 'phone', label: 'Mobile', core: true },
   { key: 'build', label: 'Construction', type: 'select', options: ['New construction', 'Renovation of an existing OT', 'Not sure'] },
   { key: 'floor_level', label: 'Which floor is the OT on?', hint: 'e.g. 2nd floor, terrace above' },
   { key: 'nabh', label: 'NABH accreditation', type: 'select', options: ['Planned', 'Already accredited', 'Not planned'] },
-  { key: 'target', label: 'Target date to start surgeries', hint: 'Month / year' },
+  { key: 'target', label: 'Target date to start surgeries', hint: 'Month / year', core: true },
+  ...NEEDS,
 ];
 
 export const ROOM = [
   ['Room', [
     { key: 'name', label: 'OT name', def: i => `OT ${i + 1}` },
-    { key: 'specialty', label: 'Specialty', type: 'select', options: SPECIALTIES, def: () => 'General surgery' },
-    { key: 'length', label: 'Length', type: 'number', unit: 'ft', def: () => 20 },
-    { key: 'width', label: 'Width', type: 'number', unit: 'ft', def: () => 20 },
+    { key: 'specialty', label: 'Specialty', core: true, type: 'select', options: SPECIALTIES, labels: SPEC_LABEL, def: () => 'General surgery' },
+    { key: 'length', label: 'Length', core: true, type: 'number', unit: 'ft', def: () => 20 },
+    { key: 'width', label: 'Width', core: true, type: 'number', unit: 'ft', def: () => 20 },
     { key: 'height', label: 'OT height (finished ceiling)', type: 'number', unit: 'ft', def: () => 10, hint: 'Height of the false ceiling inside the OT' },
-    { key: 'cases', label: 'Surgeries per day', type: 'number' },
+    { key: 'cases', label: 'Surgeries per day', core: true, type: 'number' },
     { key: 'persons', label: 'People in the OT during surgery', type: 'number', def: () => 6 },
     { key: 'equip_kw', label: 'Equipment load', type: 'number', unit: 'kW', def: () => 2 },
   ]],
