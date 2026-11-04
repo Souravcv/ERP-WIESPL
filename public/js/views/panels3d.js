@@ -221,19 +221,19 @@ function ctSlice(P, x, y, w, h, t) {
   ctx.beginPath(); ctx.ellipse(cx, cy, 250 * s, 190 * s, 0, 0, Math.PI * 2); ctx.fillStyle = '#6b6b6b'; ctx.fill();
   for (const d of [-1, 1]) { ctx.beginPath(); ctx.ellipse(cx + d * 105 * s, cy - 8 * s, (72 + 18 * k) * s, (112 + 22 * k) * s, d * 0.15, 0, Math.PI * 2); ctx.fillStyle = '#111'; ctx.fill(); }
   P.dot(cx, cy + 130 * s, 26 * s, '#eee'); ctx.restore();
-  P.tx('CT CHEST · Patient 1042', x + 16, y + 34, 18, C.cyan, 700); P.tx(`Slice ${Math.floor(t * 8) % 48 + 1} / 48`, x + 16, y + h - 18, 16, '#ccc', 600);
+  P.tx('CT · Demo', x + 16, y + 34, 18, C.cyan, 700); P.tx(`Slice ${Math.floor(t * 8) % 48 + 1} / 48`, x + 16, y + h - 18, 16, '#ccc', 600);
 }
 function label(P, x, y, l) { P.rr(x + 12, y + 12, P.ctx.measureText(l).width + 40, 30, 15, 'rgba(0,0,0,.6)'); P.tx(l, x + 24, y + 33, 17, '#fff', 600); }
 export function orscreen(P, t, S) {
   const L = S.layout || 'quad', vids = S.videos || [], { W, H, ctx } = P;
-  frame(P, `OR Screen · ${LAYOUT_NAME[L]}`, 'Patient 1042 · Lap. cholecystectomy · Dr. surgeon · OT 1');
+  frame(P, `OR Screen · ${LAYOUT_NAME[L]}`, 'Demo patient 1042 · OT 1');
   const src = (i, x, y, w, h) => { const [k, l] = SOURCES[i]; feed(P, x, y, w, h, t + i, k, vids[i]); ctx.font = `600 17px ${FONT}`; label(P, x, y, l); };
   const X = 24, Y = 104, w = W - 48, h = H - 124;
   if (L === 'full') { src(0, X, Y, w, h); src(4, X + w - 330, Y + h - 190, 310, 170); }
   else if (L === 'quad') { const ww = (w - 16) / 2, hh = (h - 16) / 2; [0, 1, 2, 4].forEach((s, i) => src(s, X + (i % 2) * (ww + 16), Y + Math.floor(i / 2) * (hh + 16), ww, hh)); }
   else if (L === 'pip') { src(0, X, Y, w, h); P.rr(X + w - 432, Y + 18, 414, 240, 16, null, '#fff', 4); src(1, X + w - 430, Y + 20, 410, 236); src(4, X + w - 430, Y + h - 200, 410, 180); }
   else if (L === 'side') { const ww = (w - 16) / 2; src(0, X, Y, ww, h); src(3, X + ww + 16, Y, ww, h); }
-  else if (L === 'report') { const ww = w * 0.6; src(0, X, Y, ww, h); ctSlice(P, X + ww + 16, Y, w - ww - 16, h * 0.62, t); P.rr(X + ww + 16, Y + h * 0.62 + 14, w - ww - 16, h * 0.38 - 14, 14, C.tile); P.tx('📄 Pre-op report', X + ww + 36, Y + h * 0.62 + 56, 20, C.text, 700); P.tx('Gallbladder · calculi', X + ww + 36, Y + h * 0.62 + 92, 18, C.dim, 500); P.tx('Hb 13.2 · fit for GA', X + ww + 36, Y + h * 0.62 + 122, 18, C.dim, 500); }
+  else if (L === 'report') { const ww = w * 0.6; src(0, X, Y, ww, h); ctSlice(P, X + ww + 16, Y, w - ww - 16, h * 0.62, t); P.rr(X + ww + 16, Y + h * 0.62 + 14, w - ww - 16, h * 0.38 - 14, 14, C.tile); P.tx('📄 Pre-op report', X + ww + 36, Y + h * 0.62 + 56, 20, C.text, 700); P.tx('Demo patient 1042', X + ww + 36, Y + h * 0.62 + 92, 18, C.dim, 500); P.tx('Fit for surgery', X + ww + 36, Y + h * 0.62 + 122, 18, C.dim, 500); }
   else if (L === 'conf') { const ww = w * 0.7; src(0, X, Y, ww, h); P.rr(X + 14, Y + 50, 96, 30, 15, C.red); P.tx('● LIVE', X + 62, Y + 72, 16, '#fff', 800, 'center');
     ['Dr. Mentor', 'Students (12)', 'Family'].forEach((n, i) => { const yy = Y + i * (h / 3); P.rr(X + ww + 16, yy, w - ww - 16, h / 3 - 12, 14, C.tile, Math.floor(t / 2) % 3 === i ? C.green : C.line, 3); P.dot(X + ww + 70, yy + h / 6 - 6, 34, ['#6366f1', '#0ea5e9', '#f97316'][i]); P.tx(n, X + ww + 116, yy + h / 6, 20, C.text, 600); }); }
   const rec = S.rec !== false;
