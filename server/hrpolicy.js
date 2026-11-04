@@ -1,4 +1,4 @@
-// The WIESPL HR Policy in the attendance and leave register: office 9:00–18:00 Monday to Saturday, late marks (3 free
+// The WIESPL HR Policy in the attendance and leave register: office 9:30–18:00 Monday to Saturday, late marks (3 free
 // a month, then half a day each), half day for 1½–4 h late / early, a day cut beyond 4 h, the sandwich rule (weekly
 // offs and holidays between absences or leave are unpaid), the leave types with their eligibility, the privilege
 // leave (PL) credited quarterly after confirmation, comp-off for work on an off day (taken in the same month or paid),
@@ -266,11 +266,18 @@ const HOLIDAYS_2026 = [['2026-01-26', 'Republic Day'], ['2026-03-19', 'Gudhi Pad
 
 // Once: the 2026 holiday list of the HR Policy, and the policy timings (9:00–18:00) for employees still on the old default.
 export function setupHrPolicy() {
-  if (db.prepare("SELECT 1 FROM settings WHERE key = 'hr_policy_v1'").get()) return;
+  // Once: the company day is now 9:30–18:00 (with a half-hour break) for everyone still on 9:00–18:00.
+  const moveShift = () => {
+    if (db.prepare("SELECT 1 FROM settings WHERE key = 'hr_shift_930_v1'").get()) return;
+    db.prepare("UPDATE employees SET shift_start = '09:30' WHERE shift_start = '09:00' AND COALESCE(shift_end, '18:00') = '18:00'").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('hr_shift_930_v1', '\"1\"')").run();
+  };
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'hr_policy_v1'").get()) { moveShift(); return; }
   if (!db.prepare("SELECT 1 FROM holidays WHERE date BETWEEN '2026-01-01' AND '2026-12-31'").get()) {
     const ins = db.prepare("INSERT INTO holidays (date, name, optional) VALUES (?, ?, 'No')");
     for (const [d, n] of HOLIDAYS_2026) ins.run(d, n);
   }
   db.prepare("UPDATE employees SET shift_start = '09:00' WHERE shift_start = '09:30' AND COALESCE(shift_end, '18:00') = '18:00'").run();
   db.prepare("INSERT INTO settings (key, value) VALUES ('hr_policy_v1', '\"1\"')").run();
+  moveShift();
 }

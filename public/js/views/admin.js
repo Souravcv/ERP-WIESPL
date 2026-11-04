@@ -119,6 +119,7 @@ const SETTINGS_FORM = [
   ['Attendance & leave (HR Policy)', [['hr_grace_minutes', 'On time up to shift start + minutes; beyond is a late mark (default 15)'], ['hr_late_marks_free', 'Late marks free per month; each one after is half a day (default 3)'],
     ['hr_half_day_late_minutes', 'Late in + early out up to … minutes is half a day; more cuts the day (default 240)'], ['hr_short_leaves_month', 'Short leaves (1½ h) per month (default 2)'],
     ['hr_pl_per_year', 'Privilege leave (PL) days a year, credited quarterly after confirmation (default 24)'], ['hr_lwp_max_days', 'Leave without pay: most days a year (default 10)'],
+    ['hr_clock_out_lock', 'Clock out only when the hours are complete', 'yn'], ['hr_required_hours', 'Working hours before clock-out (default 8)'], ['hr_break_minutes', 'Break on top of those hours, in minutes (default 30)'],
     ['hr_full_day_hours', 'Day without clock-out / off-day work: hours for a full day (default 8)'], ['hr_half_day_hours', '… hours for a half day (default 4)'],
     ['hr_check_every_hours', 'Field staff: a photo presence check every … hours (default 3)'], ['hr_auto_ping_minutes', 'Automatic location check every … minutes while the app is open (default 30)'], ['hr_max_accuracy_m', 'Reject a GPS fix rougher than … metres (default 150)']]],
   ['HR letters', [['hr_bond_template', 'Employment bond text (printed from the employee). Filled in: {{name}} {{father_name}} {{address}} {{aadhaar}} {{pan}} {{date}} {{reg_address}} {{company}} {{bond_years}} {{amount}} {{amount_words}} {{designation}}', 'ta']]],

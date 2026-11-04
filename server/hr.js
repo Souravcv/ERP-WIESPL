@@ -166,7 +166,7 @@ export function evaluate(attId) {
   if (a.check_in) {
     const end = a.check_out || (a.date < today() ? (pings.at(-1)?.at || null) : now());
     hours = end ? r1((Date.parse(String(end).replace(' ', 'T')) - Date.parse(String(a.check_in).replace(' ', 'T'))) / 3600e3) : 0;
-    const start = mins(emp.shift_start || '09:00'), stop = mins(emp.shift_end || '18:00');
+    const start = mins(emp.shift_start || '09:30'), stop = mins(emp.shift_end || '18:00');
     const lateIn = Math.max(0, mins(hhmm(a.check_in)) - start), earlyOut = a.check_out ? Math.max(0, stop - mins(hhmm(a.check_out))) : 0;
     if (lateIn > R.grace) flags.add(`late (in at ${hhmm(a.check_in)})`);
     if (earlyOut > R.grace) flags.add(`left early (out at ${hhmm(a.check_out)})`);
@@ -361,9 +361,34 @@ export function backAtSite(user, body = {}, ip) {
   });
 }
 
+// When this person's day is complete: from clock-in, not before the shift start, 8 working hours + the 30-minute break
+// (09:30 → 18:00). An approved short or half-day leave shortens it; a full-day leave or on-duty day and off-day work have
+// no limit. Null = may clock out at any time. Someone in very late can still close the day at night.
+export function earliestOut(emp, att) {
+  const s = getSettings();
+  if (s.hr_clock_out_lock === 'No' || !att.check_in || isOffDay(emp, att.date)) return null;
+  const need = (Number(s.hr_required_hours) || 8) * 60 + (s.hr_break_minutes === '' || s.hr_break_minutes == null ? 30 : Number(s.hr_break_minutes) || 0);
+  const P = policy();
+  const lv = db.prepare("SELECT type, half_day FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?").all(att.employee_id, att.date, att.date);
+  const shorter = l => (l.type === 'Short leave (up to 1½ h)' ? P.shortLeaveMin : l.half_day === 'Yes' ? need / 2 : null);
+  if (lv.some(l => shorter(l) == null)) return null;
+  const from = Math.max(mins(hhmm(att.check_in)), mins(emp.shift_start || '09:30'));
+  const at = Math.min(from + need - Math.max(0, ...lv.map(shorter)), 23 * 60 + 30);
+  return `${String(Math.floor(at / 60)).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`;
+}
+
+const clockOutWait = (emp, att) => {
+  const from = att?.check_in && !att.check_out ? earliestOut(emp, att) : null;
+  if (!from || hhmm(now()) >= from) return {};
+  const [h, m] = from.split(':').map(Number), [nh, nm] = hhmm(now()).split(':').map(Number);
+  return { out_from: from, out_wait_ms: ((h - nh) * 60 + m - nm) * 60000 };
+};
+
 export function clockOut(user, body = {}, ip) {
   const emp = employeeOf(user);
   const att = openDay(emp);
+  const from = earliestOut(emp, att);
+  if (from && hhmm(now()) < from) throw new HttpError(400, `Your hours are not complete: you can clock out at ${from}. To leave early, apply for a short leave or half day and ask HR to approve it.`);
   const p = position(body);
   if (emp.field_staff === 'Yes' && !body.photo) throw new HttpError(400, 'Take a selfie to clock out');
   return tx(() => {
@@ -393,7 +418,7 @@ export function myDay(user) {
     today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
     // other active sites, also selectable at clock-in (HR sees when a site is not assigned)
     other_sites: activeSites().filter(l => !allowedSites(emp, t).some(a => a.id === l.id)).map(l => ({ id: l.id, name: l.name, kind: l.kind })),
-    rules: rules(), month, leaves, balance: balances(t, emp.id).rows[0] || null, holiday: db.prepare('SELECT name FROM holidays WHERE date = ?').get(t)?.name || null, weekly_off: isWeeklyOff(emp, t) };
+    rules: rules(), ...clockOutWait(emp, att), month, leaves, balance: balances(t, emp.id).rows[0] || null, holiday: db.prepare('SELECT name FROM holidays WHERE date = ?').get(t)?.name || null, weekly_off: isWeeklyOff(emp, t) };
 }
 
 // ---------------------------------------------------------------- leave

@@ -1327,7 +1327,7 @@ export const ENTITIES = {
       { key: 'induction_ack_on', label: 'Induction Manual Acknowledged On', type: 'date' },
       { key: 'field_staff', label: 'Field / Site Staff', type: 'yn', default: 'No', hint: 'Yes = selfie at clock-in / out and a presence check every few hours' },
       { key: 'default_location_id', label: 'Usual Work Location', type: 'ref', ref: 'work_locations', hint: 'e.g. Office or Works; sites come from Site Assignments' },
-      { key: 'shift_start', label: 'Shift Start (HH:MM)', type: 'text', default: '09:00' },
+      { key: 'shift_start', label: 'Shift Start (HH:MM)', type: 'text', default: '09:30' },
       { key: 'shift_end', label: 'Shift End (HH:MM)', type: 'text', default: '18:00' },
       { key: 'weekly_off', label: 'Weekly Off', type: 'select', options: ['Sunday', 'Saturday', 'Saturday + Sunday', 'None'], default: 'Sunday' },
       { key: 'status', label: 'Status', type: 'select', options: ['Joining', 'Active', 'Left'], default: 'Active', hint: 'Joining = offer accepted, not joined yet (becomes Active on the joining date)' },

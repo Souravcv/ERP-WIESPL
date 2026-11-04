@@ -65,6 +65,8 @@ export async function attendView(root) {
   const card = h('div.card');
   const status = h('div', { style: { fontSize: '15px' } });
   const reload = () => attendView(root);
+  // the button opens by itself when the hours are complete
+  if (me.out_wait_ms > 0) setTimeout(() => { if (location.hash.startsWith('#/attend')) reload(); }, me.out_wait_ms + 1000);
 
   // Automatic location checks while this screen is open and the day is running.
   const lastAuto = { at: Date.now() };
@@ -161,7 +163,7 @@ export async function attendView(root) {
         if (e.target.checked) { try { wakeLock = await navigator.wakeLock.request('screen'); toast('Screen stays on: location is checked every ' + R.pingMinutes + ' min'); } catch { toast('This phone cannot keep the screen on', true); e.target.checked = false; } }
         else { try { await wakeLock?.release(); } catch { /* none */ } wakeLock = null; }
       } }), 'Keep screen on at site (location checks keep running)'),
-      h('button.btn.danger', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
+      me.out_wait_ms > 0 ? h('button.btn', { disabled: true, style: { fontSize: '17px', padding: '13px' } }, '🔒 Clock out opens at', ` ${me.out_from}`) : h('button.btn.danger', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
         if (!confirm('Clock out now?')) return;
         try { const r = await send('/hr/clock-out'); toast(`Clocked out: ${r.attendance.hours} h, ${r.attendance.status}`); stop(); await app?.('stop'); reload(); } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock out (selfie + location)' : '📍 Clock out')) : null,

@@ -14,6 +14,7 @@ export default {
 
   "🔋 Allow running in the background": "🔋 बॅकग्राउंडमध्ये चालू ठेवण्याची परवानगी द्या",
 
+  '🔒 Clock out opens at': '🔒 क्लॉक आउट या वेळी उघडेल:',
   '📈 Performance': '📈 कामगिरी', 'Performance': 'कामगिरी', '📝 Daily Team Work': '📝 टीमचे दैनंदिन काम', 'Daily Team Work': 'टीमचे दैनंदिन काम', 'Worker': 'कामगार', 'Helper': 'मदतनीस', 'Technician': 'तंत्रज्ञ', 'Wiring Engineer': 'वायरिंग इंजिनिअर', 'Panel Maker': 'पॅनल मेकर', 'Work In-charge': 'काम प्रभारी',
   'My score': 'माझा गुण', 'Days worked': 'काम केलेले दिवस', 'Work recorded': 'नोंदवलेले काम', 'Done': 'पूर्ण', 'Quality': 'गुणवत्ता', 'Late marks': 'उशिराच्या नोंदी', 'Score': 'गुण', 'Doing best': 'सर्वोत्तम', 'Target': 'लक्ष्य', 'Panel Shop': 'पॅनल शॉप', 'Electrical / Wiring': 'इलेक्ट्रिकल / वायरिंग', '💾 Save the day': '💾 दिवस जतन करा',
   // job work and employee login, 2 Nov 2026
