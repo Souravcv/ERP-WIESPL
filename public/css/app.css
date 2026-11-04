@@ -313,6 +313,21 @@ dl.detail-grid dd { margin: 0; font-size: 13px; white-space: pre-line; overflow-
 .p3-wrap:fullscreen .p3-side, .p3-wrap.p3-full .p3-side { max-height: calc(100vh - 20px); }
 @media (max-width: 900px) { .p3-wrap:fullscreen, .p3-wrap.p3-full { grid-template-columns: 1fr; overflow: auto; } .p3-wrap:fullscreen .p3-stage, .p3-wrap.p3-full .p3-stage { height: 75vh; } }
 .p3-status { position: absolute; inset: 0; display: grid; place-items: center; color: #4b5a70; font-weight: 600; padding: 20px; text-align: center; }
+.p3-label.pick { pointer-events: auto; cursor: pointer; }
+.p3-label.pick:hover { background: #dcebff; }
+.p3-pickbox { border: 1px solid var(--border); }
+.p3-pickbox.on { border-color: #2f9bff; box-shadow: 0 0 0 2px rgba(47, 155, 255, .25); }
+.p3-pickhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.p3-x { font: inherit; font-size: 18px; line-height: 1; background: none; border: 0; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+.p3-cap { display: block; margin: 10px 0 4px; color: var(--muted); font-weight: 600; }
+.p3-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.p3-chip { font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: pointer; }
+.p3-chip.on { background: var(--brand-2); border-color: var(--brand-2); color: #fff; }
+.p3-sws { display: flex; flex-wrap: wrap; gap: 6px; }
+.p3-sw { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--border); cursor: pointer; padding: 0; }
+.p3-sw.on { border-color: var(--brand-2); box-shadow: 0 0 0 2px var(--brand-2); }
+.p3-adjust { margin-top: 10px; font-size: 12px; color: var(--muted); }
+.p3-adjust summary { cursor: pointer; margin-bottom: 6px; }
 .p3-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .p3-label { position: absolute; left: 0; top: 0; background: rgba(255, 255, 255, .93); color: #15202f; border: 1px solid rgba(160, 175, 195, .55); border-left: 3px solid #7b8798; border-radius: 7px; padding: 3px 8px; font: 600 11px/1.25 system-ui, 'Segoe UI', sans-serif; letter-spacing: .01em; text-align: center; white-space: nowrap; box-shadow: 0 4px 14px rgba(20, 35, 60, .14); backdrop-filter: blur(4px); }
 .p3-label.k-ot { border-left-color: #2563c9; background: rgba(238, 245, 255, .95); }

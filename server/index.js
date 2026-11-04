@@ -923,6 +923,32 @@ api.put('/files/:id/plan', express.json({ limit: '60mb' }), wrap(req => {
   fs.writeFileSync(planCache(a.id), JSON.stringify(p));
   return { ok: true };
 }));
+// finishes chosen per OT in the 3D drawing: { "<label key>": { wall, wall_colour, floor_type, floor_main, floor_border, door, adj } }
+const finishFile = id => path.join(DATA_DIR, 'uploads', 'plans', `${Number(id)}.finishes.json`);
+const FINISH_WORD = /^[\w +\-]{1,40}$/;
+const cleanFinishes = body => {
+  const out = {};
+  for (const [k, f] of Object.entries(body && typeof body === 'object' ? body : {}).slice(0, 500)) {
+    if (!/^-?\d+_-?\d+$/.test(k) || !f || typeof f !== 'object') continue;
+    const r = {};
+    for (const key of ['wall', 'wall_colour', 'floor_type', 'floor_main', 'floor_border', 'door']) if (typeof f[key] === 'string' && FINISH_WORD.test(f[key])) r[key] = f[key];
+    if (f.adj && typeof f.adj === 'object') r.adj = { dx: Number(f.adj.dx) || 0, dz: Number(f.adj.dz) || 0, turn: !!f.adj.turn };
+    out[k] = r;
+  }
+  return out;
+};
+api.get('/files/:id/finishes', wrap(req => {
+  const a = cadFile(req.params.id);
+  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  try { return { finishes: JSON.parse(fs.readFileSync(finishFile(a.id), 'utf8')) }; } catch { return { finishes: {} }; }
+}));
+api.put('/files/:id/finishes', express.json({ limit: '500kb' }), wrap(req => {
+  const a = cadFile(req.params.id);
+  if (!canWrite(a.entity, req.user.role)) throw new HttpError(403, 'You cannot change this record');
+  fs.mkdirSync(path.dirname(finishFile(a.id)), { recursive: true });
+  fs.writeFileSync(finishFile(a.id), JSON.stringify(cleanFinishes(req.body?.finishes)));
+  return { ok: true };
+}));
 // which record a drawing belongs to (the 3D viewer offers to send OT sizes to that enquiry)
 api.get('/files/:id/meta', wrap(req => {
   const a = roles.attachmentFile(req.params.id);
@@ -934,7 +960,7 @@ api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: 
   const e = db.prepare('SELECT id FROM enquiries WHERE id = ?').get(Number(req.params.id));
   if (!e) throw new HttpError(404, 'Enquiry not found');
   const incoming = (Array.isArray(req.body?.rooms) ? req.body.rooms : []).slice(0, 30)
-    .map(r => ({ name: String(r.name || '').trim().slice(0, 60), length: Number(r.length), width: Number(r.width), height: Number(r.height) }))
+    .map(r => ({ name: String(r.name || '').trim().slice(0, 60), length: Number(r.length), width: Number(r.width), height: Number(r.height), finish: Object.fromEntries(['wall', 'wall_colour', 'floor_type', 'floor_main', 'floor_border', 'door'].filter(k => typeof r[k] === 'string' && r[k]).map(k => [k, r[k]])) }))
     .filter(r => r.name && r.length > 0 && r.width > 0);
   if (!incoming.length) throw new HttpError(400, 'No rooms with sizes to add');
   let lead = {}; try { lead = JSON.parse(db.prepare('SELECT data FROM web_leads WHERE enquiry_id = ?').get(e.id)?.data || '{}'); } catch { /* none */ }
@@ -946,7 +972,7 @@ api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: 
   const placeholder = r => /^OT \d+$/.test(r.name || '');
   let added = 0, updated = 0;
   for (const r of incoming) {
-    const size = { length: Math.round(r.length * 10) / 10, width: Math.round(r.width * 10) / 10, ...(r.height > 0 ? { height: Math.round(r.height * 10) / 10 } : {}) };
+    const size = { length: Math.round(r.length * 10) / 10, width: Math.round(r.width * 10) / 10, ...(r.height > 0 ? { height: Math.round(r.height * 10) / 10 } : {}), ...r.finish };
     const same = data.rooms.find(x => String(x.name || '').toUpperCase() === r.name.toUpperCase());
     if (same) { Object.assign(same, size); updated++; continue; }
     const spare = data.rooms.find(placeholder);

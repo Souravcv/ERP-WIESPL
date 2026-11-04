@@ -4,6 +4,9 @@
 import { h, api, toast, fail } from '../ui.js';
 import { guessRole } from '../plan-extract.js';
 import { roomSize, isOt, openOtRoom, quantitiesDialog } from './plan3d-extras.js';
+import { findRoom, finishMeshes, highlightMeshes, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
+import { OT_FINISHES, FLOOR_COLOURS } from '../ot3d.js';
+import { DOOR_TYPES, FLOOR_TYPES } from '../parts.js';
 
 const ROLES = [['wall', 'Wall'], ['glass', 'Glass'], ['column', 'Column'], ['door', 'Door'], ['furniture', 'Furniture / fittings'], ['floor', 'Lines on floor'], ['hide', 'Hide']];
 const COLOR = { wall: 0xe9edf2, glass: 0x9fd0f2, column: 0x707b8c, door: 0x9a5b22, furniture: 0x52627a, floor: 0x9aa7b6 };
@@ -75,8 +78,8 @@ export async function plan3dView(root, fileId) {
       api(`/files/${id}/plan`, { method: 'PUT', body: plan }).catch(() => {}); // next time it opens instantly
     }
   } catch (e) { status.textContent = `⚠ ${e.message}`; return; }
-  const meta = await api(`/files/${id}/meta`).catch(() => null);
-  build(stage, side, plan, meta);
+  const [meta, saved] = await Promise.all([api(`/files/${id}/meta`).catch(() => null), api(`/files/${id}/finishes`).catch(() => null)]);
+  build(stage, side, plan, meta, saved?.finishes || {}, id);
 }
 
 // premium look: solid walls with dark section-cut tops, soft shadows, studio light, tiled floor, raised furniture
@@ -84,7 +87,7 @@ const TINT = name => (/NICOMAC|PANEL|HPL|CLEAN ROOM/i.test(name) ? 0xdde6ef : /P
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
-function build(stage, side, plan, meta) {
+function build(stage, side, plan, meta, finishes, fileId) {
   const T = window.THREE;
   const roles = loadRoles();
   const roleOf = l => roles[l] || guessRole(l);
@@ -121,6 +124,11 @@ function build(stage, side, plan, meta) {
     for (let i = 0; i < 2600; i++) { g.fillStyle = `rgba(${Math.random() > 0.5 ? '255,255,255' : '90,95,105'},${Math.random() * 0.05})`; g.fillRect(Math.random() * 256, Math.random() * 256, 2, 2); }
     g.strokeStyle = 'rgba(60,70,85,.14)'; g.lineWidth = 2; for (let p = 0; p <= 256; p += 128) { g.beginPath(); g.moveTo(p, 0); g.lineTo(p, 256); g.moveTo(0, p); g.lineTo(256, p); g.stroke(); }
     const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 8; t.encoding = T.sRGBEncoding; return t; })(); // one tile = 0.6 m
+  // the OTs of the drawing: tap one to highlight it and choose its finishes
+  const finishLayer = new T.Group(), hlLayer = new T.Group(); scene.add(finishLayer, hlLayer);
+  let ots = [], selected = null, hoverOt = null, saveTimer = null;
+  const hoverGlow = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshBasicMaterial({ color: 0x2f9bff, transparent: true, opacity: 0.16, depthWrite: false }));
+  hoverGlow.rotation.x = -Math.PI / 2; hoverGlow.position.y = 0.025; hoverGlow.visible = false; scene.add(hoverGlow);
   let labels = [], center = [0, 0], size = 50, box = { w: 50, h: 50 }, occ = new Float32Array(0); // occ: solid walls in scene x / z, for views from inside
 
   // vertical faces for a list of plan segments (x1, y1, x2, y2 …), darker at the foot (reads as contact shadow)
@@ -224,8 +232,27 @@ function build(stage, side, plan, meta) {
       const el = h(`div.p3-label.k-${KIND(t.t)}`, h('b', lines[0]), lines[1] ? h('span', lines[1]) : null);
       labelsLayer.append(el);
       labels.push({ el, v: new T.Vector3(X(t.x + (t.w || 0) / 2), 0.15, Z(t.y)), t, room: ROOM_RE.test(t.t), size: roomSize(t.t) });
+      if (isOt(lines[0])) { el.classList.add('pick'); el.onclick = () => { const o = ots.find(x => x.t === t); if (o) selectOt(o); }; }
     }
     labels.sort((a, b) => Number(b.room) - Number(a.room));
+    { // the outline of every OT, from the walls, glass and doors around its label
+      const edges = [...(buckets.wall || []), ...(buckets.column || []), ...(buckets.glass || []), ...(buckets.door || [])];
+      const sc = new Float32Array(edges.length);
+      for (let i = 0; i < edges.length; i += 4) sc.set([X(edges[i]), Z(edges[i + 1]), X(edges[i + 2]), Z(edges[i + 3])], i);
+      const was = selected?.key; ots = [];
+      for (const t of plan.texts) {
+        const first = t.t.split('\n').filter(Boolean)[0] || '';
+        if (!inA(t.x, t.y) || !/[A-Za-z]{2,}/.test(first) || !isOt(first)) continue;
+        const key = `${Math.round(t.x * 10)}_${Math.round(t.y * 10)}`;
+        if (ots.some(o => o.key === key)) continue;
+        const sz = roomSize(t.t), cx = X(t.x + (t.w || 0) / 2), cz = Z(t.y), hh = t.h || 0.25;
+        const base = findRoom(sc, [[cx, cz], [cx, cz + hh * 3], [cx, cz - hh * 3]], sz ? [sz.w, sz.d] : null);
+        const o = { key, t, size: sz, name: sz?.name || first.trim(), base, walls: base.walls, v: new T.Vector3() };
+        placeOt(o); ots.push(o);
+      }
+      selected = ots.find(o => o.key === was) || null;
+    }
+    drawFinishes(); drawHighlight();
     drawSide();
   };
 
@@ -262,6 +289,83 @@ function build(stage, side, plan, meta) {
     fly(new T.Vector3(ex, 1.6, ez), new T.Vector3(ex + best.dx * 3, 1.4, ez + best.dz * 3), 1300);
   };
 
+  // the outline after any correction by hand (moved, or turned by 90°)
+  function placeOt(o) {
+    const a = finishes[o.key]?.adj || {}, b = o.base; let w = b.x1 - b.x0, d = b.z1 - b.z0;
+    if (a.turn) [w, d] = [d, w];
+    const cx = (b.x0 + b.x1) / 2 + (a.dx || 0), cz = (b.z0 + b.z1) / 2 + (a.dz || 0);
+    Object.assign(o, { x0: cx - w / 2, x1: cx + w / 2, z0: cz - d / 2, z1: cz + d / 2 }); o.v.set(cx, 0.15, cz);
+  }
+  const clearGroup = g => { for (const c of [...g.children]) { disposeGroup(c); g.remove(c); } };
+  const hasFinish = o => !!finishes[o.key]?.floor_main;
+  function drawFinishes() { clearGroup(finishLayer); for (const o of ots) if (hasFinish(o)) finishLayer.add(finishMeshes(T, o, finishes[o.key], OT_FINISHES, FLOOR_COLOURS, wallH)); }
+  function drawHighlight() { clearGroup(hlLayer); if (selected) hlLayer.add(highlightMeshes(T, selected, wallH)); }
+  const canSave = () => !!meta?.canWrite;
+  function saveSoon() {
+    if (!canSave()) return;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => api(`/files/${fileId}/finishes`, { method: 'PUT', body: { finishes } }).catch(fail), 500);
+  }
+  function selectOt(o, go = true) {
+    selected = o; current = labels.find(l => l.t === o.t) || o;
+    drawHighlight(); drawSide();
+    if (go) { const span = Math.max(o.x1 - o.x0, o.z1 - o.z0); fly(new T.Vector3(o.v.x + span * 0.6, span * 1.15 + wallH + 2, o.v.z + span * 0.95), new T.Vector3(o.v.x, 0, o.v.z), 1000); }
+    side.scrollTop = 0;
+  }
+  function setFinish(patch) {
+    const o = selected, old = finishes[o.key] || {}, next = { ...DEFAULT_FINISH, ...old, ...patch };
+    const F = OT_FINISHES.find(f => f.key === next.wall) || OT_FINISHES[0];
+    if (!F.colours.some(c => c[0] === next.wall_colour)) next.wall_colour = F.colours[0][0];
+    finishes[o.key] = next;
+    drawFinishes(); drawSide(); saveSoon();
+  }
+  function adjustOt(patch) {
+    const o = selected, f = finishes[o.key] ||= {}, a = f.adj || {};
+    f.adj = { dx: Math.round(((a.dx || 0) + (patch.dx || 0)) * 100) / 100, dz: Math.round(((a.dz || 0) + (patch.dz || 0)) * 100) / 100, turn: patch.turn ? !a.turn : !!a.turn };
+    placeOt(o); drawFinishes(); drawHighlight(); saveSoon();
+  }
+  async function sendChosen() {
+    const count = {}, FT = 3.28084, rooms = [];
+    for (const o of [...ots].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+      count[o.name] = (count[o.name] || 0) + 1;
+      if (!hasFinish(o)) continue;
+      const f = finishes[o.key], w = o.size?.w || o.x1 - o.x0, d = o.size?.d || o.z1 - o.z0;
+      rooms.push({ name: count[o.name] > 1 ? `${o.name} (${count[o.name]})` : o.name, length: w * FT, width: d * FT, height: wallH * FT, wall: BRIEF_NAMES.wall[f.wall], wall_colour: f.wall_colour, floor_type: BRIEF_NAMES.floor_type[f.floor_type], floor_main: f.floor_main, floor_border: f.floor_border, door: BRIEF_NAMES.door[f.door] });
+    }
+    if (!rooms.length) { toast('Choose the finishes of at least one OT first'); return; }
+    const r = await api(`/enquiries/${meta.record_id}/brief-rooms`, { method: 'POST', body: { rooms } });
+    toast(`Detailed form: ${r.added} OT(s) added, ${r.updated} updated`);
+  }
+  // the box at the top of the side panel: what the chosen OT is made of
+  function finishBox() {
+    if (!selected) return h('div.p3-box.p3-pickbox', h('b', '👆 Choose an OT'), h('p.muted', ots.length ? `Tap one of the ${ots.length} operation theatres in the 3D to highlight it and choose its walls and floor.` : 'No operation theatre labels found in this part of the drawing.'));
+    const o = selected, f = { ...DEFAULT_FINISH, ...finishes[o.key] }, on = hasFinish(o);
+    const hex = n => `#${Number(n).toString(16).padStart(6, '0')}`;
+    const chips = (list, val, key) => h('div.p3-chips', list.map(([v, l]) => h('button.p3-chip' + (on && val === v ? '.on' : ''), { type: 'button', onclick: () => setFinish({ [key]: v }) }, l)));
+    const F = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0];
+    const sws = (val, key) => h('div.p3-sws', FLOOR_COLOURS.map(([n, c]) => h('button.p3-sw' + (on && val === n ? '.on' : ''), { type: 'button', title: n, 'aria-label': n, style: { background: c }, onclick: () => setFinish({ [key]: n }) })));
+    const wd = `${(o.x1 - o.x0).toFixed(1)} × ${(o.z1 - o.z0).toFixed(1)} m`;
+    const step = 0.25;
+    return h('div.p3-box.p3-pickbox.on',
+      h('div.p3-pickhead', h('b', `🏥 ${o.name}`), h('button.p3-x', { type: 'button', title: 'Close', 'aria-label': 'Close', onclick: () => { selected = null; drawHighlight(); drawSide(); } }, '×')),
+      h('p.muted', o.walls ? wd : `${wd} · outline from the label's size: check it below`),
+      h('small.p3-cap', 'Wall panels'), chips(OT_FINISHES.map(x => [x.key, x.name]), f.wall, 'wall'),
+      F.colours.length > 1 ? [h('small.p3-cap', 'Wall colour'), h('div.p3-sws', F.colours.map(([n, c]) => h('button.p3-sw' + (on && f.wall_colour === n ? '.on' : ''), { type: 'button', title: n, 'aria-label': n, style: { background: hex(c) }, onclick: () => setFinish({ wall_colour: n }) })))] : null,
+      h('small.p3-cap', 'Flooring'), chips(FLOOR_TYPES.map(x => [x[0], x[1]]), f.floor_type, 'floor_type'),
+      h('small.p3-cap', `Floor colour${on ? ` · ${f.floor_main}` : ''}`), sws(f.floor_main, 'floor_main'),
+      h('small.p3-cap', `Floor border${on ? ` · ${f.floor_border}` : ''}`), sws(f.floor_border, 'floor_border'),
+      h('small.p3-cap', 'Door'), chips(DOOR_TYPES.map(x => [x[0], x[1]]), f.door, 'door'),
+      h('div.toolbar', { style: { marginTop: '10px' } },
+        h('button.btn.small.primary', { type: 'button', onclick: () => openOtRoom(o.size || { name: o.name, w: o.x1 - o.x0, d: o.z1 - o.z0 }, on ? f : null).catch(fail) }, '🏥 Open as WIESPL OT'),
+        h('button.btn.small', { type: 'button', onclick: () => standIn(o) }, '👁 Stand inside')),
+      on ? h('div.toolbar', h('button.btn.small', { type: 'button', onclick: () => { for (const x of ots) finishes[x.key] = { ...f, adj: finishes[x.key]?.adj }; drawFinishes(); drawSide(); saveSoon(); toast(`Applied to all ${ots.length} OTs`); } }, 'Same for all OTs'),
+        h('button.btn.small', { type: 'button', onclick: () => { finishes[o.key] = { adj: finishes[o.key]?.adj }; drawFinishes(); drawSide(); saveSoon(); } }, 'Remove finishes')) : null,
+      meta?.entity === 'enquiries' && canSave() ? h('button.btn.small.p3-otbtn', { type: 'button', onclick: () => sendChosen().catch(fail) }, '➕ Send chosen OTs to the detailed form') : null,
+      canSave() ? null : h('p.muted', 'View only: your login cannot save these choices.'),
+      h('details.p3-adjust', h('summary', 'Outline not on the walls? Adjust it'),
+        h('div.toolbar', ...[['←', { dx: -step }], ['→', { dx: step }], ['↑', { dz: -step }], ['↓', { dz: step }], ['↻ Turn', { turn: true }]].map(([l, p]) => h('button.btn.small', { type: 'button', onclick: () => adjustOt(p) }, l)))));
+  }
+
   async function openQuantities() {
     const A = plan.areas[areaIdx] || { x0: -1e9, y0: -1e9, x1: 1e9, y1: 1e9 };
     const seen = new Set(), rooms = [];
@@ -283,7 +387,7 @@ function build(stage, side, plan, meta) {
   // side panel: views, rooms, heights, layers
   function drawSide() {
     const rooms = labels.filter(l => l.room);
-    const roomSel = h('select', { onchange: e => { const l = rooms[Number(e.target.value)]; if (l) goTo(l); } }, h('option', { value: '' }, `Go to a room (${rooms.length})…`),
+    const roomSel = h('select', { onchange: e => { const l = rooms[Number(e.target.value)]; if (!l) return; const o = ots.find(x => x.t === l.t); if (o) selectOt(o); else { selected = null; drawHighlight(); goTo(l); } } }, h('option', { value: '' }, `Go to a room (${rooms.length})…`),
       rooms.map((l, i) => h('option', { value: i, ...(l === current ? { selected: true } : {}) }, l.t.t.split('\n')[0])));
     const num = (val, min, max, step, set) => h('input', { type: 'number', min, max, step, value: val, style: { width: '76px' }, onchange: e => { set(Math.max(min, Math.min(max, Number(e.target.value) || 0))); rebuild(); } });
     const layerRows = Object.entries(plan.layers).sort((a, b) => b[1].segs.length - a[1].segs.length).map(([lname, L]) => {
@@ -292,10 +396,11 @@ function build(stage, side, plan, meta) {
       return h('tr', h('td.p3-lname', { title: lname }, lname), h('td.num', Math.round(L.segs.length / 4)), h('td', sel));
     });
     side.replaceChildren(
+      finishBox(),
       h('div.p3-box', h('b', 'View'), h('div.toolbar', h('button.btn.small', { onclick: views.persp }, '3D'), h('button.btn.small', { onclick: views.top }, 'Plan (top)'),
         h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names')),
         roomSel, current ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
-        current && isOt(current.t.t) ? h('button.btn.small.p3-otbtn', { onclick: () => openOtRoom(current.size || { name: current.t.t.split('\n')[0], w: 6, d: 6 }).catch(fail) }, `🏥 Open as WIESPL OT${current.size ? ` · ${Math.round(current.size.w * 10) / 10} × ${Math.round(current.size.d * 10) / 10} m` : ''}`) : null),
+        current && !selected && isOt(current.t.t) ? h('button.btn.small.p3-otbtn', { onclick: () => { const o = ots.find(x => x.t === current.t); openOtRoom(current.size || { name: current.t.t.split('\n')[0], w: 6, d: 6 }, o && hasFinish(o) ? finishes[o.key] : null).catch(fail); } }, `🏥 Open as WIESPL OT${current.size ? ` · ${Math.round(current.size.w * 10) / 10} × ${Math.round(current.size.d * 10) / 10} m` : ''}`) : null),
       h('div.p3-box', h('b', 'Quantities'), h('p.muted', 'Floor, wall panels, ceiling and coving per OT, from the room sizes in the drawing.'), h('button.btn.small', { onclick: () => openQuantities().catch(fail) }, '📐 Quantities from the drawing')),
       h('div.p3-box', h('b', 'Heights'), h('div.p3-row', h('span', 'Walls'), num(wallH, 1, 10, 0.1, v => { wallH = v; }), h('span', 'm')),
         h('div.p3-row', h('span', 'Furniture'), num(furnH, 0, 2, 0.1, v => { furnH = v; }), h('span', 'm (0 = flat)'))),
@@ -309,11 +414,38 @@ function build(stage, side, plan, meta) {
   const ro = new ResizeObserver(resize); ro.observe(stage);
   rebuild(); resize();
   camera.position.copy(hero()); controls.target.set(0, 0, 0);
+  // tap an OT in the 3D: the ray meets the floor first, then the wall tops
+  {
+    const ray = new T.Raycaster(), ptr = new T.Vector2(), hit = new T.Vector3(), el = renderer.domElement;
+    const roomAt = (x, z) => ots.filter(o => x > o.x0 && x < o.x1 && z > o.z0 && z < o.z1).sort((a, b) => (a.x1 - a.x0) * (a.z1 - a.z0) - (b.x1 - b.x0) * (b.z1 - b.z0))[0] || null;
+    const under = e => {
+      const r = el.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+      ray.setFromCamera(ptr, camera);
+      for (const y of [0, wallH]) if (ray.ray.intersectPlane(new T.Plane(new T.Vector3(0, 1, 0), -y), hit)) { const o = roomAt(hit.x, hit.z); if (o) return o; }
+      return null;
+    };
+    let down = null;
+    el.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; });
+    el.addEventListener('pointerup', e => {
+      if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
+      const o = under(e);
+      if (o) selectOt(o); else if (selected) { selected = null; drawHighlight(); drawSide(); }
+    });
+    el.addEventListener('pointermove', e => {
+      if (e.buttons || e.pointerType !== 'mouse') return;
+      const o = under(e);
+      if (o === hoverOt) return;
+      hoverOt = o; el.style.cursor = o ? 'pointer' : '';
+      hoverGlow.visible = !!o && o !== selected;
+      if (o) { hoverGlow.position.set(o.v.x, 0.025, o.v.z); hoverGlow.scale.set(o.x1 - o.x0, o.z1 - o.z0, 1); }
+    });
+  }
   const v = new T.Vector3();
   const loop = now => {
     if (!stage.isConnected) { ro.disconnect(); renderer.dispose(); return; }
     requestAnimationFrame(loop);
     if (anim) { const k = Math.min(1, (now - anim.start) / anim.ms), e = k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2; camera.position.lerpVectors(anim.p0, anim.p, e); controls.target.lerpVectors(anim.t0, anim.t, e); if (k >= 1) anim = null; }
+    hlLayer.children[0]?.userData.pulse(now);
     controls.update(); renderer.render(scene, camera);
     // labels never overlap: room names are placed first, the rest only where there is space
     const W = stage.clientWidth, Hh = stage.clientHeight, placed = [];

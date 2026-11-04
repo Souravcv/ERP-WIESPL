@@ -26,7 +26,7 @@ const r1 = v => Math.round(v * 10) / 10;
 
 // ---------------------------------------------------------------- OT from the drawing → WIESPL OT 3D
 let cssLoaded = false;
-export async function openOtRoom(room) {
+export async function openOtRoom(room, finish = null) {
   if (!cssLoaded) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'css/ot3d.css'; document.head.append(l); cssLoaded = true; }
   const [{ mount3D }, { PART_UI }] = await Promise.all([import('../ot3d.js'), import('../parts.js')]);
   const box = h('div.eq-3d', h('div.loading', 'Loading the OT…'));
@@ -41,7 +41,7 @@ export async function openOtRoom(room) {
   const features = ['laf', 'hepa', 'pendant_surgeon', 'pendant_anaes', 'otlight', 'control', 'automation', 'pressure', 'doors', 'xray', 'passbox', 'storage', 'scrub', 'panels', 'flooring', 'ahu', 'shrm'];
   const info = Object.fromEntries(Object.entries(PART_UI).map(([k, p]) => [k, { label: p.title, hint: p.text, icon: p.icon }]));
   let viewer = null;
-  try { viewer = await mount3D(box, { types: ['ot'], features, info, room: { w: room.w, d: room.d } }); } catch (e) { box.replaceChildren(h('p', `⚠ ${e.message}`)); return; }
+  try { viewer = await mount3D(box, { types: ['ot'], features, info, room: { w: room.w, d: room.d }, ...(finish ? { wall: { finish: finish.wall, colour: finish.wall_colour }, floor: { main: finish.floor_main, border: finish.floor_border }, doorType: finish.door } : {}) }); } catch (e) { box.replaceChildren(h('p', `⚠ ${e.message}`)); return; }
   if (!wrap.isConnected) { viewer?.dispose?.(); return; }
   bar.replaceChildren(...(viewer.controls || []).map(c => { const b = h('button.btn.small', { type: 'button', onclick: () => { const on = c.run(); if (on !== undefined) b.classList.toggle('primary', !!on); } }, c.label); if (c.pressed) b.classList.add('primary'); c.ref?.(b); return b; }));
 }

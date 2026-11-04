@@ -98,4 +98,8 @@ export default {
   'Auto: 001/2026-27 per type if blank': 'रिकामे असल्यास आपोआप: प्रकारानुसार 001/2026-27', 'For Adjustment use a negative number to reduce stock': 'समायोजनासाठी स्टॉक कमी करायला ऋण संख्या वापरा', 'Taken from the item if blank': 'रिकामे असल्यास वस्तूवरून घेतले',
   'Required for Inward; defaults to the item price otherwise': 'आवकसाठी आवश्यक; अन्यथा वस्तूची किंमत', "Where this lot is kept (the item's store location if blank)": 'हा लॉट कोठे ठेवला आहे (रिकामे असल्यास वस्तूचे स्टोअरमधील ठिकाण)',
   'Form progress': 'फॉर्मची प्रगती',
+  // OT finishes in the CAD 3D
+  '👆 Choose an OT': '👆 OT निवडा', 'Wall panels': 'वॉल पॅनेल्स', 'Wall colour': 'भिंतीचा रंग', 'Floor colour': 'फरशीचा रंग', 'Floor border': 'फरशीची बॉर्डर', 'Same for all OTs': 'सर्व OT साठी हेच',
+  'Remove finishes': 'फिनिश काढा', 'Choose the finishes of at least one OT first': 'आधी किमान एका OT चे फिनिश निवडा', 'View only: your login cannot save these choices.': 'फक्त पाहणे: तुमच्या लॉगिनला या निवडी जतन करता येत नाहीत.',
+  'Outline not on the walls? Adjust it': 'रेषा भिंतीवर नाही? जुळवा', 'Open as WIESPL OT': 'WIESPL OT म्हणून उघडा', 'Send chosen OTs to the detailed form': 'निवडलेले OT सविस्तर फॉर्मला पाठवा',
 };
