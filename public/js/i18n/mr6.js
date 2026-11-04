@@ -101,5 +101,5 @@ export default {
   // OT finishes in the CAD 3D
   '👆 Choose an OT': '👆 OT निवडा', 'Wall panels': 'वॉल पॅनेल्स', 'Wall colour': 'भिंतीचा रंग', 'Floor colour': 'फरशीचा रंग', 'Floor border': 'फरशीची बॉर्डर', 'Same for all OTs': 'सर्व OT साठी हेच',
   'Remove finishes': 'फिनिश काढा', 'Choose the finishes of at least one OT first': 'आधी किमान एका OT चे फिनिश निवडा', 'View only: your login cannot save these choices.': 'फक्त पाहणे: तुमच्या लॉगिनला या निवडी जतन करता येत नाहीत.',
-  'Outline not on the walls? Adjust it': 'रेषा भिंतीवर नाही? जुळवा', 'Open as WIESPL OT': 'WIESPL OT म्हणून उघडा', 'Send chosen OTs to the detailed form': 'निवडलेले OT सविस्तर फॉर्मला पाठवा',
+  'Choose the finishes': 'फिनिश निवडा', 'No finishes chosen yet.': 'अजून फिनिश निवडले नाही.', 'Open this OT in 3D': 'हा OT 3D मध्ये उघडा', 'Send chosen OTs to the detailed form': 'निवडलेले OT सविस्तर फॉर्मला पाठवा',
 };

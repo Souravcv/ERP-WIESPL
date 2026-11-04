@@ -1,5 +1,5 @@
-// Rooms in the CAD drawing viewer: finds the outline of an OT from the walls around its label, and shows the
-// finishes chosen for it (floor, border, wall panels) inside the 3D drawing.
+// Rooms in the CAD drawing viewer: finds the outline of an OT from the walls around its label, for tapping and
+// highlighting it. Its finishes are chosen in its own 3D (openOtStudio in plan3d-extras.js).
 
 // occ: room edges in scene coordinates (x1, z1, x2, z2 …: walls, columns, glass and doors, so a door gap closes the room);
 // points: [x, z] places inside the room's label to start from; want: [a, b] size in metres from the label, or null.
@@ -96,29 +96,6 @@ export const BRIEF_NAMES = {
   floor_type: { conductive: 'Antistatic conductive vinyl', homogeneous: 'Homogeneous vinyl' },
   door: { sliding: 'Hermetic sliding (automatic)', swing: 'Single leaf swing', autoswing: 'Automatic swing' },
 };
-
-// floor with its border and the four wall panels of one room, as a group in scene coordinates
-export function finishMeshes(T, room, f, finishes, floors, wallH) {
-  const g = new T.Group();
-  const { x0, x1, z0, z1 } = room, w = x1 - x0, d = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-  const hex = n => (floors.find(c => c[0] === n) || floors[0])[1];
-  const plane = (pw, pd, y, color) => {
-    const m = new T.Mesh(new T.PlaneGeometry(pw, pd), new T.MeshStandardMaterial({ color: new T.Color(color).multiplyScalar(0.62), roughness: 0.5, envMapIntensity: 0.08 }));
-    m.rotation.x = -Math.PI / 2; m.position.set(cx, y, cz); m.receiveShadow = true; g.add(m); return m;
-  };
-  const edge = Math.min(0.35, Math.min(w, d) / 6);
-  plane(w, d, 0.012, hex(f.floor_border)); plane(w - edge * 2, d - edge * 2, 0.016, hex(f.floor_main));
-  const F = finishes.find(x => x.key === f.wall) || finishes[0], C = F.colours.find(c => c[0] === f.wall_colour) || F.colours[0];
-  const steel = finishes[0], glassy = { color: C[1], metalness: F.metal, roughness: Math.max(F.rough, 0.3), envMapIntensity: F.metal > 0.5 ? 1 : 0.1 };
-  const steelM = () => new T.MeshStandardMaterial({ color: steel.colours[0][1], metalness: steel.metal, roughness: steel.rough, envMapIntensity: 1 });
-  const box = (bw, bd, y0, y1, x, z, mat) => { const m = new T.Mesh(new T.BoxGeometry(bw, y1 - y0, bd), mat); m.position.set(x, (y0 + y1) / 2, z); g.add(m); };
-  const T_ = 0.03, dado = Math.min(1.2, wallH * 0.45);
-  for (const [bw, bd, x, z] of [[w, T_, cx, z0 + T_ / 2], [w, T_, cx, z1 - T_ / 2], [T_, d, x0 + T_ / 2, cz], [T_, d, x1 - T_ / 2, cz]]) {
-    if (F.combo) { box(bw, bd, 0, dado, x, z, steelM()); box(bw, bd, dado, wallH, x, z, new T.MeshStandardMaterial(glassy)); }
-    else box(bw, bd, 0, wallH, x, z, new T.MeshStandardMaterial(glassy));
-  }
-  return g;
-}
 
 // the glow around the chosen room: bright rail along the wall tops and a soft floor; pulse(t) makes it breathe
 export function highlightMeshes(T, room, wallH) {

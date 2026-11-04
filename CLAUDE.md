@@ -29,8 +29,9 @@ memory do not move between computers).
 - Marathi: `js/i18n.js` translates screen text through the dictionary `js/i18n/mr*.js` (English text → Marathi, plus
   `PATTERNS` for texts with numbers). New screen text stays English until it is added there. Typed data, inputs and printed
   documents (`.doc`, `#print-root`) are never translated. 🌐 button in the top bar / login; the choice is kept per browser.
-- OT finishes in the CAD 3D: tap an OT → `js/views/plan3d-rooms.js` finds its outline (wall lines at the label's exact size, else rays, else the label's size; movable by hand), shows the
-  highlight and the chosen walls / floor. Saved per drawing in `data/uploads/plans/<id>.finishes.json` (`/api/files/:id/finishes`), sent to the detailed form by `/enquiries/:id/brief-rooms`.
+- OT finishes in the CAD 3D: tap an OT → `js/views/plan3d-rooms.js` finds its outline for the tap and the highlight (wall lines at the label's exact size, else rays, else the label's size) →
+  `openOtStudio` (`plan3d-extras.js`) opens that OT alone in the WIESPL OT 3D at its real size, finishes chosen beside it; nothing is painted into the drawing (the owner's choice). Saved per drawing in
+  `data/uploads/plans/<id>.finishes.json` (`/api/files/:id/finishes`), sent to the detailed form by `/enquiries/:id/brief-rooms`.
 - Company stamp and signatures: `server/signatures.js`, `js/signs.js`; printed only where an approval exists (`js/views/print.js`).
 
 ## Decisions already made (do not undo without asking)

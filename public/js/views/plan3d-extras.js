@@ -1,9 +1,11 @@
 // Extras for the CAD drawing viewer (plan3d.js):
 // - room sizes read from the drawing's labels ("OPERATION THEATER 01  7722 x 6692 MM")
-// - an OT from the drawing opened as the detailed WIESPL OT 3D at its real size
+// - an OT from the drawing opened in its own WIESPL OT 3D at its real size, with its finishes chosen beside it
 // - quantities per OT (floor, wall panels, ceiling, coving) the way the WIESPL basis of design counts them,
 //   copied to Excel or sent to the enquiry's detailed requirement form
 import { h, api, toast, fail, modal } from '../ui.js';
+import { mount3D, OT_FINISHES, FLOOR_COLOURS } from '../ot3d.js';
+import { PART_UI, DOOR_TYPES, FLOOR_TYPES } from '../parts.js';
 
 const FT = 3.28084;
 
@@ -24,26 +26,61 @@ const ft = m => m * FT;
 const fmtFt = m => { const t = Math.round(ft(m) * 12); return `${Math.floor(t / 12)}'-${t % 12}"`; };
 const r1 = v => Math.round(v * 10) / 10;
 
-// ---------------------------------------------------------------- OT from the drawing → WIESPL OT 3D
+// ---------------------------------------------------------------- one OT from the drawing, in its own 3D
+const hex6 = n => `#${Number(n).toString(16).padStart(6, '0')}`;
+export function finishText(f) {
+  const F = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0];
+  return [`${F.name}${F.colours.length > 1 ? ` · ${f.wall_colour}` : ''}`, `${(FLOOR_TYPES.find(x => x[0] === f.floor_type) || FLOOR_TYPES[0])[1]} · ${f.floor_main} with ${f.floor_border} border`, (DOOR_TYPES.find(x => x[0] === f.door) || DOOR_TYPES[0])[1]];
+}
 let cssLoaded = false;
-export async function openOtRoom(room, finish = null) {
+// room: { name, w, d } in metres; finish: the current choices; on: { change(finish), all(finish), send(), canSave }
+export async function openOtStudio(room, finish, on = {}) {
   if (!cssLoaded) { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = 'css/ot3d.css'; document.head.append(l); cssLoaded = true; }
-  const [{ mount3D }, { PART_UI }] = await Promise.all([import('../ot3d.js'), import('../parts.js')]);
+  const f = { ...finish };
   const box = h('div.eq-3d', h('div.loading', 'Loading the OT…'));
-  const bar = h('div.toolbar.p3-otbar');
-  const close = () => { viewer?.dispose?.(); wrap.remove(); document.removeEventListener('keydown', esc); };
+  const bar = h('div.toolbar.p3-otbar'), panel = h('div.p3-studio-side');
+  let viewer = null;
+  const close = () => { viewer?.dispose?.(); wrap.remove(); document.removeEventListener('keydown', esc); on.close?.(); };
   const esc = e => { if (e.key === 'Escape') close(); };
-  const wrap = h('div.vmodal', { onclick: e => { if (e.target === wrap) close(); } },
-    h('div.vmodal-in',
-      h('div.p3-othead', h('b', `🏥 ${room.name}`), h('span', `${r1(room.w)} × ${r1(room.d)} m · ${fmtFt(room.w)} × ${fmtFt(room.d)} · from the drawing`)),
-      box, bar, h('button.vmodal-x', { type: 'button', 'aria-label': 'Close', onclick: () => close() }, '×')));
-  document.body.append(wrap); document.addEventListener('keydown', esc);
+  const wrap = h('div.p3-studio',
+    h('div.p3-studio-main',
+      h('div.p3-othead', h('b', `🏥 ${room.name}`), h('span', `${r1(room.w)} × ${r1(room.d)} m · ${fmtFt(room.w)} × ${fmtFt(room.d)} · from the drawing`), h('button.p3-x', { type: 'button', 'aria-label': 'Close', title: 'Close', onclick: () => close() }, '×')),
+      box, bar),
+    panel);
+  (document.fullscreenElement || document.body).append(wrap); document.addEventListener('keydown', esc);
+  const set = patch => {
+    Object.assign(f, patch);
+    const F = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0];
+    if (!F.colours.some(c => c[0] === f.wall_colour)) f.wall_colour = F.colours[0][0];
+    viewer?.setFinish?.(f.wall, f.wall_colour); viewer?.setFloor?.(f.floor_main, f.floor_border); viewer?.setDoor?.({ type: f.door });
+    on.change?.({ ...f }); draw();
+  };
+  const chips = (list, val, key) => h('div.p3-chips', list.map(([v, l]) => h('button.p3-chip' + (val === v ? '.on' : ''), { type: 'button', onclick: () => set({ [key]: v }) }, l)));
+  const sws = (list, val, key) => h('div.p3-sws', list.map(([n, c]) => h('button.p3-sw' + (val === n ? '.on' : ''), { type: 'button', title: n, 'aria-label': n, style: { background: c }, onclick: () => set({ [key]: n }) })));
+  function draw() {
+    const F = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0];
+    panel.replaceChildren(
+      h('b', 'Choose the finishes'),
+      h('small.p3-cap', 'Wall panels'), chips(OT_FINISHES.map(x => [x.key, x.name]), f.wall, 'wall'),
+      F.colours.length > 1 ? [h('small.p3-cap', `Wall colour · ${f.wall_colour}`), sws(F.colours.map(([n, c]) => [n, hex6(c)]), f.wall_colour, 'wall_colour')] : null,
+      h('small.p3-cap', 'Flooring'), chips(FLOOR_TYPES.map(x => [x[0], x[1]]), f.floor_type, 'floor_type'),
+      h('small.p3-cap', `Floor colour · ${f.floor_main}`), sws(FLOOR_COLOURS, f.floor_main, 'floor_main'),
+      h('small.p3-cap', `Floor border · ${f.floor_border}`), sws(FLOOR_COLOURS, f.floor_border, 'floor_border'),
+      h('small.p3-cap', 'Door'), chips(DOOR_TYPES.map(x => [x[0], x[1]]), f.door, 'door'),
+      on.canSave ? null : h('p.muted', 'View only: your login cannot save these choices.'),
+      h('div.toolbar', { style: { marginTop: '12px' } },
+        on.all ? h('button.btn.small', { type: 'button', onclick: () => on.all({ ...f }) }, 'Same for all OTs') : null,
+        on.send ? h('button.btn.small.primary', { type: 'button', onclick: () => on.send().catch(fail) }, '➕ Send chosen OTs to the detailed form') : null));
+  }
+  draw();
   const features = ['laf', 'hepa', 'pendant_surgeon', 'pendant_anaes', 'otlight', 'control', 'automation', 'pressure', 'doors', 'xray', 'passbox', 'storage', 'scrub', 'panels', 'flooring', 'ahu', 'shrm'];
   const info = Object.fromEntries(Object.entries(PART_UI).map(([k, p]) => [k, { label: p.title, hint: p.text, icon: p.icon }]));
-  let viewer = null;
-  try { viewer = await mount3D(box, { types: ['ot'], features, info, room: { w: room.w, d: room.d }, ...(finish ? { wall: { finish: finish.wall, colour: finish.wall_colour }, floor: { main: finish.floor_main, border: finish.floor_border }, doorType: finish.door } : {}) }); } catch (e) { box.replaceChildren(h('p', `⚠ ${e.message}`)); return; }
+  try {
+    viewer = await mount3D(box, { types: ['ot'], features, info, room: { w: room.w, d: room.d }, wall: { finish: f.wall, colour: f.wall_colour }, floor: { main: f.floor_main, border: f.floor_border }, doorType: f.door,
+      onFinish: ({ wall, floor }) => set({ wall: wall.finish, wall_colour: wall.colour, floor_main: floor.main, floor_border: floor.border }) }); // tapping a wall or the floor in the 3D chooses too
+  } catch (e) { box.replaceChildren(h('p', `⚠ ${e.message}`)); return; }
   if (!wrap.isConnected) { viewer?.dispose?.(); return; }
-  bar.replaceChildren(...(viewer.controls || []).map(c => { const b = h('button.btn.small', { type: 'button', onclick: () => { const on = c.run(); if (on !== undefined) b.classList.toggle('primary', !!on); } }, c.label); if (c.pressed) b.classList.add('primary'); c.ref?.(b); return b; }));
+  bar.replaceChildren(...(viewer.controls || []).map(c => { const b = h('button.btn.small', { type: 'button', onclick: () => { const v = c.run(); if (v !== undefined) b.classList.toggle('primary', !!v); } }, c.label); if (c.pressed) b.classList.add('primary'); c.ref?.(b); return b; }));
 }
 
 // ---------------------------------------------------------------- quantities from the drawing
