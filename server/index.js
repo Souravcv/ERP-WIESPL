@@ -46,6 +46,7 @@ const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES } from '../public/js/schema.js';
 import * as roles from './roles.js';
+import { planFile, isCad, preparePlan, prepareMissingPlans } from './plans.js';
 import { fyOf } from '../public/js/calc.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -894,7 +895,9 @@ api.delete('/roles/:name', requireRole(), wrap(req => { roles.deleteRole(req.par
 api.get('/attachments/:entity/:id', wrap(req => { viewable(req); return roles.listAttachments(req.params.entity, req.params.id); }));
 api.post('/attachments/:entity/:id', express.raw({ type: () => true, limit: '200mb' }), wrap(req => {
   if (!canWrite(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have permission to add files here');
-  return roles.saveAttachment(req.params.entity, req.params.id, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user);
+  const saved = roles.saveAttachment(req.params.entity, req.params.id, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user);
+  if (isCad(saved.filename)) preparePlan(roles.attachmentFile(saved.id)); // ready before anyone opens it in 3D
+  return saved;
 }));
 api.get('/files/:id', wrap((req, res) => {
   const a = roles.attachmentFile(req.params.id);
@@ -904,13 +907,14 @@ api.get('/files/:id', wrap((req, res) => {
   res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
   res.sendFile(a.full);
 }));
-// 3D plan of a CAD drawing: the browser reads the DWG once and saves the result here, so it opens instantly next time
-const planCache = id => path.join(DATA_DIR, 'uploads', 'plans', `${Number(id)}.json`);
+// 3D plan of a CAD drawing: read on the server at upload (plans.js); a drawing not read yet is waited for here
+const planCache = planFile;
 const cadFile = id => { const a = roles.attachmentFile(id); if (!/\.(dwg|dxf)$/i.test(a.filename)) throw new HttpError(400, 'Only DWG / DXF drawings can be shown in 3D'); return a; };
-api.get('/files/:id/plan', wrap((req, res) => {
+api.get('/files/:id/plan', wrap(async (req, res) => {
   const a = cadFile(req.params.id);
   if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
   const f = planCache(a.id);
+  if (!fs.existsSync(f)) await Promise.race([preparePlan(a), new Promise(ok => setTimeout(ok, 120000))]);
   if (!fs.existsSync(f)) throw new HttpError(404, 'Not converted yet');
   res.type('application/json').sendFile(f);
 }));
@@ -1133,6 +1137,7 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
+  setTimeout(prepareMissingPlans, 5000);
   const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
   console.log(`\n  WIESPL CRM running`);
   console.log(`    This PC:        http://localhost:${PORT}`);

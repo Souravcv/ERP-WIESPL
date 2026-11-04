@@ -101,5 +101,5 @@ export default {
   // OT finishes in the CAD 3D
   '👆 Choose an OT': '👆 OT निवडा', 'Wall panels': 'वॉल पॅनेल्स', 'Wall colour': 'भिंतीचा रंग', 'Floor colour': 'फरशीचा रंग', 'Floor border': 'फरशीची बॉर्डर', 'Same for all OTs': 'सर्व OT साठी हेच',
   'Remove finishes': 'फिनिश काढा', 'Choose the finishes of at least one OT first': 'आधी किमान एका OT चे फिनिश निवडा', 'View only: your login cannot save these choices.': 'फक्त पाहणे: तुमच्या लॉगिनला या निवडी जतन करता येत नाहीत.',
-  'Choose the finishes': 'फिनिश निवडा', 'No finishes chosen yet.': 'अजून फिनिश निवडले नाही.', 'Open this OT in 3D': 'हा OT 3D मध्ये उघडा', 'Send chosen OTs to the detailed form': 'निवडलेले OT सविस्तर फॉर्मला पाठवा',
+  'Choose the finishes': 'फिनिश निवडा', 'Open this OT in 3D': 'हा OT 3D मध्ये उघडा', 'Finishes chosen': 'फिनिश निवडले', 'Operation theatre: tap to open in 3D': 'ऑपरेशन थिएटर: 3D मध्ये उघडण्यासाठी टॅप करा', 'Show it in the drawing': 'ड्रॉइंगमध्ये दाखवा', 'Marked blue in the drawing. Press 🧊 3D to open one and choose its walls and floor.': 'ड्रॉइंगमध्ये निळ्या रंगात दाखवले. एखादा उघडून भिंती व फरशी निवडण्यासाठी 🧊 3D दाबा.', 'Preparing the drawing…': 'ड्रॉइंग तयार होत आहे…', 'Send chosen OTs to the detailed form': 'निवडलेले OT सविस्तर फॉर्मला पाठवा',
 };

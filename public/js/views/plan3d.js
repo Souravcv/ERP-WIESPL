@@ -4,7 +4,7 @@
 import { h, api, toast, fail } from '../ui.js';
 import { guessRole } from '../plan-extract.js';
 import { roomSize, isOt, openOtStudio, finishText, quantitiesDialog } from './plan3d-extras.js';
-import { findRoom, highlightMeshes, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
+import { findRoom, highlightMeshes, otMark, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
 
 const ROLES = [['wall', 'Wall'], ['glass', 'Glass'], ['column', 'Column'], ['door', 'Door'], ['furniture', 'Furniture / fittings'], ['floor', 'Lines on floor'], ['hide', 'Hide']];
 const COLOR = { wall: 0xe9edf2, glass: 0x9fd0f2, column: 0x707b8c, door: 0x9a5b22, furniture: 0x52627a, floor: 0x9aa7b6 };
@@ -66,6 +66,7 @@ export async function plan3dView(root, fileId) {
   let plan;
   try {
     await loadThree();
+    status.textContent = 'Preparing the drawing…';
     plan = await api(`/files/${id}/plan`).catch(() => null);
     if (!plan) {
       status.textContent = 'Downloading the drawing…';
@@ -100,6 +101,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = T.PCFSoftShadowMap;
   renderer.shadowMap.autoUpdate = false; // the building does not move: shadows are drawn once per rebuild
   stage.append(renderer.domElement);
+  stage.append(h('div.p3-legend', h('span.b'), 'Operation theatre: tap to open in 3D', h('span.g'), 'Finishes chosen'));
   const labelsLayer = h('div.p3-labels'); stage.append(labelsLayer);
   const scene = new T.Scene();
   { // soft studio reflections (glass, panels)
@@ -123,7 +125,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
     g.strokeStyle = 'rgba(60,70,85,.14)'; g.lineWidth = 2; for (let p = 0; p <= 256; p += 128) { g.beginPath(); g.moveTo(p, 0); g.lineTo(p, 256); g.moveTo(0, p); g.lineTo(256, p); g.stroke(); }
     const t = new T.CanvasTexture(c); t.wrapS = t.wrapT = T.RepeatWrapping; t.anisotropy = 8; t.encoding = T.sRGBEncoding; return t; })(); // one tile = 0.6 m
   // the OTs of the drawing: tap one to highlight it and open it in its own 3D
-  const hlLayer = new T.Group(); scene.add(hlLayer);
+  const hlLayer = new T.Group(), markLayer = new T.Group(); scene.add(hlLayer, markLayer);
   let ots = [], selected = null, hoverOt = null, saveTimer = null;
   const hoverGlow = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshBasicMaterial({ color: 0x2f9bff, transparent: true, opacity: 0.16, depthWrite: false }));
   hoverGlow.rotation.x = -Math.PI / 2; hoverGlow.position.y = 0.025; hoverGlow.visible = false; scene.add(hoverGlow);
@@ -227,12 +229,14 @@ function build(stage, side, plan, meta, finishes, fileId) {
     if (showLabels) for (const t of plan.texts) {
       if (!inA(t.x, t.y) || !/[A-Za-z]{3,}/.test(t.t)) continue;
       const lines = t.t.split('\n').filter(Boolean).slice(0, 2);
-      const el = h(`div.p3-label.k-${KIND(t.t)}`, h('b', lines[0]), lines[1] ? h('span', lines[1]) : null);
+      const ot = isOt(lines[0]);
+      const open = () => { const o = ots.find(x => x.t === t); if (o) selectOt(o); };
+      const el = h(`div.p3-label.k-${KIND(t.t)}`, h('b', lines[0]), lines[1] ? h('span', lines[1]) : null, ot ? h('button.p3-go3d', { type: 'button', title: 'Open this OT in 3D', onclick: e => { e.stopPropagation(); open(); } }, '🧊 3D') : null);
       labelsLayer.append(el);
-      labels.push({ el, v: new T.Vector3(X(t.x + (t.w || 0) / 2), 0.15, Z(t.y)), t, room: ROOM_RE.test(t.t), size: roomSize(t.t) });
-      if (isOt(lines[0])) { el.classList.add('pick'); el.onclick = () => { const o = ots.find(x => x.t === t); if (o) selectOt(o); }; }
+      labels.push({ el, v: new T.Vector3(X(t.x + (t.w || 0) / 2), 0.15, Z(t.y)), t, ot, room: ROOM_RE.test(t.t), size: roomSize(t.t) });
+      if (ot) { el.classList.add('pick'); el.onclick = open; }
     }
-    labels.sort((a, b) => Number(b.room) - Number(a.room));
+    labels.sort((a, b) => Number(b.ot) - Number(a.ot) || Number(b.room) - Number(a.room));
     { // the outline of every OT, from the walls, glass and doors around its label
       const edges = [...(buckets.wall || []), ...(buckets.column || []), ...(buckets.glass || []), ...(buckets.door || [])];
       const sc = new Float32Array(edges.length);
@@ -250,7 +254,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
       }
       selected = ots.find(o => o.key === was) || null;
     }
-    drawHighlight();
+    drawOtMarks(); drawHighlight();
     drawSide();
   };
 
@@ -294,6 +298,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
   const clearGroup = g => { for (const c of [...g.children]) { disposeGroup(c); g.remove(c); } };
   const hasFinish = o => !!finishes[o.key]?.floor_main;
   const finishOf = o => ({ ...DEFAULT_FINISH, ...finishes[o.key] });
+  function drawOtMarks() { clearGroup(markLayer); for (const o of ots) markLayer.add(otMark(T, o, wallH, hasFinish(o))); }
   function drawHighlight() { clearGroup(hlLayer); if (selected) hlLayer.add(highlightMeshes(T, selected, wallH)); }
   const canSave = () => !!meta?.canWrite;
   const canSend = () => meta?.entity === 'enquiries' && canSave();
@@ -304,13 +309,20 @@ function build(stage, side, plan, meta, finishes, fileId) {
   }
   const openStudio = o => openOtStudio({ name: o.name, w: o.size?.w || o.x1 - o.x0, d: o.size?.d || o.z1 - o.z0 }, finishOf(o), {
     canSave: canSave(),
-    change: f => { finishes[o.key] = f; saveSoon(); drawSide(); },
-    all: f => { for (const x of ots) finishes[x.key] = { ...f }; saveSoon(); drawSide(); toast(`Applied to all ${ots.length} OTs`); },
+    change: f => { finishes[o.key] = f; saveSoon(); drawOtMarks(); drawSide(); },
+    all: f => { for (const x of ots) finishes[x.key] = { ...f }; saveSoon(); drawOtMarks(); drawSide(); toast(`Applied to all ${ots.length} OTs`); },
     send: canSend() ? sendChosen : null,
   }).catch(fail);
+  // the name in the list shows where the OT is in the drawing; the 3D button opens it
+  function showOt(o) {
+    selected = o; current = labels.find(l => l.t === o.t) || o;
+    const span = Math.max(o.x1 - o.x0, o.z1 - o.z0);
+    fly(new T.Vector3(o.v.x + span * 0.6, span * 1.15 + wallH + 2, o.v.z + span * 0.95), new T.Vector3(o.v.x, 0, o.v.z), 1000);
+    drawHighlight(); drawSide();
+  }
   function selectOt(o) {
     selected = o; current = labels.find(l => l.t === o.t) || o;
-    drawHighlight(); drawSide(); side.scrollTop = 0;
+    drawHighlight(); drawSide();
     openStudio(o);
   }
   async function sendChosen() {
@@ -325,16 +337,23 @@ function build(stage, side, plan, meta, finishes, fileId) {
     const r = await api(`/enquiries/${meta.record_id}/brief-rooms`, { method: 'POST', body: { rooms } });
     toast(`Detailed form: ${r.added} OT(s) added, ${r.updated} updated`);
   }
-  // the box at the top of the side panel: the chosen OT and what it is made of
+  // the top of the side panel: every OT of the drawing with its 3D button, and what was chosen for it
   function finishBox() {
-    if (!selected) return h('div.p3-box.p3-pickbox', h('b', '👆 Choose an OT'), h('p.muted', ots.length ? `Tap one of the ${ots.length} operation theatres to open it in its own 3D and choose its walls and floor.` : 'No operation theatre labels found in this part of the drawing.'));
-    const o = selected;
-    return h('div.p3-box.p3-pickbox.on',
-      h('div.p3-pickhead', h('b', `🏥 ${o.name}`), h('button.p3-x', { type: 'button', title: 'Close', 'aria-label': 'Close', onclick: () => { selected = null; drawHighlight(); drawSide(); } }, '×')),
-      hasFinish(o) ? h('ul.p3-finlist', finishText(finishes[o.key]).map(t => h('li', t))) : h('p.muted', 'No finishes chosen yet.'),
-      h('div.toolbar', { style: { marginTop: '8px' } }, h('button.btn.small.primary', { type: 'button', onclick: () => openStudio(o) }, '🏥 Open this OT in 3D'),
-        hasFinish(o) && canSave() ? h('button.btn.small', { type: 'button', onclick: () => { delete finishes[o.key]; saveSoon(); drawSide(); } }, 'Remove finishes') : null),
-      canSend() ? h('button.btn.small.p3-otbtn', { type: 'button', onclick: () => sendChosen().catch(fail) }, '➕ Send chosen OTs to the detailed form') : null);
+    const sorted = [...ots].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+    const row = o => {
+      const on = o === selected, done = hasFinish(o);
+      return h('div.p3-otrow' + (on ? '.on' : ''),
+        h('div.p3-otline',
+          h('button.p3-otname', { type: 'button', title: 'Show it in the drawing', onclick: () => showOt(o) }, done ? '✅ ' : '', h('b', o.name), h('small', `${(o.size?.w || o.x1 - o.x0).toFixed(1)} × ${(o.size?.d || o.z1 - o.z0).toFixed(1)} m`)),
+          h('button.btn.small.primary.p3-go', { type: 'button', onclick: () => selectOt(o) }, '🧊 3D')),
+        on && done ? h('ul.p3-finlist', finishText(finishes[o.key]).map(t => h('li', t))) : null,
+        on && done && canSave() ? h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { delete finishes[o.key]; drawOtMarks(); saveSoon(); drawSide(); } }, 'Remove finishes') : null);
+    };
+    return h('div.p3-box.p3-pickbox',
+      h('b', `🏥 Operation theatres (${ots.length})`),
+      h('p.muted', ots.length ? 'Marked blue in the drawing. Press 🧊 3D to open one and choose its walls and floor.' : 'No operation theatre labels found in this part of the drawing.'),
+      ots.length ? h('div.p3-otlist', sorted.map(row)) : null,
+      canSend() && ots.some(hasFinish) ? h('button.btn.small.p3-otbtn', { type: 'button', onclick: () => sendChosen().catch(fail) }, '➕ Send chosen OTs to the detailed form') : null);
   }
 
   async function openQuantities() {

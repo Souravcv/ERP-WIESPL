@@ -17,7 +17,7 @@ memory do not move between computers).
   tap-a-part side panel `js/partpanel.js` + `js/parts.js`, explainer videos on the 3D `js/explainers.js` (English + Hindi), NABH norms `js/nabh.js`.
 - Detailed requirement form (second form, per enquiry link): `public/brief.html` + `js/brief.js` + `js/brief-fields.js` (fields shared with the server).
 - CAD drawing in 3D: any DWG / DXF attachment has a 🧊 3D button → `#/plan3d/<file id>` (`js/views/plan3d.js`). The DWG is read in the browser by
-  `js/plan-worker.js` with `@mlightcad/libredwg-web` (GPL-3.0, WebAssembly, served from `/vendor/libredwg`), turned into lines per layer by
+  `js/plan-worker.js` (only if the server has not done it) with `@mlightcad/libredwg-web` (GPL-3.0, WebAssembly, served from `/vendor/libredwg`), turned into lines per layer by
   `js/plan-extract.js`, and the result is cached at `data/uploads/plans/<id>.json` (`/api/files/:id/plan`). Layer roles (wall / glass / door …)
   are guessed from the layer name and can be changed in the viewer (remembered in the browser).
 - Control panel range and OR app: `js/panels.js` is the one source (V1 Surgeon Panel with AHU … V5 OR Panel without AHU, features and
@@ -29,6 +29,7 @@ memory do not move between computers).
 - Marathi: `js/i18n.js` translates screen text through the dictionary `js/i18n/mr*.js` (English text → Marathi, plus
   `PATTERNS` for texts with numbers). New screen text stays English until it is added there. Typed data, inputs and printed
   documents (`.doc`, `#print-root`) are never translated. 🌐 button in the top bar / login; the choice is kept per browser.
+- Drawings are read on the server at upload and at start-up (`server/plans.js` + `server/planworker.js`, worker thread, one at a time; about 7 s for a 13 MB DWG), so the 3D opens at once.
 - OT finishes in the CAD 3D: tap an OT → `js/views/plan3d-rooms.js` finds its outline for the tap and the highlight (wall lines at the label's exact size, else rays, else the label's size) →
   `openOtStudio` (`plan3d-extras.js`) opens that OT alone in the WIESPL OT 3D at its real size, finishes chosen beside it; nothing is painted into the drawing (the owner's choice). Saved per drawing in
   `data/uploads/plans/<id>.finishes.json` (`/api/files/:id/finishes`), sent to the detailed form by `/enquiries/:id/brief-rooms`.

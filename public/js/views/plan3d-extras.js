@@ -18,7 +18,7 @@ export function roomSize(text) {
   if (Number(a) > 20000) { extra = a.slice(0, -4); a = a.slice(-4); } // "THEATER 065853x" → room "06", 5853 mm
   a = Number(a);
   if (a < 1500 || a > 20000 || b < 1500 || b > 20000) return null;
-  const name = (s.slice(0, m.index).split('\n').filter(Boolean).pop() || '').replace(/\s+/g, ' ').trim() + extra;
+  const name = s.slice(0, m.index).replace(/\s+/g, ' ').trim() + extra; // every line above the size: "OPERATION THEATER 06 (ROBOTICS)"
   return { name: name || s.split('\n')[0].trim(), w: a / 1000, d: b / 1000 };
 }
 export const isOt = name => /THEAT|\bOT\b|OPERATION|CATH|HYBRID|PROCEDURE/i.test(name) && !/STORE|DOOR|CORRIDOR|COORDINATOR|STATION|PHARMACY|MANAGER|RECOVERY|HOLDING|CHANGE|TOILET|SCRUB|STERILE|DUTY|LOUNGE|WAITING/i.test(name);
@@ -76,7 +76,7 @@ export async function openOtStudio(room, finish, on = {}) {
   const features = ['laf', 'hepa', 'pendant_surgeon', 'pendant_anaes', 'otlight', 'control', 'automation', 'pressure', 'doors', 'xray', 'passbox', 'storage', 'scrub', 'panels', 'flooring', 'ahu', 'shrm'];
   const info = Object.fromEntries(Object.entries(PART_UI).map(([k, p]) => [k, { label: p.title, hint: p.text, icon: p.icon }]));
   try {
-    viewer = await mount3D(box, { types: ['ot'], features, info, room: { w: room.w, d: room.d }, wall: { finish: f.wall, colour: f.wall_colour }, floor: { main: f.floor_main, border: f.floor_border }, doorType: f.door,
+    viewer = await mount3D(box, { types: ['ot'], features, info, noIntro: true, room: { w: room.w, d: room.d }, wall: { finish: f.wall, colour: f.wall_colour }, floor: { main: f.floor_main, border: f.floor_border }, doorType: f.door,
       onFinish: ({ wall, floor }) => set({ wall: wall.finish, wall_colour: wall.colour, floor_main: floor.main, floor_border: floor.border }) }); // tapping a wall or the floor in the 3D chooses too
   } catch (e) { box.replaceChildren(h('p', `⚠ ${e.message}`)); return; }
   if (!wrap.isConnected) { viewer?.dispose?.(); return; }
