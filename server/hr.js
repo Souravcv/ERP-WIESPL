@@ -474,6 +474,30 @@ export function pingsOf(attId) {
 }
 
 // Today across the company: who is working where, who has not come, exceptions.
+// Who is on duty right now and where they last were, for safety and for seeing who is on which site. Only people clocked
+// in today appear with a location: nobody's position is shown after clock-out. "Current" means the last check received,
+// so a person whose check is overdue is marked as out of date rather than shown as if live.
+export function liveLocations() {
+  const t = today(), R = rules(), nowMs = Date.parse(now().replace(' ', 'T'));
+  const staleAfter = R.pingMinutes * 2 + 5;
+  const emps = db.prepare("SELECT id, emp_code, name, department, designation, mobile, emergency_contact FROM employees WHERE COALESCE(status, 'Active') = 'Active' ORDER BY name").all();
+  const dayOf = db.prepare("SELECT a.id, a.check_in, a.check_out, a.status, a.mode, a.location_id, a.out_since, a.out_reason, l.name site FROM attendance a LEFT JOIN work_locations l ON l.id = a.location_id WHERE a.employee_id = ? AND a.date = ?");
+  const lastOf = db.prepare('SELECT at, lat, lng, accuracy_m, distance_m, inside, flags FROM attendance_pings WHERE attendance_id = ? AND lat IS NOT NULL ORDER BY id DESC LIMIT 1');
+  const people = [], absent = [];
+  for (const e of emps) {
+    const a = dayOf.get(e.id, t);
+    const contact = { employee_id: e.id, code: e.emp_code, name: e.name, department: e.department, designation: e.designation, mobile: e.mobile, emergency_contact: e.emergency_contact };
+    if (!a?.check_in || a.check_out) { absent.push({ ...contact, state: a?.check_out ? `Clocked out ${hhmm(a.check_out)}` : a?.status === 'On Leave' ? 'On leave' : 'Not clocked in' }); continue; }
+    const p = lastOf.get(a.id);
+    const minutes = p ? Math.max(0, Math.round((nowMs - Date.parse(String(p.at).replace(' ', 'T'))) / 60000)) : null;
+    people.push({ ...contact, attendance_id: a.id, site_id: a.location_id, site: a.site || (a.mode === 'Travel / outstation' ? 'Travel / outstation' : 'No site'), check_in: hhmm(a.check_in), out_since: a.out_since ? hhmm(a.out_since) : null, out_reason: a.out_reason || null,
+      lat: p?.lat ?? null, lng: p?.lng ?? null, accuracy: p?.accuracy_m ?? null, last_at: hhmm(p?.at), minutes, inside: p?.inside || null, distance: p?.distance_m ?? null, stale: minutes == null || minutes > staleAfter, fake: /fake gps/i.test(p?.flags || '') });
+  }
+  const sites = db.prepare("SELECT id, name, kind, lat, lng, radius_m FROM work_locations WHERE lat IS NOT NULL AND lng IS NOT NULL ORDER BY name").all();
+  return { at: hhmm(now()), ping_minutes: R.pingMinutes, stale_after: staleAfter, people, absent, sites,
+    totals: { on_duty: people.length, at_site: people.filter(p => p.inside === 'Yes' && !p.stale).length, away: people.filter(p => p.inside === 'No').length, out_of_date: people.filter(p => p.stale).length, no_location: people.filter(p => p.lat == null).length } };
+}
+
 export function todayBoard(date = today()) {
   const emps = db.prepare("SELECT id, emp_code, name, department, field_staff, weekly_off FROM employees WHERE COALESCE(status, 'Active') = 'Active' ORDER BY name").all();
   const holiday = db.prepare('SELECT name FROM holidays WHERE date = ?').get(date)?.name || null;

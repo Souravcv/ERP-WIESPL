@@ -17,9 +17,10 @@ export async function hrView(root, tab = 'today') {
     h('a.btn', { href: '#/list/employees' }, '🧑‍💼 Employees'), h('a.btn', { href: '#/list/work_locations' }, '📍 Work locations'),
     h('a.btn', { href: '#/list/site_assignments' }, '🗓️ Site assignments'), h('a.btn', { href: '#/list/leave_requests' }, '🌴 Leave'), h('a.btn', { href: '#/list/holidays' }, '🎉 Holidays'),
     h('a.btn', { href: '#/list/onboardings' }, '🧾 Onboarding'), h('a.btn', { href: '#/list/probation_reviews' }, '📋 Probation'), h('a.btn', { href: '#/list/asset_issues' }, '💻 Assets'), h('a.btn', { href: '#/list/separations' }, '🚪 Exits')));
-  const tabs = h('div.tabs', TABS.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { location.hash = `#/hr/${k}`; } }, l)));
+  const tabs = h('div.tabs', [...TABS, ...(hasFunction(state.user.role, 'hr_manage') ? [['map', '🗺 Live map']] : [])].map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { location.hash = `#/hr/${k}`; } }, l)));
   const box = h('div', h('div.muted', 'Loading…'));
   root.replaceChildren(head, tabs, box);
+  if (tab === 'map') { const { liveMap } = await import('./hrmap.js'); return liveMap(box); }
   if (tab === 'month') return month(box);
   if (tab === 'review') return reviewList(box, root);
   if (tab === 'balances') return balancesTab(box);

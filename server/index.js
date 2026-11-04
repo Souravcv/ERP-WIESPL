@@ -696,6 +696,7 @@ api.post('/hr/back', wrap(req => hr.backAtSite(req.user, req.body, clientIp(req)
 api.post('/hr/clock-out', wrap(req => hr.clockOut(req.user, req.body, clientIp(req))));
 api.post('/hr/leave', wrap(req => hr.applyLeave(req.user, req.body)));
 const hrView = req => { if (!canView('attendance', req.user.role)) throw new HttpError(403, 'No access to attendance'); };
+api.get('/hr/locations', wrap(req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator can see where people are'); return hr.liveLocations(); }));
 api.get('/hr/today', wrap(req => { hrView(req); return hr.todayBoard(req.query.date || undefined); }));
 api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.query.month); }));
 api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
