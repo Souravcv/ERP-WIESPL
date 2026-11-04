@@ -126,10 +126,11 @@ for (const r of ['sales', 'accounts', 'production', 'service']) ROLE_SEES[r].pus
 for (const r of ['store', 'engineer', 'technical', 'purchase', 'purchase_head', 'production']) ROLE_SEES[r].push('dispatch_plans');
 for (const r of ['purchase', 'purchase_head', 'accounts', 'technical', 'planning']) ROLE_SEES[r].push('vendor_evaluations', 'vendor_complaints', 'vendor_audits');
 ROLE_SEES.store.push('vendor_complaints');
-ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs');
-ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs');
+ROLE_SEES.production.push('projects', 'production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs', 'qc_plans', 'project_qc');
+ROLE_SEES.planning.push('production_orders', 'production_plans', 'production_reports', 'qc_inspections', 'ncrs', 'work_logs', 'qc_plans', 'project_qc');
+ROLE_SEES.engineer.push('qc_plans', 'project_qc', 'ncrs');
 ROLE_SEES.hr.push('work_logs');
-ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs');
+ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs', 'qc_plans', 'project_qc');
 ROLE_SEES.store.push('production_orders');
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
@@ -152,6 +153,7 @@ export const FUNCTIONS = {
   production_release: 'Production – release production orders (drawing, BOM and material checked), hold / cancel / close them, reopen daily reports',
   production_plan_approve: 'Production head – approve the monthly production plan',
   qc_inspect: 'Quality – record in-process, final and dispatch QC inspections; raise NCRs',
+  qc_site: 'Quality – record site and commissioning QC of a project',
   ncr_close: 'Quality head – verify and close NCR / CAPA',
   hr_manage: 'HR – review attendance, correct days, see everyone\'s attendance and locations',
   hr_confirm: 'Management – approve confirmation / extension of probation',
@@ -191,7 +193,7 @@ export const DEFAULT_FUNCTIONS = {
   store: ['iqc_inspect', 'stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_grn_without_po'],
   sales: ['import', 'notify_enquiry'],
-  engineer: ['notify_work_order', 'boq_review'],
+  engineer: ['notify_work_order', 'boq_review', 'qc_site'],
   production: ['production_post', 'production_release', 'qc_inspect', 'work_log', 'perf_all'],
   incharge: ['work_log'],
   hr: ['hr_manage', 'leave_approve', 'task_assign', 'perf_all'],
@@ -243,6 +245,7 @@ export const PROD_DELAY_CODES = ['', 'M01 Material shortage', 'M02 Material qual
 // Quality (QEMS Vol 3): what is checked at each in-process stage, at final QC (all products + per product) and before
 // dispatch; NCR categories and dispositions. An inspection starts with these checks filled in.
 export const QC_KINDS = ['In-process (IPQC)', 'Final (FQC)', 'Dispatch QC'];
+export const QC_PLAN_STAGES = ['Incoming', 'In-process', 'Factory final', 'Site', 'Commissioning'];
 export const QC_STAGE_CHECKS = {
   'Laser cutting': ['Dimensions', 'Hole accuracy', 'Burrs', 'Edge finish'],
   Shearing: ['Dimensions', 'Squareness', 'Burrs'],
@@ -2269,6 +2272,76 @@ export const ENTITIES = {
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
+  // QC plan of a product (server/qcplans.js): what is checked at each stage, how, and against which limit.
+  qc_plans: {
+    label: 'QC Plans', singular: 'QC Plan', group: 'Production', icon: '📘', write: ['admin', 'manager', 'production', 'technical'],
+    display: "{t}.product",
+    search: ['plan_no', 'product', 'keywords'],
+    list: ['plan_no', 'product', 'keywords', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'plan_no', label: 'Plan No', type: 'text', readonly: true, hint: 'Auto: QCP-001' },
+      { key: 'product', label: 'Product', type: 'text', required: true },
+      { key: 'keywords', label: 'Work order words', type: 'text', span: 2, required: true, hint: 'Comma separated. A work order line with one of these words uses this plan' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Approved'], default: 'Draft', hint: 'Approved only when every check has a limit' },
+      { key: 'checks', label: 'Checks', type: 'lines', span: 2, amounts: false, hint: 'Numeric limit: the CRM judges the measured value. Otherwise write what must be seen. Hold = must pass before the next stage', columns: [
+        { key: 'stage', label: 'Stage', type: 'select', options: QC_PLAN_STAGES, width: 120 },
+        { key: 'check', label: 'Check', type: 'text', width: 190 },
+        { key: 'method', label: 'Method', type: 'text', width: 210 },
+        { key: 'instrument', label: 'Instrument', type: 'text', width: 130 },
+        { key: 'frequency', label: 'How often', type: 'text', width: 110 },
+        { key: 'min', label: 'Min', type: 'number', width: 70 },
+        { key: 'max', label: 'Max', type: 'number', width: 70 },
+        { key: 'unit', label: 'Unit', type: 'text', width: 70 },
+        { key: 'limit', label: 'Or what must be seen', type: 'text', width: 200 },
+        { key: 'hold', label: 'Hold', type: 'select', options: ['No', 'Yes'], width: 70 },
+        { key: 'only_if', label: 'Only if line has', type: 'text', width: 90 },
+        { key: 'source', label: 'Where the limit comes from', type: 'text', width: 260 },
+      ] },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // A project's QC record: one work order section, product and stage. Made from the work order, never typed in.
+  project_qc: {
+    label: 'Project QC Records', singular: 'Project QC Record', icon: '✅', write: ['admin', 'manager', 'production', 'technical', 'engineer'], noCreate: true,
+    display: "{t}.pqc_no || ' · ' || COALESCE({t}.stage, '')",
+    search: ['pqc_no', 'section', 'items', 'defect'],
+    list: ['pqc_no', 'project_id', 'section', 'plan_id', 'stage', 'date', 'status', 'ncr_id'],
+    statusField: 'status',
+    fields: [
+      { key: 'pqc_no', label: 'QC Record No', type: 'text', readonly: true },
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', readonly: true },
+      { key: 'boq_id', label: 'Work Order', type: 'ref', ref: 'boqs', readonly: true },
+      { key: 'section', label: 'Section', type: 'text', readonly: true },
+      { key: 'plan_id', label: 'Product', type: 'ref', ref: 'qc_plans', readonly: true },
+      { key: 'stage', label: 'Stage', type: 'text', readonly: true },
+      { key: 'items', label: 'Work order lines', type: 'textarea', span: 2, readonly: true },
+      { key: 'date', label: 'Date', type: 'date', default: 'today' },
+      { key: 'inspector', label: 'Inspector', type: 'person', default: 'me' },
+      { key: 'batch', label: 'Batch / Heat No', type: 'text', hint: 'Traceability' },
+      { key: 'checks', label: 'Checks', type: 'lines', span: 2, amounts: false, fixedRows: true, hint: 'A number with a limit is judged when you save. Attach certificates and photos below', columns: [
+        { key: 'check', label: 'Check', type: 'text', width: 180, readonly: true },
+        { key: 'method', label: 'Method', type: 'text', width: 190, readonly: true },
+        { key: 'instrument', label: 'Instrument', type: 'text', width: 120, readonly: true },
+        { key: 'min', label: 'Min', type: 'number', width: 70, readonly: true },
+        { key: 'max', label: 'Max', type: 'number', width: 70, readonly: true },
+        { key: 'unit', label: 'Unit', type: 'text', width: 70, readonly: true },
+        { key: 'limit', label: 'Must be seen', type: 'text', width: 180, readonly: true },
+        { key: 'hold', label: 'Hold', type: 'text', width: 55, readonly: true },
+        { key: 'measured', label: 'Measured', type: 'text', width: 100 },
+        { key: 'result', label: 'Result', type: 'select', options: ['', 'OK', 'Not OK', 'NA'], width: 90 },
+        { key: 'remark', label: 'Remark', type: 'text', width: 150 },
+        { key: 'source', label: 'Where the limit comes from', type: 'text', width: 240, readonly: true },
+      ] },
+      { key: 'defect_category', label: 'Defect Category', type: 'select', options: ['', ...NCR_CATEGORIES], hint: 'When a check fails' },
+      { key: 'defect', label: 'Defect / Reason', type: 'textarea', span: 2 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Pending', 'Passed', 'Failed'], default: 'Pending', readonly: true },
+      { key: 'ncr_id', label: 'NCR', type: 'ref', ref: 'ncrs', readonly: true },
+      { key: 'retest_of', label: 'Test again after', type: 'ref', ref: 'project_qc', readonly: true },
+      { key: 'done_by', label: 'Recorded By', type: 'text', readonly: true },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
   // Non-conformance report with CAPA (QEMS Vol 3 G–K): detection → segregation → investigation (root cause) →
   // disposition → corrective & preventive action (closed within 30 days) → verification → closure. Rework / rejection
   // cost is recorded here.
@@ -2286,6 +2359,7 @@ export const ENTITIES = {
       { key: 'order_id', label: 'Production Order', type: 'ref', ref: 'production_orders' },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'inspection_id', label: 'From QC Inspection', type: 'ref', ref: 'qc_inspections', readonly: true },
+      { key: 'qc_record_id', label: 'From Project QC', type: 'ref', ref: 'project_qc', readonly: true },
       { key: 'description', label: 'Non-conformance', type: 'textarea', span: 2, required: true },
       { key: 'qty', label: 'Qty Affected', type: 'number' },
       { key: 'uom', label: 'UOM', type: 'text' },

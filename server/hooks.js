@@ -11,6 +11,7 @@ import { afterDispatchPlan, challanToPlan } from './planning.js';
 import { vendorCode, weighted, bandOf, afterEvaluation } from './vendors.js';
 import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './production.js';
 import { prepInspection, prepNcr } from './quality.js';
+import { prepPlan as prepQcPlan, prepRecord as prepQcRecord } from './qcplans.js';
 import { nextEnquiryNo } from './enquiries.js';
 import { HttpError } from './crud.js';
 
@@ -425,6 +426,14 @@ export function beforeSave(name, row, existing, user) {
     case 'qc_inspections':
       if (!existing && !row.qc_no) row.qc_no = docNo('qc_inspection', date, (n, fy) => `QC-${n}/20${fy}`);
       prepInspection(row, existing);
+      break;
+    case 'qc_plans':
+      if (!existing && !row.plan_no) row.plan_no = docNo('qc_plan', date, n => `QCP-${n}`);
+      prepQcPlan(row, existing);
+      break;
+    case 'project_qc':
+      if (!existing && !row.pqc_no) row.pqc_no = docNo('project_qc', date, (n, fy) => `PQC-${n}/20${fy}`);
+      prepQcRecord(row, existing);
       break;
     case 'ncrs':
       if (!existing && !row.ncr_no) row.ncr_no = docNo('ncr', date, (n, fy) => `NCR-${n}/20${fy}`);

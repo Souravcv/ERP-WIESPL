@@ -19,12 +19,13 @@ const LOCKED = {
   production_reports: ['Submitted'],
   production_orders: ['Completed', 'Cancelled'],
   qc_inspections: ['Done'],
+  project_qc: ['Passed', 'Failed'],
   ncrs: ['Closed', 'Cancelled'],
 };
 // Money documents are never deleted once they count (the server refuses too): reverse / cancel / credit note instead.
 const KEEP = { payments: () => true, attendance: r => !!r.check_in, attendance_pings: () => true, invoices: r => r.status !== 'Draft', credit_notes: r => !['Draft', 'Rejected'].includes(r.status),
   vendor_payments: r => !['Draft', 'Rejected'].includes(r.status), expenses: r => !['Draft', 'Rejected'].includes(r.status),
-  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', ncrs: r => r.status !== 'Open' };
+  production_reports: r => r.status === 'Submitted', qc_inspections: r => r.status === 'Done', project_qc: r => r.status !== 'Pending', ncrs: r => r.status !== 'Open' };
 // Full access may delete anything else (also locked documents); anyone else only their own draft.
 export const mayDelete = (entity, row) => !KEEP[entity]?.(row) && (canDelete(entity, state.user.role)
   || (canWrite(entity, state.user.role) && row.created_by === state.user.name && ['Draft', 'Rejected'].includes(row.status)));
@@ -96,7 +97,7 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
   }
   function render() {
     const head = h('tr', h('th', '#'), f.itemRef ? h('th', 'Inventory item') : null, f.columns.map(c => h('th', { style: { minWidth: c.width + 'px' } }, c.label, c.required && !readonly ? h('span.req', { title: 'Required' }, ' *') : null)),
-      amounts ? h('th.num', 'Amount') : null, f.itemRef && amounts ? h('th.num', 'Received') : null, readonly ? null : h('th'));
+      amounts ? h('th.num', 'Amount') : null, f.itemRef && amounts ? h('th.num', 'Received') : null, readonly || f.fixedRows ? null : h('th'));
     let sr = 0;
     const rows = lines.map((l, i) => {
       const amount = amounts ? h('td.num', inr((Number(l.qty) || 0) * (Number(l.rate) || 0))) : null;
@@ -113,10 +114,10 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
           sel.onchange = () => { l[c.key] = sel.value ? Number(sel.value) : null; };
           return h('td.nowrap', sel, c.split && !readonly ? h('button.icon-btn', { type: 'button', title: 'Same material for several projects: one line, give each project its quantity', onclick: () => splitEditor(l, c) }, '⇉') : null);
         }
-        const inp = c.type === 'select' ? h('select', { disabled: readonly }, c.options.map(o => h('option', o)))
+        const inp = c.type === 'select' ? h('select', { disabled: readonly || c.readonly }, c.options.map(o => h('option', o)))
           : c.type === 'textarea' || (c.key === 'description' && !f.schedule)
-            ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly, style: { minHeight: '32px' } })
-            : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : c.type === 'date' ? 'date' : 'text', step: 'any', readOnly: readonly });
+            ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly || c.readonly, style: { minHeight: '32px' } })
+            : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : c.type === 'date' ? 'date' : 'text', step: 'any', readOnly: readonly || c.readonly });
         inp.value = l[c.key] ?? (c.type === 'select' ? c.options[0] : '');
         if (c.key === 'qty' && l.split?.length > 1) { inp.readOnly = true; inp.title = 'Total of the projects: change it with "Projects & qty"'; }
         if (c.type === 'select' && l[c.key] == null) l[c.key] = c.options[0];
@@ -149,14 +150,14 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
       }
       const label = l.description || f.newLine ? String(++sr) : '';
       return h('tr', h('td.muted', label), itemCell, cells, amount, f.itemRef && amounts ? h('td.num', l.received ?? 0) : null,
-        readonly ? null : h('td.nowrap',
+        readonly || f.fixedRows ? null : h('td.nowrap',
           f.schedule || f.newLine ? null : h('button.icon-btn', { type: 'button', title: 'Add a size / sub-line below', onclick: () => { lines.splice(i + 1, 0, { description: '', spec: '', qty: 1, uom: l.uom || 'Nos', rate: 0, gst: l.gst ?? 18 }); render(); } }, '↳'),
           h('button.icon-btn.del', { type: 'button', title: 'Remove line', onclick: () => { lines.splice(i, 1); render(); } }, '✕')));
     });
     wrap.replaceChildren(
       f.hint && !readonly ? h('div.muted', { style: { fontSize: '12px', marginBottom: '4px' } }, f.hint) : null,
       h('div.table-wrap', h('table.data.lines', h('thead', head), h('tbody', rows))),
-      readonly ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push(f.newLine ? { ...f.newLine } : f.schedule ? { due_date: '', description: '', percent: null, amount: null, status: 'Due' } : { description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); wrap.dispatchEvent(new Event('input', { bubbles: true })); } }, f.schedule ? '+ Add payment' : f.addLabel || '+ Add line'),
+      readonly || f.fixedRows ? null : h('button.btn.small', { type: 'button', style: { marginTop: '6px' }, onclick: () => { lines.push(f.newLine ? { ...f.newLine } : f.schedule ? { due_date: '', description: '', percent: null, amount: null, status: 'Due' } : { description: '', qty: 1, uom: 'Nos', rate: 0, gst: 18 }); render(); wrap.dispatchEvent(new Event('input', { bubbles: true })); } }, f.schedule ? '+ Add payment' : f.addLabel || '+ Add line'),
       amounts ? totalsBox : null);
     totals();
   }
@@ -819,6 +820,23 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (row.ncr_id) A.push(h('a.btn', { href: `#/view/ncrs/${row.ncr_id}` }, `🚩 ${String(row.ncr_id_label || 'NCR').split(' · ')[0]}`));
       A.push(h('a.btn', { href: `#/print/qcreport/${id}`, target: '_blank' }, '🖨 QC report'));
       break;
+    case 'project_qc': {
+      const mine = hasFunction(state.user.role, 'qc_inspect') || (hasFunction(state.user.role, 'qc_site') && ['Site', 'Commissioning'].includes(row.stage));
+      if (row.status === 'Pending' && mine) {
+        A.push(h('button.btn.primary', { onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const fresh = await api(`/project_qc/${id}`);
+          const notOk = (fresh.checks || []).filter(c => c.result === 'Not OK').length;
+          if (!(await confirmBox(`Record ${row.pqc_no}: ${notOk ? notOk + ' check(s) failed, an NCR is raised' : 'all checks passed'}? It cannot be changed afterwards.`))) return;
+          const r = await post(`/project_qc/${id}/complete`);
+          toast(r.warning || (r.status === 'Failed' ? 'Recorded: failed, NCR raised' : 'Recorded: passed'), !!r.warning); reload();
+        }) }, '📝 Record result'));
+      }
+      if (row.status === 'Failed' && mine) A.push(h('button.btn', { onclick: go(async () => { const r = await post(`/project_qc/${id}/retest`); location.hash = `#/view/project_qc/${r.id}`; }) }, '🔁 Test again after rework'));
+      if (row.ncr_id) A.push(h('a.btn', { href: `#/view/ncrs/${row.ncr_id}` }, `🚩 ${String(row.ncr_id_label || 'NCR').split(' · ')[0]}`));
+      A.push(h('a.btn', { href: `#/project-qc/${row.project_id}` }, '✅ Project QC'));
+      break;
+    }
     case 'ncrs': {
       const st = row.status, head = hasFunction(state.user.role, 'ncr_close');
       const act = async (action, body) => { if (ctx.save) await ctx.save({ quiet: true }); await post(`/ncrs/${id}/act/${action}`, body); reload(); };

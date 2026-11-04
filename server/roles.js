@@ -191,6 +191,11 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_perf_v1', '\"1\"')").run();
   }
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_qc_site_v1'").get()) {
+    const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get('engineer');
+    if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'qc_site'])]; db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), 'engineer'); }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_qc_site_v1', '\"1\"')").run();
+  }
   // Quality (once): production and technical inspect; the GM and the technical manager close NCRs.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_quality_v1'").get()) {
     for (const [name, fns] of [['manager', ['qc_inspect', 'ncr_close']], ['production', ['qc_inspect']], ['technical', ['qc_inspect', 'ncr_close']]]) {

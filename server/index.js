@@ -40,6 +40,7 @@ import * as hrp from './hrpolicy.js';
 import * as hrf from './hrfile.js';
 import * as prod from './production.js';
 import * as qa from './quality.js';
+import * as qcp from './qcplans.js';
 import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 const { draftRow } = sf;
@@ -60,6 +61,7 @@ importer.fixPoNumbers();
 lots.setupLots();
 vend.setupVendors();
 hrp.setupHrPolicy();
+qcp.seedPlans();
 hrf.setupHrFile();
 enq.setupEnquiries();
 importer.linkInwardPOs();
@@ -669,6 +671,11 @@ api.post('/production_plans/:id/act/:action', need('production_plans'), wrap(req
 api.post('/production_reports/:id/submit', need('production_reports'), wrap(req => prod.submitReport(req.params.id, req.user)));
 api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.user.role)) throw new HttpError(403, 'No access to quality'); return qa.qualityReview(req.query); }));
 api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
+api.get('/project-qc/:id', wrap(req => qcp.board(req.params.id, req.user)));
+api.get('/project-qc/:id/file', wrap(req => qcp.file(req.params.id, req.user)));
+api.post('/project-qc/:id/generate', need('project_qc'), wrap(req => qcp.generate(req.params.id, req.user)));
+api.post('/project_qc/:id/complete', need('project_qc'), wrap(req => qcp.complete(req.params.id, req.user)));
+api.post('/project_qc/:id/retest', need('project_qc'), wrap(req => qcp.retest(req.params.id, req.user)));
 const qaView = req => { if (!canView('ncrs', req.user.role)) throw new HttpError(403, 'No access to NCRs'); };
 api.get('/production/pareto', wrap(req => { qaView(req); return qa.paretoAnalysis(req.query); }));
 api.get('/production/fmea', wrap(req => { qaView(req); return qa.fmeaRegister(); }));
@@ -1016,6 +1023,7 @@ const LOCKED = {
   production_reports: ['Submitted'],
   production_orders: ['Completed', 'Cancelled'],
   qc_inspections: ['Done'],
+  project_qc: ['Passed', 'Failed'],
   ncrs: ['Closed', 'Cancelled'],
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
   probation_reviews: ['Pending Approval', 'Approved'],
@@ -1098,6 +1106,7 @@ api.delete('/:entity/:id', wrap(req => {
   if ((entity === 'attendance' && row.check_in) || entity === 'attendance_pings') throw new HttpError(409, 'Attendance with a clock-in is evidence: it cannot be deleted; HR reviews and corrects the day instead');
   if (entity === 'production_entries' && row.status === 'Posted') throw new HttpError(409, 'A posted production entry cannot be deleted');
   if (entity === 'qc_inspections' && row.status === 'Done') throw new HttpError(409, 'A recorded QC inspection is evidence: it cannot be deleted');
+  if (entity === 'project_qc' && row.status !== 'Pending') throw new HttpError(409, 'A recorded QC result is evidence: it cannot be deleted');
   if (entity === 'ncrs' && row.status !== 'Open') throw new HttpError(409, 'An NCR under investigation is cancelled (with a reason), not deleted');
   if (entity === 'production_reports' && row.status === 'Submitted') throw new HttpError(409, 'A submitted daily report cannot be deleted; reopen it first');
   if (entity === 'production_orders' && db.prepare("SELECT 1 FROM production_reports r, json_each(COALESCE(NULLIF(r.lines, ''), '[]')) j WHERE CAST(json_extract(j.value, '$.order_id') AS INTEGER) = ? LIMIT 1").get(row.id)) throw new HttpError(409, 'This order is on daily production reports; cancel it instead');

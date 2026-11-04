@@ -90,6 +90,19 @@ export async function prodDoc(kind, id, s) {
         : h('p', 'No delays reported.'),
       signRow(['Production Head', ''], ['Planning', ''], ['GM Operations', ''])))};
   }
+  if (kind === 'qcfile') {
+    const f = await api(`/project-qc/${id}/file`);
+    const limit = r => [r.min != null && r.min !== '' ? `min ${r.min}` : '', r.max != null && r.max !== '' ? `max ${r.max}` : '', r.unit && (r.min != null || r.max != null) ? r.unit : '', r.limit || ''].filter(Boolean).join(' ') || 'Limit not set';
+    const title = [f.project.code, f.project.name].filter(Boolean).join(' · ');
+    return { title: `QC file ${title}`, doc: h('div.doc', ...f.records.map(q => page(companyHead(s, `QC RECORD – ${String(q.stage || '').toUpperCase()}`),
+      grid([['QC Record', q.pqc_no], ['Project', title], ['Work Order', q.boq_id_label], ['Section', q.section], ['Product', q.plan_id_label], ['Date', fmtDate(q.date)], ['Inspector', q.inspector], ['Batch / Heat No', q.batch], ['Status', `${q.status}${q.done_by ? ' – ' + q.done_by : ''}`], q.retest_of ? ['Tested again after', q.retest_of_label] : ['', '']]),
+      q.items ? h('p', { style: { whiteSpace: 'pre-wrap', fontSize: '11px' } }, q.items) : null,
+      tbl(q.checks || [], [['check', 'Check'], ['method', 'Method'], ['instrument', 'Instrument'], ['limit', 'Limit', limit], ['measured', 'Measured', r => (r.measured !== '' && r.measured != null ? `${r.measured}${r.unit ? ' ' + r.unit : ''}` : '')], ['result', 'Result', r => (r.result === 'Not OK' ? '✘ Not OK' : r.result === 'OK' ? '✔ OK' : r.result || '')], ['remark', 'Remark']]),
+      q.defect ? h('p', h('b', `Defect${q.defect_category ? ' (' + q.defect_category + ')' : ''}: `), q.defect) : null,
+      q.ncr_id ? h('p', h('b', 'NCR raised: '), q.ncr_id_label || `#${q.ncr_id}`) : null,
+      q.files.length ? h('p', h('b', 'Files attached: '), q.files.join(', ')) : null,
+      signRow(['Inspector', ''], ['Quality Head', ''])))) };
+  }
   if (kind === 'qcreport') {
     const q = await api(`/qc_inspections/${id}`);
     const o = await api(`/production_orders/${q.order_id}`);

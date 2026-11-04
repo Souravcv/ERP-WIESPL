@@ -29,7 +29,7 @@ const EXTRA_LINKS = {
   'Sales & Projects': [['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
-  Production: [['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders']],
+  Production: [['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
@@ -119,6 +119,7 @@ async function route() {
       case 'performance': { const { performanceView } = await import('./views/performance.js'); await performanceView(view); break; }
       case 'hr': { const { hrView } = await import('./views/hrview.js'); await hrView(view, a || 'today'); break; }
       case 'service': { const { serviceView } = await import('./views/service.js'); await serviceView(view); break; }
+      case 'project-qc': { const { projectQcView } = await import('./views/projectqc.js'); await projectQcView(view, a); break; }
       case 'production': { const { productionView } = await import('./views/production.js'); await productionView(view, a); break; }
       case 'receivables': { const { receivablesView } = await import('./views/receivables.js'); await receivablesView(view, a || 'ageing', b); break; }
       case 'bank-reco': { const { bankRecoView } = await import('./views/bankreco.js'); await bankRecoView(view); break; }
