@@ -933,6 +933,11 @@ function actionsFor(entity, row, reload, ctx = {}) {
       const st = row.status;
       A.push(h('a.btn', { href: `#/print/challan/${id}`, target: '_blank' }, '🖨 Print Challan'));
       if (row.issue_no) A.push(h('a.btn', { href: `#/print/stockdoc/${row.issue_type || 'OUTWARD'}?doc=${encodeURIComponent(row.issue_no)}`, target: '_blank' }, '🖨 Issue Slip'));
+      if (can(entity) && st !== 'Draft' && st !== 'Cancelled') A.push(h('button.btn', { onclick: go(async () => {
+        const amt = h('input', { type: 'number', min: 0, step: 'any', value: row.porter_amount ?? '' });
+        if (!(await modal('Porter amount', h('label', 'Porter Amount (₹)', amt), [{ label: 'Cancel', value: false }, { label: 'Save', cls: 'primary', value: true }]))) return;
+        await post(`/challans/${id}/porter`, { porter_amount: amt.value }); toast('Porter amount saved'); reload();
+      }) }, '💰 Porter amount'));
       if (row.bom_id) A.push(h('a.btn', { href: `#/bom/${row.bom_id}` }, '📑 BOQ status'));
       if (row.boq_id) A.push(h('a.btn', { href: `#/boq/${row.boq_id}` }, '📂 Work order status'));
       if (can(entity) && st === 'Draft' && !hasFunction(state.user.role, 'stock_post')) A.push(h('span.muted', 'Draft: the store dispatches it (issues the stock)'));
@@ -1276,6 +1281,28 @@ export async function recordView(root, entity, id) {
     const showNext = () => api(`/items/next-code?category=${encodeURIComponent(inputs.category.get() || '')}`).then(r => { inputs.code.el.placeholder = `${r.code} (given automatically)`; }).catch(() => {});
     inputs.category.el.addEventListener('change', showNext);
     showNext();
+  }
+  if (entity === 'challans' && writable) {
+    // The BOQ fills the work order and project; the work order fills the project; both offer their sections.
+    const sectionList = h('datalist', { id: 'challan-sections' });
+    inputs.section?.el.setAttribute('list', 'challan-sections');
+    inputs.section?.el.after(sectionList);
+    const sections = async () => {
+      const b = inputs.bom_id?.get(), w = inputs.boq_id?.get();
+      const rows = b ? await api(`/bom_items?bom_id=${b}&limit=20000`) : w ? await api(`/boq_items?boq_id=${w}&limit=20000`) : [];
+      sectionList.replaceChildren(...[...new Set(rows.map(r => r.section).filter(Boolean))].map(x => h('option', { value: x })));
+    };
+    inputs.bom_id?.el.addEventListener('change', async () => {
+      const id = inputs.bom_id.get();
+      if (id) { const b = await api(`/boms/${id}`); if (b.work_order_id) inputs.boq_id?.set(b.work_order_id); const pid = b.project_id || (b.work_order_id ? (await api(`/boqs/${b.work_order_id}`)).project_id : null); if (pid) inputs.project_id?.set(pid); }
+      sections().catch(() => {});
+    });
+    inputs.boq_id?.el.addEventListener('change', async () => {
+      const id = inputs.boq_id.get();
+      if (id && !inputs.bom_id?.get()) { const w = await api(`/boqs/${id}`); if (w.project_id) inputs.project_id?.set(w.project_id); }
+      sections().catch(() => {});
+    });
+    sections().catch(() => {});
   }
   if (entity === 'employees' && writable && inputs.login) {
     // Pick the person's existing CRM user: their details come along and no new login is needed.

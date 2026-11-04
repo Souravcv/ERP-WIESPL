@@ -161,7 +161,7 @@ function challanLines(boq, picks, user, force) {
   return lines;
 }
 
-const CHALLAN_KEYS = ['date', 'vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type', 'remarks'];
+const CHALLAN_KEYS = ['date', 'vendor_id', 'ship_to', 'receiver_name', 'site_contact', 'section', 'vehicle_no', 'driver', 'porter_amount', 'challan_type', 'remarks'];
 
 // Dispatch from the work order window: a Draft challan is made; the store dispatches it (store items issued from stock,
 // the work order shows them as sent). From a posted stock-entry draft (post: true) it is dispatched at once.
@@ -205,6 +205,17 @@ export function migrateProjectBoqs() {
     db.prepare('UPDATE challans SET boq_id = ? WHERE boq_id IS NULL AND project_id IS ?').run(id, g.project_id);
     console.log(`  Moved project BOQ lines into "${p?.name || 'BOQ'}" (BOQ id ${id})`);
   }
+}
+
+// The porter is often paid after the challan has left: the amount can still be entered, and goes to the project cost.
+export function setPorter(id, body, user) {
+  const ch = getRow('challans', id);
+  if (ch.status === 'Cancelled') throw new HttpError(409, 'This challan is cancelled');
+  const v = body?.porter_amount === '' || body?.porter_amount == null ? null : Number(body.porter_amount);
+  if (v != null && !(Number.isFinite(v) && v >= 0)) throw new HttpError(400, 'Enter the porter amount in rupees');
+  db.prepare('UPDATE challans SET porter_amount = ? WHERE id = ?').run(v, ch.id);
+  audit(user.name, 'challans', ch.id, 'porter amount', `${ch.porter_amount ?? '-'} → ${v ?? '-'}`);
+  return getRow('challans', ch.id);
 }
 
 export function dispatchChallan(id, body, user) {
@@ -438,6 +449,8 @@ function bomChallanLines(bom, picks, user, force) {
 // sent). From a posted stock-entry draft (post: true) it is dispatched at once.
 export function dispatchFromBom(bomId, body, user, { post = false } = {}) {
   const bom = getRow('boms', bomId);
+  // a BOQ without its own project takes the project of its work order
+  if (!bom.project_id && bom.work_order_id) bom.project_id = db.prepare('SELECT project_id FROM boqs WHERE id = ?').get(bom.work_order_id)?.project_id || null;
   return tx(() => {
     const lines = bomChallanLines(bom, body?.picks, user, body?.force);
     const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => body?.[k]).map(k => [k, body[k]]));

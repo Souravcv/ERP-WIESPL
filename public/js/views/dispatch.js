@@ -201,8 +201,8 @@ export async function boqView(root, boqId) {
     const chosen = rows.filter(r => picks.has(r.id));
     const f = {
       ship_to: h('textarea', { rows: 3, placeholder: 'Leave blank to use the vendor / project site address' }),
-      date: h('input', { type: 'date', value: today() }), vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), transporter: h('input'),
-      driver: h('input', { placeholder: 'name / phone' }), remarks: h('input'),
+      date: h('input', { type: 'date', value: today() }), receiver_name: h('input'), site_contact: h('input', { type: 'tel' }), section: h('input', { list: 'dc-sections' }),
+      vehicle_no: h('input', { placeholder: 'MH14 AB 1234' }), driver: h('input', { placeholder: 'name / phone' }), porter_amount: h('input', { type: 'number', min: 0, step: 'any' }), remarks: h('input'),
     };
     let vendorId = null;
     const vendors = await refOptions('vendors');
@@ -212,8 +212,9 @@ export async function boqView(root, boqId) {
     const ok = await modal(`Dispatch ${chosen.length} item(s) – a delivery challan is created automatically`, h('div.grid',
       h('label', 'Vendor (if the material goes to a vendor)', itemPicker(vendors, null, { onPick: id => { vendorId = id; } })),
       h('label', 'Ship to (address on the challan)', f.ship_to),
-      h('div.form-grid', ...Object.entries({ date: 'Date', vehicle_no: 'Vehicle No', transporter: 'Transporter', driver: 'Driver', remarks: 'Remarks' })
+      h('div.form-grid', ...Object.entries({ date: 'Date', receiver_name: 'Receiver Name', site_contact: 'Receiver Contact', section: 'Section', vehicle_no: 'Vehicle No', driver: 'Driver', porter_amount: 'Porter Amount (₹)', remarks: 'Remarks' })
         .map(([k, l]) => h('label', l, f[k]))),
+      h('datalist', { id: 'dc-sections' }, [...new Set(chosen.map(r => r.section).filter(Boolean))].map(x => h('option', { value: x }))),
       h('details', h('summary', 'Issue from store stock (optional) – pick the store item for lines that come from the store'),
         h('table.data', h('thead', h('tr', h('th', 'Material'), h('th.num', 'Qty'), h('th', 'Store item'))), h('tbody', itemCells)))),
       [{ label: 'Cancel', value: false }, { label: '📝 Make draft challan', cls: 'good', value: true }], { wide: true });

@@ -582,6 +582,7 @@ api.get('/projects/:id/analysis', wrap(req => {
       pending_value: sum(live.filter(p => p.status === 'Pending Approval'), 'total'), drafts: live.filter(p => p.status === 'Draft').length,
       received_value: sum(live, 'received_value'), billed: sum(live, 'billed'), paid: sum(live, 'paid'), to_pay: sum(approved, 'balance'), advance_at_risk: sum(live, 'advance_at_risk'),
       expenses: db.prepare("SELECT COALESCE(SUM(amount), 0) v FROM expenses WHERE project_id = ? AND status = 'Paid'").get(project.id).v,
+      porter: db.prepare("SELECT COALESCE(SUM(porter_amount), 0) v FROM challans WHERE project_id = ? AND status IN ('Dispatched', 'Delivered')").get(project.id).v,
       due_now: sum(live.filter(p => p.next_due && p.next_due.date <= new Date().toLocaleString('sv-SE').slice(0, 10)), 'balance') },
     pos, vendors: Object.values(byVendor).sort((a, b) => b.value - a.value),
     requisitions: db.prepare("SELECT id, req_no, date, status, required_by FROM requisitions WHERE project_id = ? AND status NOT IN ('Closed', 'Rejected') ORDER BY id DESC").all(project.id),
@@ -609,6 +610,7 @@ api.post('/material_lists/import-preview', need('material_lists'), express.raw({
 }));
 api.post('/material_lists/import', need('material_lists'), wrap(req => flow.importLists(req.body, req.user)));
 api.get('/store/boq-check', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.storeOverview(); }));
+api.post('/challans/:id/porter', need('challans'), wrap(req => dispatch.setPorter(req.params.id, req.body, req.user)));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- store

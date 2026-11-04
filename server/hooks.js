@@ -338,7 +338,19 @@ export function beforeSave(name, row, existing, user) {
         const v = db.prepare('SELECT name, address, city, state, pincode, phone FROM vendors WHERE id = ?').get(vid);
         if (v) row.ship_to = [v.name, v.address, [v.city, v.state, v.pincode].filter(Boolean).join(', '), v.phone && `Ph: ${v.phone}`].filter(Boolean).join('\n');
       }
+      // The BOQ decides the work order and project; a work order alone decides the project.
       const mid = row.bom_id ?? existing?.bom_id;
+      if (mid && (!existing || ('bom_id' in row && Number(row.bom_id) !== Number(existing.bom_id)))) {
+        const bq = db.prepare('SELECT project_id, work_order_id FROM boms WHERE id = ?').get(Number(mid));
+        if (bq?.work_order_id) row.boq_id = bq.work_order_id;
+        const bp = bq?.project_id || (bq?.work_order_id ? db.prepare('SELECT project_id FROM boqs WHERE id = ?').get(bq.work_order_id)?.project_id : null);
+        if (bp) row.project_id = bp;
+      }
+      const wid = row.boq_id ?? existing?.boq_id;
+      if (!mid && wid && (!existing || ('boq_id' in row && Number(row.boq_id) !== Number(existing.boq_id)))) {
+        const wq = db.prepare('SELECT project_id FROM boqs WHERE id = ?').get(Number(wid));
+        if (wq?.project_id) row.project_id = wq.project_id;
+      }
       if (mid && !(row.project_id ?? existing?.project_id)) row.project_id = db.prepare('SELECT project_id FROM boms WHERE id = ?').get(mid)?.project_id || null;
       if (mid && !(row.ship_to ?? existing?.ship_to) && !(row.project_id ?? existing?.project_id)) {
         const bm = db.prepare('SELECT b.client, c.name cname, c.address caddr FROM boms b LEFT JOIN customers c ON c.id = b.customer_id WHERE b.id = ?').get(mid);

@@ -33,6 +33,7 @@ export async function projectAnalysisView(root, projectId) {
       k('Still to pay', rs(t.to_pay), t.due_now ? `${rs(t.due_now)} due now` : 'on approved POs', t.due_now ? 'var(--bad)' : null),
       k('Advance at risk', rs(t.advance_at_risk), 'paid, material not received yet', t.advance_at_risk ? 'var(--warn)' : null),
       k('Store issues', rs(d.project.material_cost), 'material issued to this project'),
+      k('Porter charges', rs(t.porter), 'from delivery challans'),
       k('Other expenses', rs(t.expenses), 'expense vouchers paid for this project'),
       k('Sales order', rs(d.sales.order_value), `invoiced ${rs(d.sales.invoiced)} · received ${rs(d.sales.received)}`),
       k('Customer outstanding', rs(d.sales.outstanding), [d.sales.due_now ? `${rs(d.sales.due_now)} due now` : null, d.sales.retention ? `retention ${rs(d.sales.retention)}` : null, d.sales.advance ? `advance ${rs(d.sales.advance)} not adjusted` : null].filter(Boolean).join(' · '), d.sales.due_now ? 'var(--warn)' : null)),

@@ -16,6 +16,7 @@ export default {
 
   '🔒 Clock out opens at': '🔒 क्लॉक आउट या वेळी उघडेल:',
   'Project QC': 'प्रकल्प गुणवत्ता तपासणी', 'QC Plans': 'गुणवत्ता तपासणी योजना',
+  'Receiver Name': 'स्वीकारणाऱ्याचे नाव', 'Receiver Contact': 'स्वीकारणाऱ्याचा संपर्क', 'Porter Amount (₹)': 'हमाली रक्कम (₹)', 'Porter charges': 'हमाली खर्च',
   '📈 Performance': '📈 कामगिरी', 'Performance': 'कामगिरी', '📝 Daily Team Work': '📝 टीमचे दैनंदिन काम', 'Daily Team Work': 'टीमचे दैनंदिन काम', 'Worker': 'कामगार', 'Helper': 'मदतनीस', 'Technician': 'तंत्रज्ञ', 'Wiring Engineer': 'वायरिंग इंजिनिअर', 'Panel Maker': 'पॅनल मेकर', 'Work In-charge': 'काम प्रभारी',
   'My score': 'माझा गुण', 'Days worked': 'काम केलेले दिवस', 'Work recorded': 'नोंदवलेले काम', 'Done': 'पूर्ण', 'Quality': 'गुणवत्ता', 'Late marks': 'उशिराच्या नोंदी', 'Score': 'गुण', 'Doing best': 'सर्वोत्तम', 'Target': 'लक्ष्य', 'Panel Shop': 'पॅनल शॉप', 'Electrical / Wiring': 'इलेक्ट्रिकल / वायरिंग', '💾 Save the day': '💾 दिवस जतन करा',
   // job work and employee login, 2 Nov 2026

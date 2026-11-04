@@ -6,11 +6,13 @@ import { itemPicker, bomRows } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
-const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue / Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
+// Issue and Delivery Challan are both stock going out (OUTWARD), but different papers and separate tabs.
+const TABS = ['INWARD', 'OUTWARD', 'DC', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
+const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue', DC: '🚚 Delivery Challan (DC)', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
-const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'vehicle_no', 'transporter', 'driver', 'challan_type'];
+const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'receiver_name', 'site_contact', 'section', 'vehicle_no', 'driver', 'porter_amount', 'challan_type'];
 
 // Post a draft slip (stock goes down, the number is given). Short or reserved stock asks first. null = not posted.
 export async function postDraft(id, extra = {}) {
@@ -72,6 +74,7 @@ export async function stockEntryView(root) {
   if (draft && dp.boq_id && !p.boq) { location.hash = `#/stock-entry?type=OUTWARD&boq=${dp.boq_id}&draft=${draft.id}`; return; }
   if (draft) p.type = draft.type;
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
+  const startDc = p.type === 'DC';
   const [items, vendors, projects, allPos, boqOpts, bomOpts] = await Promise.all([api('/items?limit=20000'), refOptions('vendors'), refOptions('projects'),
     canView('purchase_orders', state.user.role) ? api('/purchase_orders').catch(() => []) : [],
     canView('boqs', state.user.role) ? api('/boqs?status=Open').then(r => r.map(b => ({ id: b.id, label: `${b.boq_no} · ${b.title}` }))).catch(() => []) : [],
@@ -82,18 +85,25 @@ export async function stockEntryView(root) {
   const header = {};
   let lines = [];
   let po = null;
+  let poManySites = false;
   let boq = null;
   let bom = null;
-  let makeChallan = false;
+  let makeChallan = startDc;
+  const tabOf = () => (type === 'OUTWARD' && (makeChallan || boq || bom) ? 'DC' : type);
   // Pending material of the chosen work order / BOQ: offered as suggestions on each line, nothing is filled in by itself.
   const pendingOpts = [];
   const poOpts = []; // lines of the chosen PO, offered on each GRN line
   const ch = {}; // delivery challan details (ship-to address, vehicle …)
+  if (startDc) ch.challan_type = 'Non-Returnable';
 
   if (p.po) {
     po = await api(`/purchase_orders/${p.po}`);
     type = 'INWARD';
     Object.assign(header, { po_id: po.id, vendor_id: po.vendor_id, project_id: po.project_id });
+    // A PO without a project on its head, but all its lines for one site: that site.
+    const sites = new Set(po.lines.flatMap(l => (l.split?.length ? l.split.map(x => x.project_id) : [l.project_id])).filter(Boolean).map(Number));
+    if (!header.project_id && sites.size === 1) header.project_id = [...sites][0];
+    poManySites = sites.size > 1;
     let heading = '';
     po.lines.forEach((l, i) => {
       if (l.description) heading = l.description;
@@ -112,18 +122,19 @@ export async function stockEntryView(root) {
     for (const b of boqRows) {
       if (b.kind === 'Heading' || ['Dispatched', 'Delivered'].includes(b.delivery_status)) continue;
       const note = `${b.section} ${b.sr_no || ''} – ${[b.heading, String(b.description).split('\n')[0]].filter(Boolean).join(' › ').slice(0, 110)}`;
-      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending ?? 'qty TBD'} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note });
+      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending ?? 'qty TBD'} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note, section: b.section });
     }
     if (!pendingOpts.length) toast('Everything in this work order has already been sent');
   }
   if (p.bom) {
     type = 'OUTWARD';
     bom = await api(`/boms/${p.bom}`);
-    Object.assign(header, { bom_id: bom.id, project_id: bom.project_id });
+    // a BOQ without its own project takes the project of its work order
+    Object.assign(header, { bom_id: bom.id, project_id: bom.project_id || (bom.work_order_id ? (await api(`/boqs/${bom.work_order_id}`)).project_id : null) });
     for (const b of bomRows(await api(`/bom_items?bom_id=${bom.id}&limit=20000`))) {
       if (!(b.pending > 0)) continue;
       const note = `${b.section || ''} ${b.sr_no || ''} – ${[b.component_name, b.dimensions].filter(Boolean).join(' ').slice(0, 110)}`;
-      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note });
+      pendingOpts.push({ id: b.id, label: `${note} · pending ${b.pending} ${b.uom || ''}`, item_id: b.item_id || null, pending: b.pending, uom: b.uom, note, section: b.section });
     }
     if (!pendingOpts.length) toast('Everything in this BOQ has already been sent');
   }
@@ -133,6 +144,7 @@ export async function stockEntryView(root) {
     makeChallan = !!dp.make_challan;
     Object.assign(ch, dp.challan || {}, Object.fromEntries(CHALLAN_KEYS.filter(k => dp[k] != null).map(k => [k, dp[k]])));
   }
+  const sectionOpts = [...new Set(pendingOpts.map(o => o.section).filter(Boolean))];
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
   if (p.vendor) header.vendor_id = Number(p.vendor);
@@ -176,11 +188,12 @@ export async function stockEntryView(root) {
     const pick = (k, opts, label) => field(label, itemPicker(opts, header[k] ? Number(header[k]) : null, { onPick: id => { header[k] = id; } }));
     const date = v('date', h('input', { type: 'date' }));
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
-    const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
+    const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: tabOf() === 'DC' ? 'Challan No' : 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
       : field({ INWARD: 'GRN No', JOB_IN: 'GRN No', JOB_OUT: 'Vendor DC No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
       F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
+      F.push(field('Project', itemPicker(projects, header.project_id ? Number(header.project_id) : null, { onPick: id => { header.project_id = id; } }), poManySites ? 'This PO is for several sites: its lines stay with their own site' : po ? 'From the PO. Change it if this material is for another project' : 'Which project this material is for'));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'an approved PO in the CRM'),
@@ -193,26 +206,29 @@ export async function stockEntryView(root) {
       if (type === 'JOB_IN') F.push(field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))), field('Process', sv('purpose', ['Powder coating', 'Fabrication', 'Perforation', 'Bending', 'Laser cutting'])));
       else F.push(pick('project_id', projects, 'Project'), field('Project / Purpose', sv('purpose', ['Powder coating', 'Fabrication', 'Perforation', 'Bending', 'Laser cutting'])));
     }
-    if (type === 'OUTWARD' && !boq && bomOpts.length) F.push(field('Against BOQ (makes the delivery challan)', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'components still to send are listed below'));
-    if (type === 'OUTWARD' && !bom && boqOpts.length) F.push(field('Against Work Order (makes the delivery challan)', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=OUTWARD'; } }), 'pending work order material is listed below'));
-    if (['OUTWARD', 'TRANSFER'].includes(type) && !boq && !bom) {
-      // Which document: an internal issue slip, or a dispatch / delivery challan (to site or a vendor) with it.
-      const opts = type === 'OUTWARD' ? [['slip', 'Issue slip (production / internal)'], ['challan', 'Dispatch challan (to site / vendor)']] : [['slip', 'Material Transfer Note (MTN)'], ['challan', 'MTN with delivery challan']];
+    if (tabOf() === 'DC' && !boq && bomOpts.length) F.push(field('Against BOQ', itemPicker(bomOpts, bom?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&bom=${id}` : '#/stock-entry?type=DC'; } }), 'fills the work order and project; components still to send are listed below'));
+    if (tabOf() === 'DC' && !bom && boqOpts.length) F.push(field('Against Work Order', itemPicker(boqOpts, boq?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=OUTWARD&boq=${id}` : '#/stock-entry?type=DC'; } }), 'fills the project; pending work order material is listed below'));
+    if (bom) F.push(field('Work Order', h('input', { value: bom.work_order_id_label || 'none on this BOQ', disabled: true }), 'from the BOQ'));
+    if (type === 'TRANSFER') {
+      const opts = [['slip', 'Material Transfer Note (MTN)'], ['challan', 'MTN with delivery challan']];
       const doc = h('select', opts.map(([v2, l]) => h('option', { value: v2 }, l)));
       doc.value = makeChallan ? 'challan' : 'slip';
-      doc.onchange = () => { makeChallan = doc.value === 'challan'; ch.challan_type ||= type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'; render(); };
+      doc.onchange = () => { makeChallan = doc.value === 'challan'; ch.challan_type ||= 'Returnable'; render(); };
       F.push(field('Document *', doc));
     }
     if (boq || bom || makeChallan) {
       const cv = (k, el) => { el.value = ch[k] ?? ''; el.oninput = el.onchange = () => { ch[k] = el.value; }; return el; };
       F.push(field('Vendor (if the material goes to a vendor)', itemPicker(vendors, ch.vendor_id ?? null, { onPick: id => { ch.vendor_id = id; } }), 'ship-to is taken from the vendor'),
         h('label.span-2', 'Ship to (address on the challan)', h('span.hint', 'leave blank to use the vendor / project site address'), cv('ship_to', h('textarea', { rows: 3, placeholder: 'Hospital / site / vendor name\nAddress\nCity' }))),
-        field('Vehicle No', cv('vehicle_no', h('input', { placeholder: 'MH14 AB 1234' }))), field('Transporter', cv('transporter', h('input'))),
-        field('Driver', cv('driver', h('input', { placeholder: 'name / phone' }))));
+        field('Receiver Name', cv('receiver_name', h('input'))), field('Receiver Contact', cv('site_contact', h('input', { type: 'tel', placeholder: 'mobile' }))),
+        field('Section', h('span', { style: { display: 'contents' } }, cv('section', h('input', { list: 'dc-sections', placeholder: 'e.g. MOT PPGL' })), h('datalist', { id: 'dc-sections' }, sectionOpts.map(x => h('option', { value: x })))), 'section of the work order'),
+        field('Vehicle No', cv('vehicle_no', h('input', { placeholder: 'MH14 AB 1234' }))), field('Driver', cv('driver', h('input', { placeholder: 'name / phone' }))),
+        field('Porter Amount (₹)', cv('porter_amount', h('input', { type: 'number', min: 0, step: 'any' })), 'added to the project cost; not printed'));
       if (makeChallan) F.push(field('Challan type', cv('challan_type', h('select', ['Non-Returnable', 'Returnable'].map(x => h('option', x))))));
     }
-    if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
-    if (['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
+    if (type === 'OUTWARD' && (bom || boq)) F.push(field('Project', h('input', { value: projects.find(x => x.id === Number(header.project_id))?.label || 'none', disabled: true }), `from the ${bom ? 'BOQ' : 'work order'}`));
+    else if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
+    if (tabOf() !== 'DC' && ['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store', 'Production'])), field('To *', sv('to_location', ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'])));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
@@ -280,9 +296,9 @@ export async function stockEntryView(root) {
     const may = hasFunction(state.user.role, 'stock_post');
     const choice = await modal('Draft saved', h('p', `Draft #${d.id} (${d.doc_kind}, ${d.item_count} item(s)) is saved. Nothing has left the stock yet: ${may ? 'post it now, or later from Store → Draft Issues & Transfers.' : 'the store checks and posts it.'}`), [
       may ? { label: '✔ Post now', cls: 'good', value: 'post' } : null, { label: 'Open draft', value: 'open' }, { label: 'New entry', cls: 'primary', value: 'new' }].filter(Boolean));
-    if (choice === 'post') { const r = await postDraft(d.id); if (r) await postedDialog(r); location.hash = r ? `#/stock-entry?type=${type}&t=${Date.now()}` : `#/view/stock_drafts/${d.id}`; return; }
+    if (choice === 'post') { const r = await postDraft(d.id); if (r) await postedDialog(r); location.hash = r ? `#/stock-entry?type=${tabOf()}&t=${Date.now()}` : `#/view/stock_drafts/${d.id}`; return; }
     if (choice === 'open') { location.hash = `#/view/stock_drafts/${d.id}`; return; }
-    location.hash = `#/stock-entry?type=${type}&t=${Date.now()}`;
+    location.hash = `#/stock-entry?type=${tabOf()}&t=${Date.now()}`;
   }
 
   async function save(allowNegative = false, allowReserved = false) {
@@ -337,9 +353,9 @@ export async function stockEntryView(root) {
   const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
   const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
   saveLabel();
-  const tabs = h('div.tabs.wrap', ENTRY_TYPES.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === tabOf() ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'DC') || (!!draft && t !== tabOf()), onclick: () => { type = t === 'DC' ? 'OUTWARD' : t; if (t === 'DC') { makeChallan = true; ch.challan_type ||= 'Non-Returnable'; } else makeChallan = false; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
-    tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', ENTRY_TYPES[i] === type));
+    tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', TABS[i] === tabOf()));
     saveLabel();
     render();
   }
