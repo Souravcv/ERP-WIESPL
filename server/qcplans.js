@@ -20,7 +20,7 @@ const hasLimit = c => num(c.min) != null || num(c.max) != null || String(c.limit
 // ---------------------------------------------------------------- the first plans; every other figure is left for the design head
 const c = (stage, check, method, instrument, frequency, o = {}) => ({ stage, check, method, instrument, frequency, min: null, max: null, unit: '', limit: '', hold: 'No', only_if: '', source: '', ...o });
 const STARTER = [
-  { product: 'PUF wall and ceiling panels', keywords: 'modular wall, modular ceiling', checks: [
+  { product: 'PUF wall and ceiling panels', keywords: 'modular wall, modular ceiling, coving, !picture', checks: [
     c('Incoming', 'PPGL sheet thickness', 'Micrometer, 3 points per sampled sheet', 'Micrometer', 'Each batch', { unit: 'mm', source: 'Work order: 0.5 mm. Design head to set the tolerance' }),
     c('Incoming', 'Mill / test certificate', 'Check the document against the batch', '', 'Each batch', { limit: 'Certificate on file; make as per work order', hold: 'Yes' }),
     c('Incoming', 'Lead sheet thickness', 'Micrometer, 3 points per sheet', 'Micrometer', 'Each sheet', { min: 1, unit: 'mm', hold: 'Yes', only_if: 'lead', source: 'Work order: 1 mm. The RSO shielding calculation decides the final thickness' }),
@@ -52,12 +52,135 @@ const STARTER = [
   ] },
 ];
 
+// The rest of the products. Figures only where a work order states them; everything else is for the design head.
+const SET = 'Design head to set the limit';
+const MORE = [
+  { product: 'AHU and SHRM', keywords: 'air handling unit, ahu 1, ahu 2, ahu 3, ahu 4, ahu 5, ahu 6, ahu 7, ahu 8, ahu 9, shrm, !control panel, !ismart, !laminar air flow system', checks: [
+    c('Incoming', 'Sheet thickness: PPGI outer, GI inner', 'Micrometer on each sheet batch', 'Micrometer', 'Each batch', { unit: 'mm', source: 'Work order: 0.5 mm outer, 0.6 mm inner. Design head to set the tolerance' }),
+    c('Incoming', 'Fan, motor and coil make and certificate', 'Check against the work order and its documents', '', 'Each unit', { limit: 'Make, IP55 motor and coil rows as per work order; certificates on file', hold: 'Yes' }),
+    c('In-process', 'Panel density and thickness', 'Weigh a core sample; vernier at the panel edge', 'Balance, vernier', 'Each batch', { unit: 'kg/m³', source: 'Work order: 25 mm panel, 40 kg/m³. Design head to set the tolerance' }),
+    c('In-process', 'Drain pan', 'Water poured in the pan', '', 'Each unit', { limit: 'SS 304; insulated; drains fully with no leak' }),
+    c('Factory final', 'Casing leakage', 'Pressurise the casing and measure leakage', 'Leak test rig', 'Each unit', { source: 'Design head to set the class and method (e.g. EN 1886)', hold: 'Yes' }),
+    c('Factory final', 'Coil pressure test', 'Hold test pressure on the coil', 'Pressure gauge', 'Each coil', { unit: 'bar', source: SET, hold: 'Yes' }),
+    c('Factory final', 'Fan vibration', 'Vibration meter at running speed', 'Vibration meter', 'Each unit', { unit: 'mm/s', source: SET }),
+    c('Factory final', 'Motor running current', 'Clamp meter at design speed', 'Clamp meter', 'Each unit', { unit: 'A', source: 'Against the motor nameplate. ' + SET }),
+    c('Factory final', 'Fan outlet velocity', 'Anemometer at the outlet', 'Anemometer', 'Each unit', { max: 8, unit: 'm/s', source: 'Work order: not more than 8 m/s' }),
+    c('Site', 'Installation', 'Visual', '', 'Each unit', { limit: 'Level; anti-vibration mounts fitted; drain trap connected; access kept clear', hold: 'Yes' }),
+    c('Commissioning', 'Air volume', 'Measure at design speed', 'Anemometer / balometer', 'Each unit', { unit: 'cfm', source: 'As per the work order line. Design head to set the tolerance', hold: 'Yes' }),
+    c('Commissioning', 'SHRM holds humidity without reheaters', 'Log temperature and humidity while running', 'Thermo-hygrometer', 'Each unit where supplied', { unit: '%', only_if: 'shrm', source: 'Design head to set the test duration and limits', hold: 'Yes' }),
+  ] },
+  { product: 'Outdoor units and refrigerant piping', keywords: 'air conditioner outdoor, outdoor unit, odu capacity', checks: [
+    c('Incoming', 'Make, capacity and refrigerant', 'Check the nameplate against the work order', '', 'Each unit', { limit: 'Make, capacity and refrigerant as per work order', hold: 'Yes' }),
+    c('Site', 'Refrigerant line pressure test', 'Hold nitrogen pressure in the line', 'Pressure gauge', 'Each circuit', { unit: 'bar', source: SET, hold: 'Yes' }),
+    c('Site', 'Vacuum before charging', 'Micron gauge before charging', 'Vacuum pump, micron gauge', 'Each circuit', { unit: 'micron', source: SET, hold: 'Yes' }),
+    c('Commissioning', 'Running pressures and current', 'Gauges and clamp meter at full load', 'Gauges, clamp meter', 'Each unit', { source: 'Maker’s data. ' + SET }),
+  ] },
+  { product: 'Ducting and insulation', keywords: 'ducting :, ducting ducting, aluminium ducting, !laminar, !in built', checks: [
+    c('Incoming', 'Sheet gauge and insulation class', 'Micrometer; check the insulation certificate', 'Micrometer', 'Each batch', { limit: 'GI 22 / 24 gauge and Class O insulation as per work order', hold: 'Yes' }),
+    c('Factory final', 'Duct pieces', 'Visual and tape', 'Tape', 'Each batch', { limit: 'Flanges, joints and sizes as per drawing; inside clean; ends capped for transport' }),
+    c('Site', 'Duct leakage test', 'SMACNA method, before insulation and closure', 'Duct leak tester', 'Each duct system', { unit: 'cfm/100 sq ft', source: 'Design head to set the pressure and seal class', hold: 'Yes' }),
+    c('Site', 'Insulation and supports', 'Visual', '', 'Each duct system', { limit: 'Continuous insulation with sealed joints; supports as per drawing', hold: 'Yes' }),
+    c('Commissioning', 'Air balancing', 'Measure at each terminal; set the dampers', 'Balometer', 'Each room', { unit: 'cfm', source: 'Design head to set the tolerance against the design figures' }),
+  ] },
+  { product: 'Diffusers and return air risers', keywords: 'diffusers :, return air riser', checks: [
+    c('Incoming', 'Make and finish', 'Visual against the work order', '', 'Each batch', { limit: 'Material, size and powder coat as per work order; riser grilles SS 304, riser SS 202' }),
+    c('Site', 'Fixing and sealing', 'Visual', '', 'Each room', { limit: 'Sealed to the panel with no gaps; dampers free to move', hold: 'Yes' }),
+    c('Commissioning', 'Riser UV lamp and dampers', 'Switch on; operate each damper', '', 'Each riser', { limit: 'UV lamp on; damper position set and marked', only_if: 'riser' }),
+  ] },
+  { product: 'LAF plenum and HEPA filters', keywords: 'laf plenum, ss 304 plenum with diffuser, hepa filter in plenum, !laminar air flow system', checks: [
+    c('Incoming', 'SS 304 grade', 'Mill certificate; alloy check if available', 'Alloy tester', 'Each batch', { limit: 'SS 304 certificate on file', hold: 'Yes' }),
+    c('Incoming', 'HEPA filter test certificate', 'Each filter serial against its certificate', '', 'Each filter', { limit: 'H14 as per work order; certificate for every serial number', hold: 'Yes' }),
+    c('In-process', 'Sheet thickness', 'Micrometer', 'Micrometer', 'Each batch', { min: 1.2, unit: 'mm', source: 'Work order: 1.2 mm for the 6 × 8 ft plenum. Check the line for other sizes' }),
+    c('In-process', 'Welds and finish', 'Visual', '', 'Each plenum', { limit: 'Welds ground and polished; matt finish; no sharp edges' }),
+    c('Factory final', 'Air tightness of the plenum', 'Pressure or smoke test', '', 'Each plenum', { source: 'Design head to set the method and limit', hold: 'Yes' }),
+    c('Site', 'Filter fitting and sealing', 'Visual; filters fitted only after the room is clean', '', 'Each plenum', { limit: 'Gaskets seated; room cleaned before the filters go in', hold: 'Yes' }),
+    c('Site', 'Coverage over the table', 'Measure the plenum against the table', 'Tape', 'Each OT', { limit: 'At least 1 ft beyond every side of the table (NABH 2018)' }),
+  ] },
+  { product: 'Hermetic and lead doors', keywords: 'door size, hermetically sealed, lead door', checks: [
+    c('Incoming', 'Hardware and leaf material', 'Visual against the work order', '', 'Each lot', { limit: 'Leaf, core, laminate and fittings as per work order' }),
+    c('Incoming', 'Lead sheet thickness', 'Micrometer before fitting', 'Micrometer', 'Each door', { min: 2, unit: 'mm', hold: 'Yes', only_if: 'lead', source: 'Work order: 2 mm. The RSO shielding calculation decides the final thickness' }),
+    c('In-process', 'Lead continuity in leaf and frame', 'Inspect before closing', '', 'Each door', { limit: 'Lead in leaf and frame, overlapping the wall lining; no gaps', hold: 'Yes', only_if: 'lead' }),
+    c('Factory final', 'Size and squareness', 'Tape, compare the diagonals', 'Tape', 'Each door', { unit: 'mm', source: 'Against the work order size. Design head to set the tolerance' }),
+    c('Factory final', 'Operation', 'Open and close repeatedly', '', 'Each door', { limit: 'Smooth; no rubbing; closer or drive working' }),
+    c('Site', 'Gasket seal', 'Close the door; check all round', '', 'Each door', { limit: 'Continuous contact all round; room holds its pressure', hold: 'Yes' }),
+    c('Commissioning', 'Automatic door: sensors, safety and manual opening', 'Test each function', '', 'Each automatic door', { limit: 'Sensors stop the door; opens by hand on power failure', hold: 'Yes', only_if: 'autom' }),
+    c('Commissioning', 'Automatic door noise', 'Sound meter during movement', 'Sound meter', 'Each automatic door', { max: 60, unit: 'dB', only_if: 'autom', source: 'Work order: not more than 60 dB' }),
+  ] },
+  { product: 'Control panels and iSmart', keywords: 'control panel, ismart, integration panel, surgeon panel, touch surgeon, !laminar air flow system', checks: [
+    c('Incoming', 'Component makes', 'Compare with the bill of material', '', 'Each panel', { limit: 'Makes as per work order; VFD and switchgear documents on file' }),
+    c('In-process', 'Wiring, ferrules and labels', 'Visual against the wiring drawing', '', 'Each panel', { limit: 'Matches the drawing; every wire ferruled; all items labelled', hold: 'Yes' }),
+    c('Factory final', 'Continuity', 'Multimeter on each circuit', 'Multimeter', 'Each panel', { limit: 'All circuits as per the drawing' }),
+    c('Factory final', 'Insulation resistance', 'Insulation tester', 'Insulation tester', 'Each panel', { unit: 'MΩ', source: SET, hold: 'Yes' }),
+    c('Factory final', 'Function test on power', 'Run every control, interlock and alarm', '', 'Each panel', { limit: 'All controls, protections and alarms work', hold: 'Yes' }),
+    c('Factory final', 'Enclosure rating', 'Check gasket, glands and lock', '', 'Each IP65 panel', { limit: 'IP65 as per work order: gasket and gland plate complete', only_if: 'ip 65' }),
+    c('Site', 'Supply and earth', 'Phase rotation, voltage and earth', 'Multimeter, phase sequence meter', 'Each panel', { limit: 'Correct rotation; 415 V ±10% as per work order; earth connected', hold: 'Yes' }),
+    c('Commissioning', 'Sensors calibrated', 'Compare with a calibrated instrument', 'Thermo-hygrometer, manometer', 'Each panel', { source: 'Design head to set the allowed difference', hold: 'Yes' }),
+    c('Commissioning', 'iSmart data', 'See live values and an alarm on the cloud', '', 'Each iSmart', { limit: 'Live data, an alarm and 30 days of logging working', only_if: 'ismart' }),
+  ] },
+  { product: 'Medical gas pipeline (MGPS)', keywords: 'section:mgps', checks: [
+    c('Incoming', 'Copper tube and fittings', 'Check certificate and that ends are capped', '', 'Each batch', { limit: 'EN 13348, degreased, as per work order; certificate on file', hold: 'Yes' }),
+    c('Site', 'Pressure test', 'Standing test with oil-free air or nitrogen', 'Pressure gauge', 'Each gas line', { unit: 'bar', source: 'Design head or MGPS vendor to set from ISO 7396-1 / HTM 02-01', hold: 'Yes' }),
+    c('Site', 'Pipe identification', 'Visual', '', 'Each gas line', { limit: 'Every line labelled and colour coded', hold: 'Yes' }),
+    c('Commissioning', 'Cross-connection test', 'One gas at a time, at every outlet', '', 'Each outlet', { limit: 'Each outlet gives only its own gas', hold: 'Yes' }),
+    c('Commissioning', 'Gas identity and purity', 'Gas analyser at the outlet', 'Gas analyser', 'Each outlet', { source: 'Design head or MGPS vendor to set', hold: 'Yes' }),
+    c('Commissioning', 'Particulate test', 'Flow through a filter at the outlet', 'Particulate test kit', 'Each gas line', { source: 'Design head or MGPS vendor to set', hold: 'Yes' }),
+    c('Commissioning', 'Flow and pressure at outlets', 'Flow meter at the outlet', 'Flow meter', 'Each outlet', { source: 'Design head or MGPS vendor to set', hold: 'Yes' }),
+    c('Commissioning', 'Area alarms', 'Create low and high pressure at the alarm', '', 'Each alarm', { limit: 'Sounds and shows for each gas', hold: 'Yes' }),
+  ] },
+  { product: 'Site electrical', keywords: 'section:electrical, conduit', checks: [
+    c('Incoming', 'Cable and DB makes', 'Check against the work order', '', 'Each lot', { limit: 'FRLS cable, DB and breaker ratings as per work order', hold: 'Yes' }),
+    c('Site', 'Insulation resistance of cables', 'Insulation tester before energising', 'Insulation tester', 'Each circuit', { unit: 'MΩ', source: SET, hold: 'Yes' }),
+    c('Site', 'Earth resistance', 'Earth tester', 'Earth tester', 'Each earth pit', { unit: 'Ω', source: SET, hold: 'Yes' }),
+    c('Site', 'Terminations and routing', 'Visual', '', 'Each DB', { limit: 'Glands and lugs tight; trays, covers and labels complete' }),
+    c('Commissioning', 'ELCB trip', 'ELCB tester or test button at each DB', 'ELCB tester', 'Each DB', { limit: 'Trips at its rated 30 mA', hold: 'Yes' }),
+    c('Commissioning', 'Polarity and load balance', 'Socket tester; clamp meter on phases', 'Socket tester, clamp meter', 'Each DB', { source: 'Design head to set the allowed imbalance' }),
+  ] },
+  { product: 'Vinyl flooring', keywords: 'vinyl flooring, self levelling, self-levelling', checks: [
+    c('Incoming', 'Make, thickness, batch and shade', 'Check the roll against the work order', '', 'Each lot', { limit: 'Make, 2 mm thickness and approved shade; same batch in a room' }),
+    c('Site', 'Subfloor moisture and levelness', 'Moisture meter; straight edge', 'Moisture meter, straight edge', 'Each room', { unit: '%', source: 'Vinyl maker’s limit. ' + SET, hold: 'Yes' }),
+    c('Site', 'Copper grid', 'Inspect before laying', '', 'Each antistatic room', { limit: 'Laid and connected to earth as per drawing', hold: 'Yes', only_if: 'antistatic' }),
+    c('Site', 'Seam welding and coving', 'Visual', '', 'Each room', { limit: 'Continuous welded seams; no bubbles or lifting', hold: 'Yes' }),
+    c('Commissioning', 'Electrical resistance', 'Resistance test to EN 1081', 'Megohmmeter', 'Each antistatic room', { unit: 'Ω', only_if: 'antistatic', source: 'Work order: EN 1081. Design head to set the limit', hold: 'Yes' }),
+  ] },
+  { product: 'Pendants, lights and wall fittings', keywords: 'pendant, pendent, led light, led spot, x-ray viewer, sky light, picture panel, picture glass, writing board, window view, storage, bed head, air steril, !section:mgps, !section:electrical, !laf plenum, !ss 304 plenum, !ismart, !integration panel, !door size, !hermetically', checks: [
+    c('Incoming', 'Make, size and certificate', 'Check against the work order', '', 'Each lot', { limit: 'Make, size and CE / USFDA certificates as per work order; no transit damage', hold: 'Yes' }),
+    c('Site', 'Fixing and sealing', 'Visual', '', 'Each room', { limit: 'Flush and sealed with the panels; ceiling support as per drawing' }),
+    c('Commissioning', 'Function', 'Operate each item', '', 'Each item', { limit: 'Lights, viewers, arm movement and brakes work' }),
+    c('Commissioning', 'Pendant gas and power outlets', 'Test each outlet with its gas', '', 'Each pendant', { limit: 'Each outlet gives its own gas; sockets live and earthed', only_if: 'pendant, pendent', hold: 'Yes' }),
+  ] },
+  { product: 'Pass box, scrub sink, exhaust and fire damper', keywords: 'pass box, scrub, treated exhaust, treated exhuast, fire damper, fire safety', checks: [
+    c('Incoming', 'SS grade and make', 'Certificate and visual', '', 'Each item', { limit: 'SS 304 and make as per work order; welds ground and polished' }),
+    c('Site', 'Fixing, sealing and drains', 'Visual; run water at sinks', '', 'Each item', { limit: 'Sealed to the panel; no leaks; drains fully' }),
+    c('Commissioning', 'Pass box door interlock', 'Try to open both doors together', '', 'Each pass box', { limit: 'Both doors cannot open together; UV lamp works', only_if: 'pass box', hold: 'Yes' }),
+    c('Commissioning', 'Scrub sink operation', 'Run the tap and foot control', '', 'Each sink', { limit: 'Hands-free control works; water and drain correct', only_if: 'scrub' }),
+    c('Commissioning', 'Exhaust running', 'Run the fan; check filter and UV', 'Anemometer', 'Each system', { limit: 'Runs at its rated air volume; UV and filter in place', only_if: 'exh' }),
+    c('Commissioning', 'Fire damper', 'Release the link and check it closes', '', 'Each damper', { limit: 'Closes fully; link replaced; access for inspection', only_if: 'fire', hold: 'Yes' }),
+  ] },
+];
+
 export function seedPlans() {
-  if (db.prepare("SELECT 1 FROM settings WHERE key = 'qc_plans_v1'").get()) return;
   const system = { name: 'System', role: 'admin' };
-  for (const p of STARTER) insertRow('qc_plans', { ...p, status: 'Draft', checks: JSON.stringify(p.checks) }, system, { system: true });
-  db.prepare("INSERT INTO settings (key, value) VALUES ('qc_plans_v1', '\"1\"')").run();
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'qc_plans_v1'").get()) {
+    for (const p of STARTER) insertRow('qc_plans', { ...p, status: 'Draft', checks: JSON.stringify(p.checks) }, system, { system: true });
+    db.prepare("INSERT INTO settings (key, value) VALUES ('qc_plans_v1', '\"1\"')").run();
+  }
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'qc_plans_v2'").get()) {
+    for (const p of MORE) if (!db.prepare('SELECT 1 FROM qc_plans WHERE product = ?').get(p.product)) insertRow('qc_plans', { ...p, status: 'Draft', checks: JSON.stringify(p.checks) }, system, { system: true });
+    // coving is part of the panel work; only if nobody has changed the words
+    db.prepare("UPDATE qc_plans SET keywords = 'modular wall, modular ceiling, coving, !picture' WHERE product = 'PUF wall and ceiling panels' AND keywords = 'modular wall, modular ceiling'").run();
+    db.prepare("INSERT INTO settings (key, value) VALUES ('qc_plans_v2', '\"1\"')").run();
+  }
 }
+
+// A plan's words against a work order line (its heading and description). "section:word" looks at the section only; "!" in
+// front keeps the plan off the line.
+const lineText = l => `${l.heading || ''} ${l.description || ''}`.replace(/\s+/g, ' ').toLowerCase();
+const hits = (term, l) => (term.startsWith('section:') ? String(l.section || '').toLowerCase().includes(term.slice(8)) : lineText(l).includes(term));
+export const planMatches = (plan, l) => {
+  const terms = String(plan.keywords || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+  return terms.some(k => !k.startsWith('!') && hits(k, l)) && !terms.some(k => k.startsWith('!') && hits(k.slice(1), l));
+};
+const onlyIf = (x, lines) => { const words = String(x.only_if || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean); return !words.length || lines.some(l => words.some(w => lineText(l).includes(w))); };
 
 // A plan is approved only when every check has a limit.
 export function prepPlan(row, existing) {
@@ -69,7 +192,7 @@ export function prepPlan(row, existing) {
 }
 
 const planChecks = (plan, stage, lines) => parse(plan.checks, []).filter(x => x.stage === stage
-  && (!String(x.only_if || '').trim() || lines.some(l => String(l.description || '').toLowerCase().includes(String(x.only_if).trim().toLowerCase()))))
+  && onlyIf(x, lines))
   .map(({ stage: _s, only_if: _o, ...x }) => ({ ...x, measured: '', result: '', remark: '' }));
 
 // Plan fields come from the record on the server, so only measured, result and remark can be changed.
@@ -98,11 +221,10 @@ export function generate(projectId, user) {
   let created = 0, refreshed = 0;
   return tx(() => {
     for (const b of boqs) {
-      const lines = db.prepare("SELECT section, description, qty, uom FROM boq_items WHERE boq_id = ? AND COALESCE(kind, 'Item') = 'Item' ORDER BY sort, id").all(b.id);
+      const lines = db.prepare("SELECT section, heading, description, qty, uom FROM boq_items WHERE boq_id = ? AND COALESCE(kind, 'Item') = 'Item' AND COALESCE(qty, 0) > 0 ORDER BY sort, id").all(b.id);
       for (const section of [...new Set(lines.map(l => l.section || ''))]) {
         for (const plan of plans) {
-          const keys = String(plan.keywords || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-          const matched = lines.filter(l => (l.section || '') === section && keys.some(k => String(l.description || '').toLowerCase().includes(k)));
+          const matched = lines.filter(l => (l.section || '') === section && planMatches(plan, l));
           if (!matched.length) continue;
           const items = matched.map(l => `${String(l.description).replace(/\s+/g, ' ').slice(0, 90)}${l.qty != null ? ` – ${Math.round(Number(l.qty) * 100) / 100} ${l.uom || ''}` : ''}`).join('\n');
           for (const stage of QC_PLAN_STAGES) {
@@ -133,14 +255,12 @@ export function board(projectId, user) {
   if (!project) throw new HttpError(404, 'Project not found');
   const plans = db.prepare('SELECT id, product, keywords, status, checks FROM qc_plans ORDER BY id').all();
   const rows = latest(project.id).map(r => { const ch = parse(r.checks, []); return { id: r.id, pqc_no: r.pqc_no, boq_id: r.boq_id, section: r.section, plan_id: r.plan_id, stage: r.stage, status: r.status, date: r.date, ncr_id: r.ncr_id, checks: ch.length, no_limit: ch.filter(x => !hasLimit(x)).length, holds: holdsOf(r).length }; });
-  const keysOf = p => String(p.keywords || '').split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
-  const keys = plans.flatMap(keysOf);
-  const lines = db.prepare("SELECT i.description FROM boq_items i JOIN boqs b ON b.id = i.boq_id WHERE b.project_id = ? AND COALESCE(i.kind, 'Item') = 'Item' AND COALESCE(i.qty, 0) > 0").all(project.id);
+  const lines = db.prepare("SELECT i.section, i.heading, i.description FROM boq_items i JOIN boqs b ON b.id = i.boq_id WHERE b.project_id = ? AND COALESCE(i.kind, 'Item') = 'Item' AND COALESCE(i.qty, 0) > 0").all(project.id);
   const count = s => rows.filter(r => r.status === s).length;
   return { project, rows, stages: QC_PLAN_STAGES,
     plans: plans.map(p => ({ id: p.id, product: p.product, status: p.status, no_limit: parse(p.checks, []).filter(x => !hasLimit(x)).length })),
     totals: { total: rows.length, passed: count('Passed'), failed: count('Failed'), pending: count('Pending'), open_holds: rows.filter(r => r.status !== 'Passed' && r.holds).length },
-    lines_total: lines.length, lines_no_plan: lines.filter(l => !keys.some(k => String(l.description || '').toLowerCase().includes(k))).length,
+    lines_total: lines.length, lines_no_plan: lines.filter(l => !plans.some(p => planMatches(p, l))).length,
     work_orders: db.prepare('SELECT COUNT(*) n FROM boqs WHERE project_id = ?').get(project.id).n };
 }
 
@@ -179,7 +299,7 @@ export function complete(id, user) {
     }
     const out = updateRow('project_qc', id, { status: notOk.length ? 'Failed' : 'Passed', date, inspector: r.inspector || user.name, done_by: `${user.name} (${stamp()})`, ncr_id: ncrId }, user, { system: true });
     audit(user.name, 'project_qc', r.id, `QC ${out.status}`, `${r.pqc_no} ${r.stage}`);
-    return { ...out, warning: open.length ? `Hold points still open before this stage: ${open.map(x => `${x.stage} (${x.pqc_no})`).join(', ')}` : null };
+    return { ...out, warning: open.length ? `Recorded, but ${open.length} earlier hold point record${open.length === 1 ? ' is' : 's are'} still open in this section. See Project QC` : null };
   });
 }
 

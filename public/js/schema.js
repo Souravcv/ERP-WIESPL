@@ -2282,7 +2282,7 @@ export const ENTITIES = {
     fields: [
       { key: 'plan_no', label: 'Plan No', type: 'text', readonly: true, hint: 'Auto: QCP-001' },
       { key: 'product', label: 'Product', type: 'text', required: true },
-      { key: 'keywords', label: 'Work order words', type: 'text', span: 2, required: true, hint: 'Comma separated. A work order line with one of these words uses this plan' },
+      { key: 'keywords', label: 'Work order words', type: 'text', span: 2, required: true, hint: 'Comma separated, matched on the line\'s heading and description. section:word looks at the section only. ! in front keeps the plan off a line' },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Approved'], default: 'Draft', hint: 'Approved only when every check has a limit' },
       { key: 'checks', label: 'Checks', type: 'lines', span: 2, amounts: false, hint: 'Numeric limit: the CRM judges the measured value. Otherwise write what must be seen. Hold = must pass before the next stage', columns: [
         { key: 'stage', label: 'Stage', type: 'select', options: QC_PLAN_STAGES, width: 120 },
