@@ -58,7 +58,8 @@ export function mrStock(id) {
 
 // The store's decision: issue what it has (a draft issue slip, or an MTN to the production stock), send the rest to
 // the Purchase Head as a requisition. Both keep the site of every line.
-export function processMR(id, body = {}, user) {
+// With postDraft the slip is posted in the same step, and a refusal (short or reserved stock) undoes the whole step.
+export function processMR(id, body = {}, user, postDraft = null) {
   if (!hasFunction(user.role, 'stock_post')) throw new HttpError(403, 'Material requests are processed by the store (Roles & Permissions → “Post draft issue slips …”)');
   const mr = getRow('material_requests', id);
   if (!['Submitted', 'Partly Issued', 'Sent to Purchase'].includes(mr.status)) throw new HttpError(400, `This request is ${mr.status}`);
@@ -79,7 +80,7 @@ export function processMR(id, body = {}, user) {
   return tx(() => {
     const lines = (mr.lines || []).map(l => ({ ...l }));
     const notes = [];
-    let draft = null, req = null;
+    let draft = null, req = null, posted = null;
     if (issue.length) {
       const body2 = production
         ? { type: 'TRANSFER', date: today(), from_location: 'Store', to_location: PRODUCTION, requested_by: mr.requested_by, purpose: `${mr.mr_no} – production`, remarks: `Against ${mr.mr_no}` }
@@ -92,7 +93,9 @@ export function processMR(id, body = {}, user) {
         l.to_purchase = r3(Math.max(0, onOrder - Math.max(0, p.qty - (p.need - onOrder))));
         l.issued = r3((Number(l.issued) || 0) + p.qty);
       }
-      notes.push(`${production ? 'MTN to production stock' : 'Issue slip'} draft #${draft.id}: ${issue.length} item(s) – post it to issue`);
+      if (postDraft) posted = postDraft(draft);
+      notes.push(posted ? `${production ? 'MTN to production stock' : 'Issue slip'} ${posted.doc_no}: ${issue.length} item(s) issued`
+        : `${production ? 'MTN to production stock' : 'Issue slip'} draft #${draft.id}: ${issue.length} item(s) – post it to issue`);
     }
     if (buy.length) {
       req = insertRow('requisitions', {
@@ -112,7 +115,7 @@ export function processMR(id, body = {}, user) {
       store_note: [mr.store_note, `${today()}: ${notes.join('; ')}`].filter(Boolean).join('\n'),
     }, user, { system: true });
     audit(user.name, 'material_requests', mr.id, 'processed', notes.join('; '));
-    return { request: out, draft, requisition: req };
+    return { request: out, draft, posted, requisition: req };
   });
 }
 

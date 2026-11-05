@@ -15,20 +15,21 @@ const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
 const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'receiver_name', 'site_contact', 'section', 'vehicle_no', 'driver', 'porter_amount', 'challan_type'];
 
 // Post a draft slip (stock goes down, the number is given). Short or reserved stock asks first. null = not posted.
-export async function postDraft(id, extra = {}) {
+export const postDraft = (id, extra = {}) => withStockChecks(x => api(`/stock/drafts/${id}/post`, { method: 'POST', body: x }), extra);
+export async function withStockChecks(call, extra = {}) {
   try {
-    return await api(`/stock/drafts/${id}/post`, { method: 'POST', body: extra });
+    return await call(extra);
   } catch (e) {
     if (/Not enough stock/.test(e.message) && !extra.allowNegative) {
       const may = hasFunction(state.user.role, 'allow_negative');
       const ok = await modal('Not enough stock', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
         h('p', may ? 'Post anyway? Stock will go negative for these items.' : 'Reduce the quantity on the draft, record the inward first, or ask someone allowed to issue more than the available stock.')),
         may ? [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }] : [{ label: 'OK', value: false }]);
-      return ok ? postDraft(id, { ...extra, allowNegative: true }) : null;
+      return ok ? withStockChecks(call, { ...extra, allowNegative: true }) : null;
     }
     if (/^Reserved for other projects/.test(e.message) && !extra.allowReserved) {
       const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }]);
-      return ok ? postDraft(id, { ...extra, allowReserved: true }) : null;
+      return ok ? withStockChecks(call, { ...extra, allowReserved: true }) : null;
     }
     throw e;
   }

@@ -133,7 +133,7 @@ export default {
   'Check against the PO': 'PO शी तपासा', 'Outside the PO terms': 'PO अटींबाहेर', 'Voucher No': 'व्हाउचर क्र.', 'Paid To': 'कोणाला भरले', 'What for': 'कशासाठी',
   'Item Code': 'वस्तू कोड', 'Nos': 'नग', 'Current Price (₹ per unit)': 'सध्याची किंमत (₹ प्रति नग)', 'Minimum Stock Level': 'किमान स्टॉक', 'Lead Time (days)': 'मिळण्याचा वेळ (दिवस)',
   'Preferred Vendor': 'पसंतीचा पुरवठादार', 'Store Location / Rack': 'स्टोअरमधील जागा / रॅक', 'Opening Stock (old)': 'सुरुवातीचा स्टॉक (जुना)', 'Current Stock': 'सध्याचा स्टॉक',
-  'Stock Value (₹)': 'स्टॉक मूल्य (₹)', 'MR No': 'MR क्र.', 'Material For': 'साहित्य कशासाठी', 'Production (to production stock)': 'उत्पादन (उत्पादन स्टॉककडे)',
+  'Stock Value (₹)': 'स्टॉक मूल्य (₹)', 'MR No': 'MR क्र.', 'Material For': 'साहित्य कशासाठी', 'For Control Panel': 'कंट्रोल पॅनेलसाठी', 'For AHU Panel': 'AHU पॅनेलसाठी', 'For Testing Purpose': 'चाचणीसाठी','Production (to production stock)': 'उत्पादन (उत्पादन स्टॉककडे)',
   'Needed By': 'कधीपर्यंत हवे', 'Partly Issued': 'अंशतः दिले', 'Sent to Purchase': 'खरेदीकडे पाठवले', 'Store Decision': 'स्टोअरचा निर्णय', 'Processed By (Store)': 'हाताळणारे (स्टोअर)',
   'Purchase Requisition': 'खरेदी मागणीपत्र', 'Production No': 'उत्पादन क्र.', 'Finished Good Made': 'तयार झालेला माल', 'Quantity Made': 'तयार प्रमाण',
   'For Site / Hospital': 'साइट / रुग्णालयासाठी', 'Made By / Supervisor': 'तयार करणारे / सुपरवायझर', 'Raw Material Used (from production stock)': 'वापरलेला कच्चा माल (उत्पादन स्टॉकमधून)',

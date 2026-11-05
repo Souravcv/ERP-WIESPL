@@ -712,16 +712,20 @@ function actionsFor(entity, row, reload, ctx = {}) {
         const inputs = plan.map(p => ({ p, issue: h('input', { type: 'number', step: 'any', min: 0, value: p.issue, style: { width: '80px' } }), buy: h('input', { type: 'number', step: 'any', min: 0, value: p.purchase, style: { width: '80px' } }) }));
         const production = String(row.purpose || '').startsWith('Production');
         const ok = await modal(`Process ${row.mr_no} – ${row.requested_by || ''}`, h('div.grid',
-          h('p.muted', `Issue = goes out on a draft ${production ? 'Material Transfer Note to the production stock' : 'issue slip'} (post it to reduce stock). Purchase = goes to the Purchase Head as a requisition with the site on each line. Free stock leaves out what is reserved for Final BOQs.`),
+          h('p.muted', `Issue = goes out now on ${production ? 'a Material Transfer Note to the production stock' : 'an issue slip'}, and the store stock reduces. Purchase = goes to the Purchase Head as a requisition with the site on each line. Free stock leaves out what is reserved for Final BOQs.`),
           h('div.table-wrap', h('table.data', h('thead', h('tr', ['Material', 'Site', 'Asked', 'Issued', 'On order', 'In stock', 'Free', 'Issue now', 'Purchase'].map(x => h('th', x)))),
             h('tbody', inputs.map(({ p, issue, buy }) => h('tr', h('td', p.description || '—', p.item_id ? null : h('div.muted', { style: { fontSize: '11px' } }, 'not a store item: purchase only')), h('td', p.site || ''),
               h('td.num', `${p.qty} ${p.uom}`), h('td.num', p.issued || ''), h('td.num', p.to_purchase || ''), h('td.num', p.stock), h('td.num', { style: { color: p.free < p.need ? 'var(--warn)' : '' } }, p.free),
               h('td', p.item_id ? issue : '—'), h('td', buy))))))),
           [{ label: 'Cancel', value: false }, { label: '✔ Issue & send to purchase', cls: 'good', value: true }], { wide: true });
         if (!ok) return;
-        const r = await post(`/material_requests/${id}/process`, { lines: inputs.map(({ p, issue, buy }) => ({ line: p.line, issue: Number(issue.value) || 0, purchase: Number(buy.value) || 0 })) });
-        toast([r.draft && `Draft #${r.draft.id} made (post it to issue)`, r.requisition && `Requisition ${r.requisition.req_no} sent to the Purchase Head`].filter(Boolean).join(' · '));
-        if (r.draft && (await confirmBox(`Open draft #${r.draft.id} to post it now?`, 'Open draft'))) { location.hash = `#/view/stock_drafts/${r.draft.id}`; return; }
+        const { withStockChecks, postedDialog } = await import('./stock.js');
+        const lines = inputs.map(({ p, issue, buy }) => ({ line: p.line, issue: Number(issue.value) || 0, purchase: Number(buy.value) || 0 }));
+        // Short or reserved stock asks first; answering no leaves the request exactly as it was.
+        const r = await withStockChecks(x => post(`/material_requests/${id}/process`, { lines, ...x }));
+        if (!r) return;
+        if (r.requisition) toast(`Requisition ${r.requisition.req_no} sent to the Purchase Head`);
+        if (r.posted) await postedDialog(r.posted);
         reload();
       }) }, st === 'Submitted' ? '📦 Process (issue / purchase)' : '📦 Issue now'));
       if (st === 'Submitted' && store) A.push(h('button.btn.danger', { onclick: go(async () => {

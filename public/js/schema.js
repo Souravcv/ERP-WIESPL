@@ -2046,7 +2046,7 @@ export const ENTITIES = {
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
       { key: 'requested_by', label: 'Requested By', type: 'person', default: 'me' },
       { key: 'department', label: 'Department', type: 'select', options: ['Production', 'Site / Installation', 'Service', 'Electrical (BGM)', 'R&D', 'HVAC', 'Office'], default: 'Production' },
-      { key: 'purpose', label: 'Material For', type: 'select', options: ['Production (to production stock)', 'Site / project', 'Service work', 'Office / general'], default: 'Production (to production stock)' },
+      { key: 'purpose', label: 'Material For', type: 'select', options: ['Production (to production stock)', 'Site / project', 'Service work', 'For Control Panel', 'For AHU Panel', 'For Testing Purpose', 'Office / general'], default: 'Production (to production stock)' },
       { key: 'site', label: 'Site / Hospital', type: 'text', hint: 'Where it is used; a line can have its own site' },
       { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects' },
       { key: 'swo_id', label: 'Service Work Order', type: 'ref', ref: 'service_work_orders', readonly: true },

@@ -649,7 +649,8 @@ function postStockEntry(reqBody, user) {
 // ---------------------------------------------------------------- material requests (anyone → store) and production
 api.post('/material_requests/:id/submit', need('material_requests'), wrap(req => { const r = sf.submitMR(req.params.id, req.user); notify.notifyNew('material_requests', r, req.user); return r; }));
 api.get('/material_requests/:id/stock', wrap(req => { if (!canView('material_requests', req.user.role)) throw new HttpError(403, 'No access'); return sf.mrStock(req.params.id); }));
-api.post('/material_requests/:id/process', wrap(req => sf.processMR(req.params.id, req.body, req.user)));
+// The store is the one who posts, so processing a request issues the material at once, with no draft to post afterwards.
+api.post('/material_requests/:id/process', wrap(req => sf.processMR(req.params.id, req.body, req.user, d => postDraftNow(d, req.body, req.user))));
 api.post('/material_requests/:id/reject', wrap(req => sf.rejectMR(req.params.id, req.body, req.user)));
 api.post('/production_entries/:id/post', wrap(req => sf.postProduction(req.params.id, req.body, req.user)));
 const prodView = req => { if (!canView('production_entries', req.user.role)) throw new HttpError(403, 'No access to production'); };
@@ -743,13 +744,14 @@ api.post('/stock/drafts/:id/post', wrap(req => {
   if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Posting issue slips / transfers is done by the store (Roles & Permissions → “Post draft issue slips …”)');
   const d = getRow('stock_drafts', req.params.id);
   if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
-  const p = d.payload || {};
-  return tx(() => {
-    const r = postStockEntry({ ...p, date: req.body?.date || p.date, allowNegative: !!req.body?.allowNegative, allowReserved: !!req.body?.allowReserved }, req.user);
-    updateRow('stock_drafts', d.id, { status: 'Posted', doc_no: r.doc_no, challan_id: r.challan?.id || null, posted_by: `${req.user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, req.user, { system: true });
-    return { ...r, draft_id: d.id };
-  });
+  return tx(() => postDraftNow(d, req.body, req.user));
 }));
+function postDraftNow(d, opts, user) {
+  const p = d.payload || {};
+  const r = postStockEntry({ ...p, date: opts?.date || p.date, allowNegative: !!opts?.allowNegative, allowReserved: !!opts?.allowReserved }, user);
+  updateRow('stock_drafts', d.id, { status: 'Posted', doc_no: r.doc_no, challan_id: r.challan?.id || null, posted_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
+  return { ...r, draft_id: d.id };
+}
 api.post('/stock/drafts/:id/cancel', need('stock_moves'), wrap(req => {
   const d = getRow('stock_drafts', req.params.id);
   if (d.status !== 'Draft') throw new HttpError(409, `This slip is already ${d.status}`);
