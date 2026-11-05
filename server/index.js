@@ -704,7 +704,7 @@ api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.quer
 api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
 api.get('/hr/logins', need('employees'), wrap(() => hrf.loginChoices()));
 const hrManage = req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator can create logins'); };
-api.get('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.loginGaps(); }));
+api.get('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.loginGaps(req.user); }));
 api.post('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.createLogins(req.body?.people, req.user); }));
 api.post('/leave_requests/:id/submit', need('leave_requests'), wrap(req => wf.submitForApproval('Leave', req.params.id, req.user)));
 api.post('/probation_reviews/:id/submit', need('probation_reviews'), wrap(req => wf.submitForApproval('Confirmation', req.params.id, req.user)));

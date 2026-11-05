@@ -49,18 +49,21 @@ export function ensureLogin(row, actor) {
 }
 
 // Everyone working here with no CRM account yet (HR → App logins).
-export const loginGaps = () => db.prepare(`SELECT e.id, e.emp_code, e.name, e.department, e.designation, e.mobile, e.login FROM employees e
+const peopleWithoutLogin = () => db.prepare(`SELECT e.id, e.emp_code, e.name, e.department, e.designation, e.mobile, e.login FROM employees e
   WHERE COALESCE(e.status, 'Active') = 'Active' AND NOT EXISTS (SELECT 1 FROM users u WHERE lower(u.username) = lower(trim(COALESCE(e.login, ''))))
   ORDER BY e.name`).all();
+// Every role in the CRM, custom ones too. Only an administrator may hand out Administrator and GM.
+export const loginGaps = actor => ({ people: peopleWithoutLogin(),
+  roles: db.prepare('SELECT name, label FROM roles ORDER BY label').all().filter(r => actor.role === 'admin' || !['admin', 'manager'].includes(r.name)) });
 
 // Logins for many people at once, all or none. The temporary passwords come back once, to the person who pressed the button.
 export function createLogins(list, actor) {
   if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Tick at least one employee');
-  const open = new Map(loginGaps().map(e => [e.id, e]));
+  const open = new Map(peopleWithoutLogin().map(e => [e.id, e]));
   return tx(() => {
     const created = [];
     for (const { employee_id, role } of list) {
-      if (['admin', 'manager'].includes(role)) throw new HttpError(403, 'Administrator and GM logins are made under Admin → Users');
+      if (['admin', 'manager'].includes(role) && actor.role !== 'admin') throw new HttpError(403, 'Only an administrator can create Administrator and GM logins');
       const e = open.get(Number(employee_id));
       if (!e) continue; // got a login meanwhile, or has left
       const made = ensureLogin({ ...getRow('employees', e.id), login_role: role }, actor).login_created;

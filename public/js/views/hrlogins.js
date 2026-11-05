@@ -1,18 +1,18 @@
 // App logins (HR → App logins): make the logins for everyone who has none, all at once, and print the temporary passwords
 // to hand out. They are shown once; each person sets their own password at the first sign-in.
 import { h, api, toast, busy, modal, fail } from '../ui.js';
-import { ROLE_INFO } from '../schema.js';
 
-const ROLES = Object.keys(ROLE_INFO).filter(r => !['admin', 'manager'].includes(r));
-const roleLabel = r => ROLE_INFO[r]?.label || r;
+const FULL_ACCESS = ['admin', 'manager'];
 
 export async function appLogins(box) {
-  const people = await api('/hr/login-gaps').catch(e => { fail(e); return []; });
+  const { people = [], roles = [] } = await api('/hr/login-gaps').catch(e => { fail(e); return {}; });
   if (!people.length) return box.replaceChildren(h('p.muted', 'Every active employee has a login.'));
+  const labels = Object.fromEntries(roles.map(r => [r.name, r.label]));
+  const roleLabel = r => labels[r] || r;
 
   const rows = people.map(p => {
     const tick = h('input', { type: 'checkbox', checked: true, onchange: () => count() });
-    const role = h('select', { 'aria-label': `Role for ${p.name}` }, ROLES.map(r => h('option', { value: r, selected: r === 'worker' }, roleLabel(r))));
+    const role = h('select', { 'aria-label': `Role for ${p.name}` }, roles.map(r => h('option', { value: r.name, selected: r.name === 'worker' }, r.label)));
     return { p, tick, role, tr: h('tr', h('td', tick), h('td', p.emp_code || ''), h('td', p.name), h('td', p.department || ''), h('td', p.designation || ''), h('td', p.login || h('span.muted', 'made from the name')), h('td', role)) };
   });
   const all = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Tick everyone', onchange: () => { rows.forEach(r => { r.tick.checked = all.checked; }); count(); } });
@@ -22,10 +22,13 @@ export async function appLogins(box) {
 
   const create = async () => {
     const list = rows.filter(r => r.tick.checked).map(r => ({ employee_id: r.p.id, role: r.role.value }));
-    const yes = await modal('Create logins?', h('p', `${list.length} new login${list.length === 1 ? '' : 's'}. The temporary passwords are shown once, on the next screen: print them before you leave it.`),
+    const full = rows.filter(r => r.tick.checked && FULL_ACCESS.includes(r.role.value));
+    const yes = await modal('Create logins?', h('div',
+      h('p', `${list.length} new login${list.length === 1 ? '' : 's'}. The temporary passwords are shown once, on the next screen: print them before you leave it.`),
+      full.length ? h('p', { style: { color: 'var(--warn)' } }, `Full access to everything: ${full.map(r => `${r.p.name} (${roleLabel(r.role.value)})`).join(', ')}.`) : null),
       [{ label: 'Cancel', value: false }, { label: 'Create', cls: 'primary', value: true }]);
     if (!yes) return;
-    showCreated(box, (await api('/hr/login-gaps', { method: 'POST', body: { people: list } })).created);
+    showCreated(box, (await api('/hr/login-gaps', { method: 'POST', body: { people: list } })).created, roleLabel);
   };
 
   box.replaceChildren(
@@ -34,7 +37,7 @@ export async function appLogins(box) {
     h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Code'), h('th', 'Name'), h('th', 'Department'), h('th', 'Designation'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))));
 }
 
-function showCreated(box, created) {
+function showCreated(box, created, roleLabel) {
   // The server's own screen says localhost, which is no use to anyone else.
   const address = /^(localhost|127\.)/.test(location.hostname) ? '' : location.origin;
   const text = created.map(c => `${c.name}\n${address ? `Address: ${address}\n` : ''}Username: ${c.username}\nTemporary password: ${c.password}`).join('\n\n');
