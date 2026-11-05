@@ -49,7 +49,9 @@ export async function liveMap(box) {
     if (!L) return;
     if (!map) {
       map = L.map(mapEl).setView([18.62, 73.76], 11);
-      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
+      // OpenStreetMap blocks map images sent without the site's address, and this site's pages withhold it by default.
+      // 'origin' tells it the site's address only, never the page.
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, referrerPolicy: 'origin', attribution: '&copy; OpenStreetMap contributors' }).addTo(map);
       layer = L.layerGroup().addTo(map);
     }
     layer.clearLayers(); markers.clear();
