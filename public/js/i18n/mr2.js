@@ -163,5 +163,5 @@ export default {
   'IQC Remarks': 'IQC शेरा', 'Issued To / Site / Department': 'कोणाला दिले / साइट / विभाग', 'From Location': 'कोठून', 'To Location': 'कोठे', 'Import Batch': 'आयात बॅच',
   'Bank Reconciliation': 'बँक जुळवणी', 'Roles & Permissions': 'भूमिका व परवानग्या', 'Stock reserved for other projects': 'इतर प्रकल्पांसाठी राखीव स्टॉक', 'Reserved': 'राखीव',
   'Jan': 'जाने', 'Feb': 'फेब्रु', 'Mar': 'मार्च', 'Apr': 'एप्रि', 'May': 'मे', 'Jun': 'जून', 'Jul': 'जुलै', 'Aug': 'ऑग', 'Sep': 'सप्टें', 'Oct': 'ऑक्टो', 'Nov': 'नोव्हें', 'Dec': 'डिसें',
-  'Where': 'कोठे', 'Payables': 'देणी',
+  'Where': 'कोठे', 'Payables': 'देणी', 'Find a screen…': 'स्क्रीन शोधा…', 'Find a screen': 'स्क्रीन शोधा', 'Account': 'खाते', '🔑 Password': '🔑 पासवर्ड', '🚪 Logout': '🚪 बाहेर पडा',
 };

@@ -54,19 +54,57 @@ function buildNav(pending = 0) {
       ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role) && !(k === 'items' && WORKER_ROLES.includes(role)))
         .map(([key, e]) => h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null)),
     ];
-    if (links.length) nav.append(h('div.grp', g), ...links);
+    navGroup(nav, g, links);
   }
   const admin = ADMIN_LINKS.filter(l => (l[3] === 'admin' ? role === 'admin' : hasFunction(role, l[3])));
-  if (admin.length) {
-    nav.append(h('div.grp', 'Admin'));
-    for (const [href, icon, label] of admin) nav.append(h('a', { href }, `${icon} ${label}`));
-  }
+  navGroup(nav, 'Admin', admin.map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)));
   highlightNav();
 }
 
+// One menu group opens at a time, so the whole menu fits the screen. A group of one is just a link.
+function navGroup(nav, name, links) {
+  if (links.length < 2) return nav.append(...links);
+  const total = links.reduce((sum, a) => sum + (Number(a.querySelector('.count')?.textContent) || 0), 0);
+  nav.append(h('div.nav-group', { 'data-group': name },
+    h('button.grp', { type: 'button', 'aria-expanded': 'false', onclick: () => { saveOpenGroup(openGroup === name ? '' : name); showNav(); } }, h('span', name), total ? h('span.count', total) : null),
+    h('div.nav-links', links)));
+}
+
+const NAV_KEY = 'wiespl-nav-group';
+let openGroup = (() => { try { return localStorage.getItem(NAV_KEY) || ''; } catch { return ''; } })();
+const saveOpenGroup = g => { openGroup = g; try { localStorage.setItem(NAV_KEY, g); } catch { /* the menu still works, it just forgets */ } };
+
+// Applies the open group and the "Find a screen" text. While searching, every group with a match is open.
+function showNav() {
+  const q = $('nav-find').value.trim().toLowerCase();
+  const seen = new Set(); // a screen under two groups is found once
+  for (const a of document.querySelectorAll('#nav a')) {
+    const match = !q || (a.textContent.toLowerCase().includes(q) && !seen.has(a.getAttribute('href')));
+    if (q && match) seen.add(a.getAttribute('href'));
+    a.classList.toggle('hidden', !match);
+  }
+  for (const sec of document.querySelectorAll('#nav .nav-group')) {
+    const open = q ? true : sec.dataset.group === openGroup;
+    sec.classList.toggle('open', open);
+    sec.classList.toggle('hidden', !!q && !sec.querySelector('a:not(.hidden)'));
+    sec.querySelector('.grp').setAttribute('aria-expanded', String(open));
+  }
+}
+
+let navHash = null;
 function highlightNav() {
   const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/^#\/boq\/.*/, '#/list/boqs').replace(/^#\/bom\/.*/, '#/list/boms').replace(/^#\/planner\/.*/, '#/planner').replace(/\/(new|\d+)$/, '');
-  for (const a of document.querySelectorAll('#nav a')) a.classList.toggle('active', a.getAttribute('href') === hash);
+  let active = null;
+  for (const a of document.querySelectorAll('#nav a')) { const on = a.getAttribute('href') === hash; a.classList.toggle('active', on); if (on) active = a; }
+  // Only when the screen changes: the menu is redrawn by the pending count too, and must not undo what the person opened.
+  if (hash !== navHash) {
+    navHash = hash;
+    const group = active?.closest('.nav-group')?.dataset.group;
+    if (group) saveOpenGroup(group);
+    $('nav-find').value = '';
+    showNav();
+    active?.scrollIntoView({ block: 'nearest' });
+  } else showNav();
 }
 
 export async function refreshPending() {
@@ -225,6 +263,14 @@ $('btn-lang').textContent = getLang() === 'mr' ? '🌐 English' : '🌐 मर�
 $('btn-lang').onclick = () => setLang(getLang() === 'mr' ? 'en' : 'mr');
 $('btn-signature').onclick = () => signatureDialog().catch(fail);
 $('menu-btn').onclick = () => $('sidebar').classList.toggle('open');
+$('nav-backdrop').onclick = () => $('sidebar').classList.remove('open');
+$('nav-find').oninput = showNav;
+$('nav-find').onkeydown = e => {
+  if (e.key === 'Escape') { e.target.value = ''; showNav(); }
+  if (e.key === 'Enter') { e.preventDefault(); const first = document.querySelector('#nav a:not(.hidden)'); if (first && e.target.value.trim()) { if (first.getAttribute('href') === location.hash) { e.target.value = ''; showNav(); } else location.hash = first.getAttribute('href'); } }
+};
+// The account menu closes after a choice, or a click anywhere else.
+document.addEventListener('click', e => { const m = $('user-menu'); if (m.open && (!m.contains(e.target) || e.target.closest('.user-pop button'))) m.open = false; });
 $('global-search').addEventListener('submit', e => {
   e.preventDefault();
   const q = e.target.q.value.trim();

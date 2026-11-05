@@ -48,7 +48,7 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true, sel
         detail ? h('td.expander', h('button.icon-btn', { type: 'button', 'aria-expanded': String(open), title: open ? 'Hide the details' : 'Show the details',
           onclick: e => { e.stopPropagation(); if (open) opened.delete(r.id); else opened.add(r.id); render(); } }, open ? '▾' : '▸')) : null,
         selected ? h('td', tick(selected.has(r.id), on => (on ? selected.add(r.id) : selected.delete(r.id)))) : null,
-        cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : ''), { 'data-label': c.label }, display(c, r))));
+        cols.map(c => h('td' + (NUMERIC.includes(c.type) ? '.num' : c.type === 'textarea' ? '.clip' : /_no$/.test(c.key) ? '.nowrap' : ''), { 'data-label': c.label }, display(c, r))));
       if (!detail || !open) return [tr];
       const facts = detail.filter(f => filled(r[f.key]));
       return [tr, h('tr.detail-row', h('td', { colspan: span }, facts.length
@@ -62,7 +62,7 @@ export function table(entity, rows, { columns, pageSize = 50, totals = true, sel
         c.type === 'money' ? inr(once.reduce((s, r) => s + (Number(r[c.key]) || 0), 0)) : i === 0 ? (once.length === data.length ? `Total (${data.length})` : `Total (${once.length} documents)`) : ''))))
       : null;
     wrap.replaceChildren(
-      rows.length ? h('div.table-wrap', h('table.data' + (detail ? '.cards' : ''), thead, tbody, tfoot)) : h('div.empty', 'No records yet'),
+      rows.length ? h('div.table-wrap', h('table.data.cards', thead, tbody, tfoot)) : h('div.empty', 'No records yet'),
       pages > 1 ? h('div.pager', `${data.length} records · page ${page + 1} of ${pages}`,
         h('button.btn.small', { disabled: page === 0, onclick: () => { page--; render(); } }, '‹ Prev'),
         h('button.btn.small', { disabled: page >= pages - 1, onclick: () => { page++; render(); } }, 'Next ›')) : null,

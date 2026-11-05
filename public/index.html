@@ -26,18 +26,24 @@
   <div id="app" class="app hidden">
     <aside class="sidebar" id="sidebar">
       <a class="brand" href="#/dashboard"><img src="logo.jpeg" alt=""><span>WIESPL<small>CRM &amp; ERP</small></span></a>
+      <div class="nav-find"><input id="nav-find" type="search" placeholder="Find a screen…" aria-label="Find a screen" autocomplete="off"></div>
       <nav id="nav"></nav>
     </aside>
+    <div class="nav-backdrop" id="nav-backdrop"></div>
     <div class="main">
       <header class="topbar">
         <button class="icon-btn menu-btn" id="menu-btn" aria-label="Menu">☰</button>
         <form id="global-search" class="global-search"><input placeholder="Search enquiries, customers, quotations…" name="q"></form>
         <div class="user-box">
-          <span id="user-name"></span>
-          <button class="btn small no-i18n lang-btn" id="btn-lang" title="Language / भाषा"></button>
-          <button class="btn small" id="btn-signature" title="Your signature for approved documents">✍️ My signature</button>
-          <button class="btn small" id="btn-password">Password</button>
-          <button class="btn small" id="btn-logout">Logout</button>
+          <details class="user-menu" id="user-menu">
+            <summary class="btn small" aria-label="Account"><span aria-hidden="true">👤</span><span id="user-name"></span></summary>
+            <div class="user-pop">
+              <button class="btn small no-i18n lang-btn" id="btn-lang" title="Language / भाषा"></button>
+              <button class="btn small" id="btn-signature" title="Your signature for approved documents">✍️ My signature</button>
+              <button class="btn small" id="btn-password">🔑 Password</button>
+              <button class="btn small" id="btn-logout">🚪 Logout</button>
+            </div>
+          </details>
         </div>
       </header>
       <main id="view" class="view"></main>
