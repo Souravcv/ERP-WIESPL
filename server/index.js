@@ -45,7 +45,7 @@ import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES } from '../public/js/schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
 import * as roles from './roles.js';
 import { planFile, isCad, preparePlan, prepareMissingPlans } from './plans.js';
 import { fyOf } from '../public/js/calc.js';
@@ -767,6 +767,39 @@ api.post('/stock/opening', wrap(req => {
   return stock.carryForwardOpening(req.body?.fy, req.user);
 }));
 api.get('/reports/po-lines', wrap(req => { if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access to purchase orders'); return stock.poLines(req.query); }));
+// Stock movements as on screen: one sheet by GRN / slip, one sheet item by item. Prices only on the priced types, as on screen.
+api.get('/export/stock-movements', wrap(async (req, res) => {
+  storeView(req);
+  const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
+  const label = t => MOVE_TYPES[t]?.label || t;
+  const { rows } = stock.stockDocs({ ...req.query, limit: 1000000 }, 1000000);
+  const lines = stock.stockDocLines(req.query);
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  const sheet = (name, title, cols, data, totals) => {
+    const ws = wb.addWorksheet(name);
+    ws.addRow([title]).font = { bold: true, size: 13 };
+    ws.addRow(cols.map(c => c[0])).font = { bold: true };
+    cols.forEach((c, i) => { ws.getColumn(i + 1).width = c[1]; });
+    for (const r of data) ws.addRow(cols.map(c => c[2](r) ?? ''));
+    ws.addRow(cols.map((c, i) => (i === 0 ? 'TOTAL' : totals.includes(c[0]) ? Math.round(data.reduce((s, r) => s + (Number(c[2](r)) || 0), 0) * 100) / 100 : ''))).font = { bold: true };
+    ws.views = [{ state: 'frozen', ySplit: 2 }];
+    ws.autoFilter = { from: { row: 2, column: 1 }, to: { row: 2, column: cols.length } };
+  };
+  const scope = [req.query.type ? label(req.query.type) : 'All types', req.query.from && `from ${req.query.from}`, req.query.to && `to ${req.query.to}`, req.query.q && `search "${req.query.q}"`].filter(Boolean).join(', ');
+  sheet('By GRN or slip', `Stock movements by GRN / slip: ${scope}`, [
+    ['Date', 12, r => r.date], ['No', 14, r => r.doc_no], ['Type', 18, r => label(r.type)], ['Supplier', 30, r => r.vendor || r.supplier], ['Invoice No', 16, r => r.invoice_no], ['PO No', 16, r => r.po_no],
+    ['Project', 34, r => r.project_list], ['Issued / sent to', 24, r => r.issued_to || r.to_location], ['Items', 7, r => r.items], ['Total Qty', 10, r => r.qty], ['Value', 13, r => (PRICED.includes(r.type) ? r.value : '')], ['By', 16, r => r.created_by],
+  ], rows, ['Items', 'Total Qty', 'Value']);
+  sheet('Item by item', `Stock movements item by item: ${scope}`, [
+    ['Date', 12, r => r.date], ['No', 14, r => r.doc_no], ['Type', 18, r => label(r.type)], ['Supplier', 30, r => r.party], ['Invoice No', 16, r => r.invoice_no], ['Invoice Date', 12, r => r.invoice_date], ['PO No', 16, r => r.po_no],
+    ['Projects written on the PO', 34, r => r.project_note], ['Project', 28, r => r.project], ['Issued / sent to', 24, r => r.issued_to || r.to_location], ['Item Code', 11, r => r.code], ['Item', 40, r => r.item], ['Qty', 9, r => r.qty], ['UOM', 7, r => r.uom],
+    ['Rate', 10, r => (PRICED.includes(r.type) ? r.rate : '')], ['Value', 13, r => (PRICED.includes(r.type) ? r.value : '')], ['Batch / lot', 12, r => r.batch_no], ['Rack / bin', 10, r => r.rack], ['Remark', 24, r => r.remarks], ['By', 16, r => r.created_by],
+  ], lines, ['Qty', 'Value']);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="stock-movements-${new Date().toLocaleDateString('sv-SE')}.xlsx"`);
+  res.end(Buffer.from(await wb.xlsx.writeBuffer()));
+}));
 api.get('/export/stock-summary', wrap(async (req, res) => {
   itemView(req);
   const { from, to, rows } = stock.stockSummary(req.query);

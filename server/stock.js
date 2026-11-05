@@ -359,7 +359,7 @@ export function accountsDashboard() {
 // ---------------------------------------------------------------- movements as documents
 // One row per slip: all the items of one GRN / issue slip / transfer together (same type, number and date).
 const DOC_KEY = "COALESCE(NULLIF(m.doc_no, ''), '#' || m.id)";
-export function stockDocs(q = {}) {
+function docFilter(q) {
   const where = ['1 = 1'], args = [];
   if (q.type) { where.push('m.type = ?'); args.push(q.type); }
   if (q.from) { where.push('m.date >= ?'); args.push(q.from); }
@@ -370,14 +370,27 @@ export function stockDocs(q = {}) {
     where.push(`(m.doc_no LIKE ? OR m.supplier LIKE ? OR m.invoice_no LIKE ? OR m.po_no LIKE ? OR m.issued_to LIKE ? OR m.to_location LIKE ? OR v.name LIKE ? OR p.name LIKE ? OR i.name LIKE ? OR i.code LIKE ?)`);
     args.push(...Array(10).fill(`%${q.q}%`));
   }
-  const rows = db.prepare(`SELECT m.type, ${DOC_KEY} doc_key, MAX(NULLIF(m.doc_no, '')) doc_no, m.date, COUNT(*) items, ROUND(SUM(m.qty), 3) qty,
+  return { where, args };
+}
+export function stockDocs(q = {}, max = 2000) {
+  const { where, args } = docFilter(q);
+  const rows = db.prepare(`SELECT GROUP_CONCAT(DISTINCT p.name) project_list, m.type, ${DOC_KEY} doc_key, MAX(NULLIF(m.doc_no, '')) doc_no, m.date, COUNT(*) items, ROUND(SUM(m.qty), 3) qty,
       ROUND(SUM(COALESCE(m.qty, 0) * COALESCE(m.rate, 0)), 2) value, MAX(v.name) vendor, MAX(m.supplier) supplier, MAX(m.invoice_no) invoice_no,
       GROUP_CONCAT(DISTINCT m.po_no) po_no, COUNT(m.po_id) with_po, MAX(p.name) project, COUNT(DISTINCT m.project_id) projects, MAX(m.issued_to) issued_to,
       MAX(m.to_location) to_location, MAX(m.created_by) created_by, MIN(m.id) first_id
     FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id
-    WHERE ${where.join(' AND ')} GROUP BY m.type, doc_key, m.date ORDER BY m.date DESC, first_id DESC LIMIT ?`).all(...args, Math.min(Number(q.limit) || 300, 2000));
+    WHERE ${where.join(' AND ')} GROUP BY m.type, doc_key, m.date ORDER BY m.date DESC, first_id DESC LIMIT ?`).all(...args, Math.min(Number(q.limit) || 300, max));
   const counts = Object.fromEntries(db.prepare("SELECT type, COUNT(DISTINCT type || COALESCE(NULLIF(doc_no, ''), '#' || id) || date) n FROM stock_moves GROUP BY type").all().map(r => [r.type, r.n]));
   return { rows, counts };
+}
+
+// Every item line of the slips stockDocs finds, for the Excel export.
+export function stockDocLines(q = {}) {
+  const { where, args } = docFilter(q);
+  return db.prepare(`SELECT m.type, ${DOC_KEY} doc_key, m.date, m.doc_no, COALESCE(v.name, m.supplier) party, m.invoice_no, m.invoice_date, m.po_no, po.project_note, p.name project,
+      m.issued_to, m.to_location, i.code, i.name item, m.qty, m.uom, m.rate, ROUND(COALESCE(m.qty, 0) * COALESCE(m.rate, 0), 2) value, m.batch_no, m.rack, m.remarks, m.created_by
+    FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN purchase_orders po ON po.id = m.po_id
+    WHERE ${where.join(' AND ')} ORDER BY m.date DESC, m.id DESC`).all(...args);
 }
 
 // The lines of one slip; doc_key is the number, or '#id' for a single entry without a number.

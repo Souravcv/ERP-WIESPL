@@ -6,9 +6,9 @@ import { itemPicker, bomRows } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
-// Issue and Delivery Challan are both stock going out (OUTWARD), but different papers and separate tabs.
-const TABS = ['INWARD', 'OUTWARD', 'DC', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
-const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Issue', DC: '🚚 Delivery Challan (DC)', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
+// Issue and Delivery Challan are both stock going out: one Outward tab, and the slip says which of the two it is.
+const TABS = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
+const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
@@ -86,6 +86,7 @@ export async function stockEntryView(root) {
   let lines = [];
   let po = null;
   let poManySites = false;
+  let headPicked = false; // the Project at the top was chosen by hand: it goes on every line without its own
   let boq = null;
   let bom = null;
   let makeChallan = startDc;
@@ -152,10 +153,23 @@ export async function stockEntryView(root) {
 
   // Line picker: type part of the material and choose from what is still pending on the BOQ / work order.
   const linkKey = () => (bom ? 'bom_item_id' : 'boq_item_id');
+  // Project of a GRN line: chosen on the line, else the Project chosen at the top, else what the PO line says.
+  const poLineOf = l => (po && Number.isInteger(l.po_line) ? po.lines[l.po_line] : null);
+  const splitOf = l => (!l.project_id && poLineOf(l)?.split?.length > 1 ? poLineOf(l).split : null);
+  const lineProject = l => l.project_id || (headPicked ? header.project_id : poLineOf(l)?.project_id || header.project_id) || null;
+  const projectName = id => projects.find(x => x.id === Number(id))?.label || 'stock';
+  function lineProjectCell(l, i) {
+    const split = splitOf(l);
+    return h('td', { style: { minWidth: '200px' } },
+      split ? h('span.muted', split.map(s => `${projectName(s.project_id)}: ${s.qty}`).join(', '))
+        : itemPicker(projects, lineProject(l) ? Number(lineProject(l)) : null, { onPick: id => { l.project_id = id; render(); } }),
+      h('button.btn.small', { type: 'button', title: 'Part of this material is for another project: add a second line for it', style: { marginTop: '4px' },
+        onclick: () => { lines.splice(i + 1, 0, { po_line: l.po_line, item_id: l.item_id, qty: '', rate: l.rate, gst: l.gst, hsn: l.hsn, uom: l.uom, poPending: l.poPending, project_id: null }); render(); } }, '+ Another project'));
+  }
   function poPicker(l) {
     const cur = Number.isInteger(l.po_line) ? l.po_line + 1 : null;
     const used = new Set(lines.filter(x => x !== l && Number.isInteger(x.po_line)).map(x => x.po_line + 1));
-    return h('span', { style: { display: 'contents' } }, itemPicker(poOpts.filter(o => !used.has(o.id)), cur, { onPick: id => {
+    return h('span', { style: { display: 'contents' } }, itemPicker(poOpts.filter(o => !used.has(o.id) || o.id === cur), cur, { onPick: id => {
       const o = poOpts.find(x => x.id === id);
       if (o) Object.assign(l, { po_line: o.id - 1, item_id: l.item_id || o.item_id, qty: o.pending || l.qty, rate: o.rate, gst: o.gst, hsn: o.hsn, uom: o.uom, poPending: o.pending });
       else delete l.po_line;
@@ -190,10 +204,18 @@ export async function stockEntryView(root) {
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
     const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: tabOf() === 'DC' ? 'Challan No' : 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
       : field({ INWARD: 'GRN No', JOB_IN: 'GRN No', JOB_OUT: 'Vendor DC No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
+    if (type === 'OUTWARD') {
+      const doc = h('select', [['issue', 'Issue'], ['dc', 'Delivery Challan (DC)']].map(([v2, l]) => h('option', { value: v2 }, l)));
+      doc.value = tabOf() === 'DC' ? 'dc' : 'issue';
+      doc.disabled = !!draft || !!boq || !!bom;
+      doc.onchange = () => { makeChallan = doc.value === 'dc'; if (makeChallan) ch.challan_type ||= 'Non-Returnable'; render(); };
+      F.unshift(field('Issue or DC *', doc));
+    }
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
       F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
-      F.push(field('Project', itemPicker(projects, header.project_id ? Number(header.project_id) : null, { onPick: id => { header.project_id = id; } }), poManySites ? 'This PO is for several sites: its lines stay with their own site' : po ? 'From the PO. Change it if this material is for another project' : 'Which project this material is for'));
+      F.push(field('Project', itemPicker(projects, header.project_id ? Number(header.project_id) : null, { onPick: id => { header.project_id = id; headPicked = true; render(); } }), po ? 'For all lines. If the PO is for several projects, choose on each line below; blank = stock' : 'Which project this material is for'));
+      if (po?.project_note) F.push(h('div.span-2', { style: { whiteSpace: 'pre-wrap', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px' } }, h('b', 'Projects written on this PO: '), po.project_note));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'an approved PO in the CRM'),
@@ -268,6 +290,7 @@ export async function stockEntryView(root) {
         stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         type === 'INWARD' ? h('td', h('input', { value: l.batch_no || '', placeholder: 'batch / lot', style: { width: '100px' }, oninput: e => { l.batch_no = e.target.value; } })) : null,
         type === 'INWARD' ? h('td', h('input', { value: l.rack ?? it?.location ?? '', placeholder: 'rack / bin', style: { width: '90px' }, oninput: e => { l.rack = e.target.value; } })) : null,
+        po && type === 'INWARD' ? lineProjectCell(l, i) : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
     });
@@ -275,7 +298,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, po && type === 'INWARD' ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
@@ -304,7 +327,7 @@ export async function stockEntryView(root) {
   async function save(allowNegative = false, allowReserved = false) {
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null })), allowNegative, allowReserved };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(po && type === 'INWARD' && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (type === 'JOB_OUT' && !header.vendor_id && !String(header.to_location || '').trim()) throw new Error('Choose the job work vendor (or type the name)');
@@ -353,9 +376,9 @@ export async function stockEntryView(root) {
   const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
   const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
   saveLabel();
-  const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === tabOf() ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'DC') || (!!draft && t !== tabOf()), onclick: () => { type = t === 'DC' ? 'OUTWARD' : t; if (t === 'DC') { makeChallan = true; ch.challan_type ||= 'Non-Returnable'; } else makeChallan = false; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; makeChallan = false; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
-    tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', TABS[i] === tabOf()));
+    tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', TABS[i] === type));
     saveLabel();
     render();
   }

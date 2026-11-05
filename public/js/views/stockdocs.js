@@ -1,6 +1,6 @@
 // Stock movements by slip: one row per GRN / issue slip / transfer with all its items together, tabs per type like the
 // stock entry, and editing a GRN (supplier, invoice, quantities, prices) to attach the PO it came against.
-import { h, api, state, toast, fail, modal, refOptions, money, fmtDate, badge, busy, clearRefCache } from '../ui.js';
+import { h, api, state, toast, fail, modal, refOptions, money, fmtDate, badge, busy, clearRefCache, download } from '../ui.js';
 import { MOVE_TYPES, hasFunction } from '../schema.js';
 import { inr, round2 } from '../calc.js';
 import { itemPicker } from './form.js';
@@ -37,22 +37,22 @@ export async function stockMovementsView(root) {
       const d = await api(`/stock/doc?type=${r.type}&doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`);
       const priced = PRICED.includes(r.type);
       cell.replaceChildren(h('div', { style: { padding: '6px 0 10px' } },
-        h('table.data', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', priced ? 'Rate' : null, priced ? 'Value' : null, r.type === 'INWARD' ? 'PO' : 'Project', 'Remark'].filter(x => x !== null).map((x, i) => h('th' + (['Qty', 'Rate', 'Value'].includes(x) ? '.num' : ''), x)))),
+        h('table.data', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', priced ? 'Rate' : null, priced ? 'Value' : null, r.type === 'INWARD' ? 'PO' : null, 'Project', 'Remark'].filter(x => x !== null).map((x, i) => h('th' + (['Qty', 'Rate', 'Value'].includes(x) ? '.num' : ''), x)))),
           h('tbody', d.moves.map((m, i) => h('tr', h('td.muted', i + 1), h('td', h('a', { href: `#/view/items/${m.item_id}` }, m.item_id_label)), h('td.num', m.qty), h('td', m.uom || ''),
             priced ? h('td.num', inr(m.rate)) : null, priced ? h('td.num', inr(m.value)) : null,
-            h('td', r.type === 'INWARD' ? (m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : m.project_id_label || ''), h('td', m.remarks || '')))),
+            r.type === 'INWARD' ? h('td', m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null, h('td', m.project_id_label || ''), h('td', m.remarks || '')))),
           h('tfoot', h('tr', h('td'), h('td', h('b', `Total (${d.moves.length} item${d.moves.length === 1 ? '' : 's'})`)), h('td.num', h('b', round2(d.moves.reduce((a, m) => a + (Number(m.qty) || 0), 0)))), h('td'),
-            priced ? h('td') : null, priced ? h('td.num', h('b', inr(d.moves.reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null, h('td'), h('td')))),
+            priced ? h('td') : null, priced ? h('td.num', h('b', inr(d.moves.reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null, r.type === 'INWARD' ? h('td') : null, h('td'), h('td')))),
         h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
           h('a.btn.small', { href: printUrl(r), target: '_blank' }, '🖨 Print'),
           r.type === 'INWARD' && mayEdit ? h('a.btn.small.primary', { href: editUrl(r) }, r.with_po ? '✏ Edit GRN / change PO' : '📎 Attach PO / edit GRN') : null)));
     } catch (e) { fail(e); }
   }
 
+  const query = () => new URLSearchParams(Object.entries({ type, q: f.q.value, from: f.from.value, to: f.to.value, po: type === 'INWARD' || !type ? f.po.value : '' }).filter(([, v]) => v)).toString();
   async function load() {
     try {
-      const qp = new URLSearchParams(Object.entries({ type, q: f.q.value, from: f.from.value, to: f.to.value, po: type === 'INWARD' || !type ? f.po.value : '' }).filter(([, v]) => v)).toString();
-      const { rows, counts } = await api(`/stock/docs?${qp}`);
+      const { rows, counts } = await api(`/stock/docs?${query()}`);
       tabs.replaceChildren(...TABS.map(([t, l]) => h('button', { class: t === type ? 'active' : '', onclick: () => { type = t; open.clear(); load(); } },
         l, h('span.muted', { style: { marginLeft: '4px', fontSize: '11px' } }, t ? counts[t] || 0 : Object.values(counts).reduce((a, b) => a + b, 0)))));
       const priced = !type || PRICED.includes(type);
@@ -85,7 +85,7 @@ export async function stockMovementsView(root) {
   for (const el of Object.values(f)) el.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
   root.replaceChildren(
     h('div.page-head', h('h1', '🔁 Stock Movements'), h('div.actions',
-      h('a.btn.primary', { href: '#/stock-entry' }, '+ Stock Entry'), h('a.btn', { href: '#/list/stock_drafts?status=Draft' }, '📝 Drafts'),
+      h('a.btn.primary', { href: '#/stock-entry' }, '+ Stock Entry'), h('button.btn', { title: 'What this tab and filter show: one sheet by GRN / slip, one sheet item by item', onclick: () => download(`/api/export/stock-movements?${query()}`) }, '⬇ Export Excel'), h('a.btn', { href: '#/list/stock_drafts?status=Draft' }, '📝 Drafts'),
       h('a.btn', { href: '#/list/stock_moves' }, '☰ Item-wise list'), h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'))),
     tabs, h('div.toolbar', f.q, f.po, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to), out);
   await load();
