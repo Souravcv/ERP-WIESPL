@@ -48,6 +48,28 @@ export function ensureLogin(row, actor) {
   });
 }
 
+// Everyone working here with no CRM account yet (HR → App logins).
+export const loginGaps = () => db.prepare(`SELECT e.id, e.emp_code, e.name, e.department, e.designation, e.mobile, e.login FROM employees e
+  WHERE COALESCE(e.status, 'Active') = 'Active' AND NOT EXISTS (SELECT 1 FROM users u WHERE lower(u.username) = lower(trim(COALESCE(e.login, ''))))
+  ORDER BY e.name`).all();
+
+// Logins for many people at once, all or none. The temporary passwords come back once, to the person who pressed the button.
+export function createLogins(list, actor) {
+  if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Tick at least one employee');
+  const open = new Map(loginGaps().map(e => [e.id, e]));
+  return tx(() => {
+    const created = [];
+    for (const { employee_id, role } of list) {
+      if (['admin', 'manager'].includes(role)) throw new HttpError(403, 'Administrator and GM logins are made under Admin → Users');
+      const e = open.get(Number(employee_id));
+      if (!e) continue; // got a login meanwhile, or has left
+      const made = ensureLogin({ ...getRow('employees', e.id), login_role: role }, actor).login_created;
+      if (made) created.push({ emp_code: e.emp_code, name: e.name, department: e.department, ...made });
+    }
+    return { created };
+  });
+}
+
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
 const addMonths = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setMonth(x.getMonth() + Number(n)); return x.toLocaleString('sv-SE').slice(0, 10); };
