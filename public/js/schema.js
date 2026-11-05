@@ -3,13 +3,13 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'design_engineer', 'production_manager'];
 // Least-access roles for the shop floor and site: own attendance and leave, own tasks, own performance.
-export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge'];
+export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer'];
 // Departments a work order line belongs to (the work order is one master copy; each department sees its part).
 export const WO_DEPARTMENTS = ['Design', 'Purchase', 'Production', 'Store', 'Logistics', 'Site / Installation', 'Electrical', 'Service'];
 // The department each built-in profile works for (its default view of a work order).
-export const ROLE_DEPARTMENT = { technical: 'Design', purchase: 'Purchase', purchase_head: 'Purchase', production: 'Production', store: 'Store', planning: 'Logistics', engineer: 'Site / Installation', service: 'Service' };
+export const ROLE_DEPARTMENT = { technical: 'Design', purchase: 'Purchase', purchase_head: 'Purchase', production: 'Production', store: 'Store', planning: 'Logistics', engineer: 'Site / Installation', service: 'Service', design_engineer: 'Design', production_manager: 'Production' };
 
 const ALL = ROLES;
 const CRM = ['admin', 'manager', 'sales'];
@@ -98,6 +98,13 @@ export const ROLE_INFO = {
   technician: { label: 'Technician', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
   wiring_engineer: { label: 'Wiring Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
   panel_maker: { label: 'Panel Maker', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  driver: { label: 'Driver', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  site_installation: { label: 'Site Installation', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  electrical_wiring: { label: 'Electrical Wiring', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  software_engineer: { label: 'Software Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  network_engineer: { label: 'Network Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  design_engineer: { label: 'Design Engineer', description: 'Projects, BOQs, BOMs, material lists, drawing approvals and QC plans. No PO or BOQ approvals' },
+  production_manager: { label: 'Production Manager', description: 'Everything the Production Supervisor has, plus approval of the monthly production plan' },
   incharge: { label: 'Work In-charge', description: 'As a worker, plus: enters the daily work of the department\'s team, sees the whole department, requests material from the store' },
 };
 
@@ -117,7 +124,8 @@ export const ROLE_SEES = {
   production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
   service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
   hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects', 'onboardings', 'probation_reviews', 'asset_issues', 'separations'],
-  worker: [], helper: [], technician: [], wiring_engineer: [], panel_maker: [],
+  worker: [], helper: [], technician: [], wiring_engineer: [], panel_maker: [], driver: [], site_installation: [], electrical_wiring: [], software_engineer: [], network_engineer: [],
+  design_engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'items', 'material_requests', 'dispatch_plans', 'production_orders', 'qc_plans', 'project_qc', 'ncrs'],
   incharge: ['material_requests', 'items'],
   planning: ['approvals', 'projects', 'dispatch_plans', ...BOQ_VIEW, 'challans', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests', 'production_entries'],
 };
@@ -132,6 +140,7 @@ ROLE_SEES.engineer.push('qc_plans', 'project_qc', 'ncrs');
 ROLE_SEES.hr.push('work_logs');
 ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs', 'qc_plans', 'project_qc');
 ROLE_SEES.store.push('production_orders');
+ROLE_SEES.production_manager = [...ROLE_SEES.production];
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 // Whoever sees projects sees their schedule (Project Planner).
@@ -196,6 +205,8 @@ export const DEFAULT_FUNCTIONS = {
   engineer: ['notify_work_order', 'boq_review', 'qc_site'],
   production: ['production_post', 'production_release', 'qc_inspect', 'work_log', 'perf_all'],
   incharge: ['work_log'],
+  design_engineer: ['notify_work_order', 'notify_boq'],
+  production_manager: ['production_post', 'production_release', 'production_plan_approve', 'qc_inspect', 'work_log', 'perf_all'],
   hr: ['hr_manage', 'leave_approve', 'task_assign', 'perf_all'],
   service: ['import', 'task_assign'],
   planning: ['work_log', 'perf_all', 'task_assign', 'notify_work_order', 'notify_po', 'production_release'],
@@ -2515,10 +2526,16 @@ let PERMS = {};
 export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
 
 // Defaults for the built-in roles (also the starting point for a new role).
+// New roles that are not named in each module's write list.
+const ROLE_EDITS = {
+  design_engineer: ['approvals', 'material_approvals', 'schedule_activities', 'boqs', 'boq_items', 'boms', 'bom_items', 'material_lists', 'material_requests', 'qc_plans', 'work_tasks'],
+};
+const WRITES_LIKE = { production_manager: 'production' };
+
 export function defaultPermissions(role) {
   const modules = {};
   for (const [name, ent] of Object.entries(ENTITIES)) {
-    modules[name] = role === 'manager' ? 'full' : !roleSees(role, name) ? 'none' : (ent.write || []).includes(role) ? 'edit' : 'view';
+    modules[name] = role === 'manager' ? 'full' : !roleSees(role, name) ? 'none' : (ROLE_EDITS[role] ? ROLE_EDITS[role].includes(name) : (ent.write || []).includes(WRITES_LIKE[role] || role)) ? 'edit' : 'view';
   }
   return { modules, functions: DEFAULT_FUNCTIONS[role] || [] };
 }
