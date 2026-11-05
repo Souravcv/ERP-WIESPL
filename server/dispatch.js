@@ -170,7 +170,7 @@ export function dispatchFromBoq(boqId, body, user, { post = false } = {}) {
   return tx(() => {
     const lines = challanLines(boq, body?.picks, user, body?.force);
     const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => body?.[k]).map(k => [k, body[k]]));
-    const ch = insertRow('challans', { ...extra, boq_id: boq.id, project_id: boq.project_id, customer_id: boq.customer_id, status: 'Draft', lines }, user, { system: true });
+    const ch = insertRow('challans', { ...extra, ...(body?.doc_no ? { challan_no: body.doc_no } : {}), boq_id: boq.id, project_id: boq.project_id, customer_id: boq.customer_id, status: 'Draft', lines }, user, { system: true });
     if (!post) return { challan: ch, stock_lines: 0, draft: true };
     const stockLines = lines.filter(l => l.item_id).map(l => ({ item_id: l.item_id, qty: l.qty, remark: l.remark }));
     if (stockLines.length) {
@@ -454,7 +454,7 @@ export function dispatchFromBom(bomId, body, user, { post = false } = {}) {
   return tx(() => {
     const lines = bomChallanLines(bom, body?.picks, user, body?.force);
     const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => body?.[k]).map(k => [k, body[k]]));
-    const ch = insertRow('challans', { ...extra, bom_id: bom.id, boq_id: bom.work_order_id || null, project_id: bom.project_id, customer_id: bom.customer_id, status: 'Draft', lines }, user, { system: true });
+    const ch = insertRow('challans', { ...extra, ...(body?.doc_no ? { challan_no: body.doc_no } : {}), bom_id: bom.id, boq_id: bom.work_order_id || null, project_id: bom.project_id, customer_id: bom.customer_id, status: 'Draft', lines }, user, { system: true });
     if (!post) return { challan: ch, stock_lines: 0, draft: true };
     const stockLines = lines.filter(l => l.item_id).map(l => ({ item_id: l.item_id, qty: l.qty, remark: l.remark }));
     if (stockLines.length) {
@@ -488,7 +488,7 @@ export function challanForIssue(body, issue, user) {
   const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => c[k]).map(k => [k, c[k]]));
   if (!extra.ship_to && !extra.vendor_id && body.type === 'TRANSFER' && body.to_location) extra.ship_to = body.to_location;
   const ch = insertRow('challans', {
-    ...extra, date: body.date || undefined, project_id: body.project_id || null, issue_no: issue.doc_no, issue_type: body.type, status: 'Dispatched',
+    ...extra, ...(body.doc_no ? { challan_no: body.doc_no } : {}), date: body.date || undefined, project_id: body.project_id || null, issue_no: issue.doc_no, issue_type: body.type, status: 'Dispatched',
     challan_type: c.challan_type || (body.type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'),
     remarks: c.remarks || body.purpose || null, lines,
     dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})`,

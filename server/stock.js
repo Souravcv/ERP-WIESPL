@@ -19,6 +19,14 @@ export function stockOf(itemId) {
 const HEADER_KEYS = ['vendor_id', 'supplier', 'invoice_no', 'invoice_date', 'po_id', 'po_no', 'project_id', 'issued_to', 'requested_by',
   'from_location', 'to_location', 'against_issue_no', 'reason', 'purpose', 'remarks'];
 
+// A challan or issue number typed by hand must be new: a repeated number would join two slips into one.
+export function checkOutwardNo(no) {
+  const n = String(no || '').trim();
+  if (!n) return;
+  const used = db.prepare("SELECT 1 FROM stock_moves WHERE type = 'OUTWARD' AND doc_no = ? COLLATE NOCASE LIMIT 1").get(n) || db.prepare('SELECT 1 FROM challans WHERE challan_no = ? COLLATE NOCASE LIMIT 1').get(n);
+  if (used) throw new HttpError(409, `Number ${n} is already used. Type another number, or leave it blank for the next one.`);
+}
+
 export function stockEntry(body, user) {
   const type = body?.type;
   if (!MOVE_TYPES[type]) throw new HttpError(400, 'Choose a movement type');

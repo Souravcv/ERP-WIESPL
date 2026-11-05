@@ -141,7 +141,7 @@ export async function stockEntryView(root) {
     if (!pendingOpts.length) toast('Everything in this BOQ has already been sent');
   }
   if (draft) {
-    for (const k of ['date', 'project_id', 'issued_to', 'requested_by', 'from_location', 'to_location', 'purpose', 'remarks']) if (dp[k] != null) header[k] = dp[k];
+    for (const k of ['date', 'doc_no', 'project_id', 'issued_to', 'requested_by', 'from_location', 'to_location', 'purpose', 'remarks']) if (dp[k] != null) header[k] = dp[k];
     lines = (dp.lines || []).map(l => ({ ...l }));
     makeChallan = !!dp.make_challan;
     Object.assign(ch, dp.challan || {}, Object.fromEntries(CHALLAN_KEYS.filter(k => dp[k] != null).map(k => [k, dp[k]])));
@@ -203,7 +203,8 @@ export async function stockEntryView(root) {
     const pick = (k, opts, label) => field(label, itemPicker(opts, header[k] ? Number(header[k]) : null, { onPick: id => { header[k] = id; } }));
     const date = v('date', h('input', { type: 'date' }));
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
-    const F = [field('Date *', date), DRAFTED.includes(type) ? field({ OUTWARD: tabOf() === 'DC' ? 'Challan No' : 'Issue No', TRANSFER: 'Transfer No' }[type], h('input', { value: 'given when the store posts it', disabled: true }))
+    const F = [field('Date *', date), type === 'OUTWARD' ? field(tabOf() === 'DC' ? 'Challan No' : 'Issue No', v('doc_no', h('input', { placeholder: 'Type it, or leave blank for the next number' })))
+      : type === 'TRANSFER' ? field('Transfer No', h('input', { value: 'given when the store posts it', disabled: true }))
       : field({ INWARD: 'GRN No', JOB_IN: 'GRN No', JOB_OUT: 'Vendor DC No', RETURN: 'Return No', SCRAP: 'Scrap No' }[type] || 'Doc No', v('doc_no', h('input', { placeholder: 'Auto (001/2026-27)' })))];
     if (type === 'OUTWARD') {
       const doc = h('select', [['issue', 'Issue'], ['dc', 'Delivery Challan (DC)']].map(([v2, l]) => h('option', { value: v2 }, l)));
@@ -311,7 +312,7 @@ export async function stockEntryView(root) {
   // Outward / transfer: saved as a draft (no stock change); someone allowed to post checks and posts it.
   async function saveDraft() {
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null })) };
-    delete payload.doc_no;
+    if (type !== 'OUTWARD') delete payload.doc_no;
     if (makeChallan && !boq && !bom) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (lines.some(l => !l.item_id && Number(l.qty))) throw new Error('Pick an item on every line that has a quantity');

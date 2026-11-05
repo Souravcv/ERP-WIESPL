@@ -3,7 +3,7 @@
 import { db, tx, audit } from './db.js';
 import { getRow, insertRow, updateRow, HttpError } from './crud.js';
 import { hasFunction } from '../public/js/schema.js';
-import { stockOf } from './stock.js';
+import { stockOf, checkOutwardNo } from './stock.js';
 import { freeStock } from './boqflow.js';
 import { submitForApproval } from './workflows.js';
 
@@ -26,9 +26,12 @@ export function draftRow(body) {
   const challan = !!(body.make_challan || body.bom_id || body.boq_id);
   const payload = Object.fromEntries(DRAFT_KEYS.filter(k => body[k] !== undefined && body[k] !== '').map(k => [k, body[k]]));
   payload.lines = lines;
-  const it = db.prepare('SELECT code, name, uom FROM items WHERE id = ?');
+  const docNo = type === 'OUTWARD' ? String(body.doc_no || '').trim() : '';
+  checkOutwardNo(docNo);
+  if (docNo) payload.doc_no = docNo; else delete payload.doc_no;
+  const it =db.prepare('SELECT code, name, uom FROM items WHERE id = ?');
   const items = lines.map(l => { const x = it.get(Number(l.item_id)); return `${x?.code || ''} ${x?.name || 'item ' + l.item_id} × ${l.qty} ${l.uom || x?.uom || ''}`.trim(); }).join('\n');
-  return { type, doc_kind: type === 'OUTWARD' ? (challan ? 'Dispatch challan' : 'Issue slip') : (challan ? 'MTN with delivery challan' : 'Material Transfer Note (MTN)'),
+  return { type, doc_no: docNo || null, doc_kind: type === 'OUTWARD' ? (challan ? 'Dispatch challan' : 'Issue slip') : (challan ? 'MTN with delivery challan' : 'Material Transfer Note (MTN)'),
     date: body.date || today(), project_id: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id) || null,
     issued_to: body.issued_to || null, to_location: body.to_location || null, item_count: lines.length, items, payload, remarks: body.remarks || null };
 }
