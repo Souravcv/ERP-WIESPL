@@ -59,6 +59,20 @@ export function mrStock(id) {
   });
 }
 
+// A request that moved stock stays on record. Once the movement itself has been deleted nothing is left to protect, so
+// the request can go, with the posted slips that now move nothing. Returns those slips.
+const stockGone = s => !db.prepare('SELECT 1 FROM stock_moves WHERE doc_no = ? AND type = ? AND date = ? LIMIT 1').get(s.doc_no, s.type, s.date);
+export function emptySlipsOfMR(mr) {
+  if (['Draft', 'Rejected'].includes(mr.status)) return [];
+  const refuse = why => { throw new HttpError(409, `This request is ${String(mr.status).toLowerCase()} and cannot be deleted${why}`); };
+  if (!['Issued', 'Partly Issued'].includes(mr.status)) refuse('');
+  const slips = db.prepare("SELECT id, doc_no, type, date FROM stock_drafts WHERE mr_id = ? AND status = 'Posted'").all(mr.id);
+  if (!slips.length) refuse('');
+  const live = slips.filter(s => !stockGone(s));
+  if (live.length) refuse(`: stock was moved by ${live.map(s => s.doc_no).join(', ')}`);
+  return slips;
+}
+
 // The store's decision: issue what it has (a draft issue slip, or an MTN to the production stock), send the rest to
 // the Purchase Head as a requisition. Both keep the site of every line.
 // With postDraft the slip is posted in the same step, and a refusal (short or reserved stock) undoes the whole step.
