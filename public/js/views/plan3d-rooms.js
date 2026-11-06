@@ -5,7 +5,12 @@
 // points: [x, z] places inside the room's label to start from; want: [a, b] size in metres from the label, or null.
 // Rays go out in the four directions, several parallel rays per side. The start point whose outline fits the label's size wins.
 export function findRoom(occ, points, want) {
-  if (want) { const fit = fitSize(occ, points, want); if (fit) return fit; }
+  // a rectangle of the label's size with lines along most of its outline wins; otherwise the room as its walls enclose
+  // it (labels are sometimes out of date), then the best weak fit of the label's size
+  const fit = want ? fitSize(occ, points, want) : null;
+  if (fit && fit.cover >= 0.8) return fit;
+  for (const p of points) { const r = floodRoom(occ, p, want); if (r) return r; }
+  if (fit) return fit;
   let best = null;
   for (const [cx, cz] of points) {
     const r = probe(occ, cx, cz, want);
@@ -13,6 +18,35 @@ export function findRoom(occ, points, want) {
     if (r.walls) break;
   }
   return best;
+}
+
+// The walls around the label, traced on a 10 cm grid: everything reachable from the label without crossing a line
+// (walls, glass, doors) is the room. Its bounding box is accepted when the room is closed and about the label's size.
+function floodRoom(occ, [cx, cz], want, R = 9, cell = 0.1) {
+  const n = Math.ceil((R * 2) / cell), ox = cx - R, oz = cz - R, grid = new Uint8Array(n * n);
+  const mark = (x, z) => { const i = Math.floor((x - ox) / cell), j = Math.floor((z - oz) / cell); for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) { const a = i + di, b = j + dj; if (a >= 0 && b >= 0 && a < n && b < n) grid[b * n + a] = 1; } };
+  for (let k = 0; k < occ.length; k += 4) {
+    const x1 = occ[k], z1 = occ[k + 1], x2 = occ[k + 2], z2 = occ[k + 3];
+    if (Math.max(x1, x2) < ox || Math.min(x1, x2) > ox + R * 2 || Math.max(z1, z2) < oz || Math.min(z1, z2) > oz + R * 2) continue;
+    const L = Math.hypot(x2 - x1, z2 - z1), steps = Math.max(1, Math.ceil(L / (cell * 0.5)));
+    for (let t = 0; t <= steps; t++) mark(x1 + ((x2 - x1) * t) / steps, z1 + ((z2 - z1) * t) / steps);
+  }
+  let start = -1; // the label may sit on a line: start from the nearest free cell
+  for (let r = 0; r < 6 && start < 0; r++) for (let di = -r; di <= r && start < 0; di++) for (let dj = -r; dj <= r && start < 0; dj++) { const i = Math.floor((cx - ox) / cell) + di, j = Math.floor((cz - oz) / cell) + dj; if (i > 0 && j > 0 && i < n - 1 && j < n - 1 && !grid[j * n + i]) start = j * n + i; }
+  if (start < 0) return null;
+  const seen = new Uint8Array(n * n), queue = [start]; seen[start] = 1;
+  let i0 = n, i1 = 0, j0 = n, j1 = 0, count = 0;
+  while (queue.length) {
+    const c = queue.pop(), i = c % n, j = (c / n) | 0; count++;
+    if (i === 0 || j === 0 || i === n - 1 || j === n - 1) return null; // leaked out: not a closed room
+    if (i < i0) i0 = i; if (i > i1) i1 = i; if (j < j0) j0 = j; if (j > j1) j1 = j;
+    for (const d of [1, -1, n, -n]) { const q = c + d; if (!seen[q] && !grid[q]) { seen[q] = 1; queue.push(q); } }
+  }
+  // the marks are three cells wide: the room's faces are one cell further out than the cells reached
+  const x0 = ox + (i0 - 1) * cell, x1 = ox + (i1 + 2) * cell, z0 = oz + (j0 - 1) * cell, z1 = oz + (j1 + 2) * cell, w = x1 - x0, h = z1 - z0;
+  if (w < 2 || h < 2 || count * cell * cell < 0.6 * w * h) return null;
+  if (want) { const area = want[0] * want[1]; if (w * h < area * 0.6 || w * h > area * 1.7) return null; }
+  return { x0, x1, z0, z1, walls: true, err: 0, traced: true };
 }
 
 // The label gives the exact size: look for wall lines that far apart around the label, in both directions.

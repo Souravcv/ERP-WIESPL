@@ -107,4 +107,86 @@ export const TOUR_LINES = {
     show: 'From the corridor to the table, every part is designed, built and installed by WIESPL. Turnkey solutions for healthcare.',
     say: 'From the corridor to the table, every part is designed, built and installed by Wee-spell. Turnkey solutions for healthcare.',
   },
+  // the client film (plan3d-film.js): spoken only, the screen shows one-line labels. Written for the Sindhu Hospital
+  // OT 09 film: change the lines that name the OT and run tools/tour-voice.mjs film_plan film_enter for another one.
+  film_plan: {
+    title: "The complex",
+    show: "This is the operation theatre complex at Sindhu Hospital, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into Operation Theatre number nine.",
+    say: "This is the operation theatre complex at Sindhu Hospital, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into Operation Theatre number nine.",
+  },
+  film_rise: {
+    title: "Self-standing system",
+    show: "Every wall and ceiling is a self-standing modular system. It stands on its own frame, so there is no civil work.",
+    say: "Every wall and ceiling is a self-standing modular system. It stands on its own frame, so there is no civil work.",
+  },
+  film_passage: {
+    title: "Clean passage",
+    show: "We come down into the clean passage, just before the theatre.",
+    say: "We come down into the clean passage, just before the theatre.",
+  },
+  film_walk: {
+    title: "Passage finishes",
+    show: "The walls are KLEENCLAD™: a matte cladding, two to two and a half millimetres thick, with silver ion antimicrobial protection. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+    say: "The walls are Clean Clad: a matte cladding, two to two and a half millimetres thick, with silver ion antimicrobial protection. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+  },
+  film_scrub: {
+    title: "Scrub station",
+    show: "At the end of the passage is the scrub station, where the team prepares for surgery.",
+    say: "At the end of the passage is the scrub station, where the team prepares for surgery.",
+  },
+  film_enter: {
+    title: "Entering the theatre",
+    show: "Now, we enter Operation Theatre number nine.",
+    say: "Now, we enter Operation Theatre number nine.",
+  },
+  film_inside: {
+    title: "Inside",
+    show: "Inside, every surface is smooth, joint free, and easy to clean.",
+    say: "Inside, every surface is smooth, joint free, and easy to clean.",
+  },
+  film_front: {
+    title: "Glass wall",
+    show: "Facing us is a full height glass wall, with a calming picture at its centre, from floor to ceiling.",
+    say: "Facing us is a full height glass wall, with a calming picture at its centre, from floor to ceiling.",
+  },
+  film_walls: {
+    title: "Walls and ceiling",
+    show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+    say: "The other walls are matte Clean Clad in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+  },
+  film_storage: {
+    title: "Storage",
+    show: "On the right is built-in storage, with glass fronted doors.",
+    say: "On the right is built-in storage, with glass fronted doors.",
+  },
+  film_surgeon: {
+    title: "Surgeon’s wall",
+    show: "Opposite the storage is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
+    say: "Opposite the storage is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
+  },
+  film_centre: {
+    title: "The centre",
+    show: "At the centre, the laminar air flow plenum sends clean, filtered air down over the operating table, with pendants for the surgeon and the anaesthetist.",
+    say: "At the centre, the laminar air flow plenum sends clean, filtered air down over the operating table, with pendants for the surgeon and the anaesthetist.",
+  },
+  film_floor: {
+    title: "Floor",
+    show: "Underfoot, the floor is seamless antistatic vinyl, coved up the walls.",
+    say: "Underfoot, the floor is seamless antistatic vinyl, coved up the walls.",
+  },
+  film_close: {
+    title: "WIESPL",
+    show: "A complete, self-standing modular operation theatre, with no civil work. Designed, built and installed by WIESPL.",
+    say: "A complete, self-standing modular operation theatre, with no civil work. Designed, built and installed by Wee-spell.",
+  },
+  film_entrance: {
+    title: "Digital OR entrance display",
+    show: "At the entrance of every theatre is the WIESPL Digital OR display. It shows the theatre number, the surgery, the patient and the surgeon, with the temperature, humidity and air pressure inside, and the status of the air handling unit, UV sterilisation and fumigation.",
+    say: "At the entrance of every theatre is the Wee-spell Digital O.R. display. It shows the theatre number, the surgery, the patient and the surgeon, with the temperature, humidity and air pressure inside, and the status of the air handling unit, U.V. sterilisation and fumigation.",
+  },
+  film_digital: {
+    title: "WIESPL Digital OR",
+    show: "This is WIESPL Digital OR From the surgeon’s control panel, the whole theatre is run at the touch of a button. 4K cameras record and stream every surgery, filed with the patient’s record. Images come in from PACS and the hospital system, and live surgery can be broadcast for teaching and teleconferencing. A central server connects every theatre, and shows the surgery schedule across the complex.",
+    say: "This is Wee-spell Digital O.R. From the surgeon’s control panel, the whole theatre is run at the touch of a button. Four K cameras record and stream every surgery, filed with the patient’s record. Images come in from PACS and the hospital system, and live surgery can be broadcast for teaching and teleconferencing. A central server connects every theatre, and shows the surgery schedule across the complex.",
+  },
 };

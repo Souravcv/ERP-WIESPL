@@ -723,6 +723,9 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .p3-tour { position: absolute; inset: 0; z-index: 5; pointer-events: none; }
 .p3-tourov { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .p3-tourstop { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); pointer-events: auto; background: rgba(15, 30, 55, .82); color: #fff; border: 0; }
+.p3-filmbtns { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; pointer-events: auto; }
+.p3-filmbtns .btn { background: rgba(15, 30, 55, .82); color: #fff; border: 0; }
+.p3-filmnote { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); background: rgba(15, 30, 55, .82); color: #fff; padding: 6px 14px; border-radius: 14px; font-size: 13px; pointer-events: none; }
 .p3-touring .p3-legend, .p3-touring .p3-joy, .p3-touring .p3-walkbar { display: none; }
 .p3-tourbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .p3-tourbtns .muted { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; }

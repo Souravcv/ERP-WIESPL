@@ -11,6 +11,7 @@
 import { h } from '../ui.js';
 import { TOUR_LINES } from './plan3d-tour-lines.js';
 import { artTexture, drawCanopy, drawBlossom, drawSky, drawDiffuser, drawCeilingTile, drawVinyl, markImage } from './plan3d-art.js';
+import { KLEENCLAD } from './plan3d-otfit.js';
 
 const EYE = 1.6, TITLE = 5.5, END_CARD = 7;
 const clamp01 = x => Math.max(0, Math.min(1, x));
@@ -47,12 +48,12 @@ export function createTour(ctx) {
   let run = null;
 
   // ---------------------------------------------------------------- where to walk
-  function route() {
+  function route(hero) {
     const segs = ctx.walls(), ray = (x, z, dx, dz, max) => ctx.rayDist(x, z, dx, dz, max, segs);
-    const fitted = ctx.ots().filter(o => o.fit), sel = ctx.selected();
+    const fitted = ctx.ots().filter(o => o.fit), sel = hero || ctx.selected();
     const pool = sel?.fit ? [sel] : fitted;
     let best = null;
-    for (const o of pool) for (const d of o.fit.spots.doors) {
+    for (const o of pool) for (const d of hero && o.fit.spots.doors.some(q => q.main) ? o.fit.spots.doors.filter(q => q.main) : o.fit.spots.doors) {
       const ax = d.inZ, az = -d.inX, qx = d.x - d.inX * 1.3, qz = d.z - d.inZ * 1.3;
       if (ray(d.x - d.inX * 0.3, d.z - d.inZ * 0.3, -d.inX, -d.inZ, 8) < 1.2) continue; // no room to stand outside this door
       const f1 = ray(qx, qz, ax, az, 30), f2 = ray(qx, qz, -ax, -az, 30);
@@ -72,11 +73,14 @@ export function createTour(ctx) {
     const width = Math.max(1.2, Math.min(5, toOt + away)), k = Math.max(0.9, 1.3 + width / 2 - toOt);
     const cx = d.x - d.inX * k, cz = d.z - d.inZ * k; // the corridor's middle, opposite the door
     const L = Math.max(2.2, Math.min(10, free - 1.2)), beyond = Math.max(0.4, Math.min(4, other - 0.6));
-    return { o, d, ux, uz, width, cx, cz, L, beyond, label };
+    return { o, d, ux, uz, width, cx, cz, L, beyond, other, label };
   }
 
   // ---------------------------------------------------------------- the corridor: walls, floor, ceiling, sky panels, diffusers
-  function fitCorridor(r, group, emitters) {
+  // film: matte KLEENCLAD walls with a crash rail, a seamless ceiling, antistatic vinyl, a light behind every sky panel
+  // (the film turns them on one by one) and the scrub station where the drawing has it
+  function fitCorridor(r, group, emitters, film = false) {
+    if (film && r.other < 4.8) r.beyond = Math.max(0.4, r.other - 0.03); // the passage ends at its drawn end wall
     const segs = ctx.walls(), H = Math.min(ctx.wallH(), 3.0), len = r.L + 0.9 + r.beyond, w = r.width - 0.08;
     const mid = (r.L + 0.9 - r.beyond) / 2, mx = r.cx + r.ux * mid, mz = r.cz + r.uz * mid, rot = Math.atan2(-r.uz, r.ux);
     const strip = new T.Group(); strip.position.set(mx, 0, mz); strip.rotation.y = rot; group.add(strip);
@@ -84,12 +88,13 @@ export function createTour(ctx) {
     const box = (a, b, c, m, x, y, z, uv) => { const g = new T.BoxGeometry(a, b, c); if (uv) scaleUv(g, uv, 1); const o = new T.Mesh(g, m); o.position.set(x, y, z); strip.add(o); return o; };
     // seamless vinyl: blue field, warm yellow border (as on site), with a soft sheen
     const vinyl = artTexture(T, drawVinyl, 256, 256); vinyl.wrapS = vinyl.wrapT = T.RepeatWrapping; vinyl.repeat.set(len / 1.2, w / 1.2);
-    const band = Math.min(0.3, w * 0.12), border = keep(new T.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.3, envMapIntensity: 0.4, map: vinyl }));
+    const band = Math.min(film ? 0.16 : 0.3, w * 0.12), border = keep(new T.MeshStandardMaterial({ color: film ? 0x1d3f74 : 0xc9a24a, roughness: film ? 0.45 : 0.3, envMapIntensity: film ? 0.15 : 0.4, map: vinyl }));
     box(len, 0.012, w, border, 0, 0.009, 0);
-    box(len - band * 2, 0.013, w - band * 2, keep(new T.MeshStandardMaterial({ color: 0x5b93ae, roughness: 0.28, envMapIntensity: 0.4, map: vinyl })), 0, 0.0095, 0);
+    box(len - band * 2, 0.013, w - band * 2, keep(new T.MeshStandardMaterial({ color: film ? 0xc3cad2 : 0x5b93ae, roughness: film ? 0.45 : 0.28, envMapIntensity: film ? 0.15 : 0.4, map: vinyl })), 0, 0.0095, 0);
     // panelled walls along both sides, with the vinyl coved up the foot of the wall (only where the drawing has a wall)
-    const seam = seamTexture(T), wallMat = keep(new T.MeshPhysicalMaterial({ color: 0xa6d8cd, roughness: 0.14, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, map: seam, envMapIntensity: 0.6 }));
+    const seam = seamTexture(T), wallMat = keep(film ? new T.MeshStandardMaterial({ color: KLEENCLAD, roughness: 0.88, metalness: 0, envMapIntensity: 0.05 }) : new T.MeshPhysicalMaterial({ color: 0xa6d8cd, roughness: 0.14, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, map: seam, envMapIntensity: 0.6 }));
     const lineBlue = keep(new T.MeshStandardMaterial({ color: 0x1f6fb5, roughness: 0.35 })), lineGreen = keep(new T.MeshStandardMaterial({ color: 0x5cb85c, roughness: 0.35 }));
+    const rail = keep(new T.MeshStandardMaterial({ color: 0xe3e6e8, roughness: 0.5, envMapIntensity: 0.15 })), railIn = keep(new T.MeshStandardMaterial({ color: 0x8d98a4, roughness: 0.6 }));
     const wallRuns = { 1: [], '-1': [] };
     for (const side of [1, -1]) {
       const runs = [];
@@ -106,13 +111,16 @@ export function createTour(ctx) {
         const z = side * dist;
         box(l, H, 0.03, wallMat, c, H / 2, z, l / 1.2);
         box(l, 0.1, 0.012, border, c, 0.05, z - side * 0.021);
-        box(l, 0.07, 0.008, lineBlue, c, 1.2, z - side * 0.019); box(l, 0.022, 0.008, lineGreen, c, 1.27, z - side * 0.019);
+        if (film) { box(l, 0.17, 0.04, rail, c, 0.95, z - side * 0.035); box(l, 0.035, 0.012, railIn, c, 0.95, z - side * 0.06); } // the crash rail
+        else { box(l, 0.07, 0.008, lineBlue, c, 1.2, z - side * 0.019); box(l, 0.022, 0.008, lineGreen, c, 1.27, z - side * 0.019); }
         wallRuns[side].push({ a: run.a, b: run.b, dist });
       }
     }
+    const world = (x, z) => [mx + Math.cos(rot) * x + Math.sin(rot) * z, mz - Math.sin(rot) * x + Math.cos(rot) * z];
+    if (film && r.other < 4.8) { const xe = -len / 2 - 0.015; box(0.03, H, w + 0.06, wallMat, xe, H / 2, 0, w / 1.2); box(0.012, 0.1, w, border, xe + 0.021, 0.05, 0); }
     // the surgical scrub station in the passage (two bays, sensor taps, foot pedals), on a wall near the OT's door
-    let scrub = null;
-    {
+    let scrub = film ? drawnScrub() : null;
+    if (!scrub) {
       const otSide = Math.sign(-r.uz * r.d.inX + r.ux * r.d.inZ) || 1, tDoor = -mid;
       for (const side of [otSide, -otSide]) for (const t of [tDoor + 2.1, tDoor + 2.9, tDoor + 3.8, tDoor - 2.1]) {
         const run = !scrub && wallRuns[side].find(q => q.a <= t - 0.85 && q.b >= t + 0.85);
@@ -120,7 +128,7 @@ export function createTour(ctx) {
       }
       if (scrub) {
         const { side, t, dist } = scrub, zf = off => side * (dist - 0.015 - off), Cy = (a, b, hh) => new T.CylinderGeometry(a, b, hh, 14);
-        const ss = keep(new T.MeshStandardMaterial({ color: 0xc9d1da, metalness: 0.7, roughness: 0.34, envMapIntensity: 0.8 })), ssDk = keep(new T.MeshStandardMaterial({ color: 0x8e99a6, metalness: 0.8, roughness: 0.35 }));
+        const ss = keep(film ? new T.MeshStandardMaterial({ color: 0xf0f2f3, roughness: 0.4 }) : new T.MeshStandardMaterial({ color: 0xc9d1da, metalness: 0.7, roughness: 0.34, envMapIntensity: 0.8 })), ssDk = keep(new T.MeshStandardMaterial({ color: 0x8e99a6, metalness: 0.8, roughness: 0.35 }));
         const dark = keep(new T.MeshStandardMaterial({ color: 0x20262e, roughness: 0.5 })), white = keep(new T.MeshStandardMaterial({ color: 0xf4f6f8, roughness: 0.4 }));
         const cyl = (geo, m, x, y, z) => { const o = new T.Mesh(geo, m); o.position.set(x, y, z); strip.add(o); return o; };
         box(1.44, 0.08, 0.5, dark, t, 0.04, zf(0.27));                 // plinth
@@ -137,14 +145,56 @@ export function createTour(ctx) {
         }
         for (const k of [-0.66, 0.66]) box(0.08, 0.15, 0.07, white, t + k, 1.32, zf(0.055)); // soap and antiseptic
         box(0.26, 0.1, 0.02, dark, t, 1.68, zf(0.01)); box(0.2, 0.05, 0.004, keep(new T.MeshBasicMaterial({ color: 0x4fe08a, toneMapped: false })), t, 1.68, zf(0.022)); // scrub timer
-        const world = (x, z) => [mx + Math.cos(rot) * x + Math.sin(rot) * z, mz - Math.sin(rot) * x + Math.cos(rot) * z];
         const [sx2, sz2] = world(t, zf(0.3)), [cx2, cz2] = world(t + 1.4, -side * Math.min(0.7, dist - 0.5));
         scrub = { x: sx2, z: sz2, camX: cx2, camZ: cz2 };
       }
     }
+    // the scrub station as the drawing places it: the furniture drawn in the passage, against the wall it stands at.
+    // Built in matte solid surface (the film shows no stainless steel), sensor taps and knee / foot controls.
+    function drawnScrub() {
+      const F = ctx.fixtures?.().furniture; if (!F?.length) return null;
+      const c = Math.cos(rot), sn = Math.sin(rot), local = (x, z) => { const dx = x - mx, dz = z - mz; return [c * dx - sn * dz, sn * dx + c * dz]; };
+      const groups = [];
+      for (let i = 0; i < F.length; i += 4) {
+        const [a, b] = local(F[i], F[i + 1]), [p, q] = local(F[i + 2], F[i + 3]);
+        if (Math.min(a, p) < -len / 2 - 0.3 || Math.max(a, p) > len / 2 + 0.3 || Math.min(Math.abs(b), Math.abs(q)) > w / 2 + 0.1 || Math.max(Math.abs(b), Math.abs(q)) > w / 2 + 0.4) continue;
+        const gx = (a + p) / 2, gz = (b + q) / 2; let g = groups.find(k => gx > k.x0 - 0.5 && gx < k.x1 + 0.5 && gz > k.z0 - 0.5 && gz < k.z1 + 0.5);
+        if (!g) groups.push(g = { x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9, n: 0 });
+        g.x0 = Math.min(g.x0, a, p); g.x1 = Math.max(g.x1, a, p); g.z0 = Math.min(g.z0, b, q); g.z1 = Math.max(g.z1, b, q); g.n++;
+      }
+      const g = groups.filter(k => k.n >= 4 && Math.max(k.x1 - k.x0, k.z1 - k.z0) >= 1.0 && Math.min(k.x1 - k.x0, k.z1 - k.z0) <= 1.1)
+        .sort((p, q) => Math.abs((p.x0 + p.x1) / 2 + mid) - Math.abs((q.x0 + q.x1) / 2 + mid))[0]; // the one nearest the OT's door
+      if (!g) return null;
+      const across = g.z1 - g.z0 > g.x1 - g.x0, unit = new T.Group(); strip.add(unit);
+      let L, at;
+      if (across) { // against an end wall: the unit runs across the passage, facing along it
+        const end = (g.x0 + g.x1) / 2 < 0 ? -1 : 1, xw = end < 0 ? Math.min(g.x0, -len / 2) : Math.max(g.x1, len / 2);
+        L = Math.min(g.z1 - g.z0, w - 0.1, 2.7); unit.position.set(xw, 0, (g.z0 + g.z1) / 2); unit.rotation.y = end < 0 ? Math.PI / 2 : -Math.PI / 2; at = [xw - end * 0.35, (g.z0 + g.z1) / 2, -end, 0];
+      } else { // against a side wall
+        const side = (g.z0 + g.z1) / 2 > 0 ? 1 : -1, zw = side > 0 ? Math.max(g.z1, w / 2 - 0.02) : Math.min(g.z0, -w / 2 + 0.02);
+        L = Math.min(g.x1 - g.x0, 2.7); unit.position.set((g.x0 + g.x1) / 2, 0, zw); unit.rotation.y = side > 0 ? Math.PI : 0; at = [(g.x0 + g.x1) / 2, zw - side * 0.35, 0, -side];
+      }
+      const solid = keep(new T.MeshStandardMaterial({ color: 0xf3f4f5, roughness: 0.35, envMapIntensity: 0.25 })), basin = keep(new T.MeshStandardMaterial({ color: 0xdfe3e7, roughness: 0.25, envMapIntensity: 0.35 }));
+      const dark = keep(new T.MeshStandardMaterial({ color: 0x2a313a, roughness: 0.5 })), tap = keep(new T.MeshStandardMaterial({ color: 0xd5d9dd, roughness: 0.3, metalness: 0.2 })), white = keep(new T.MeshStandardMaterial({ color: 0xf7f8f9, roughness: 0.4 }));
+      const ub = (a1, b1, c1, m, x, y, z) => { const o = new T.Mesh(new T.BoxGeometry(a1, b1, c1), m); o.position.set(x, y, z); unit.add(o); return o; };
+      const bays = Math.max(1, Math.min(3, Math.round(L / 0.85))), bw = L / bays; // unit-local: x along the unit, z out from the wall
+      ub(L, 0.08, 0.5, dark, 0, 0.04, 0.27); ub(L, 0.8, 0.58, solid, 0, 0.48, 0.29); ub(L + 0.02, 0.06, 0.62, solid, 0, 0.91, 0.31); ub(L, 0.68, 0.04, solid, 0, 1.28, 0.02);
+      for (let b = 0; b < bays; b++) {
+        const x = -L / 2 + bw * (b + 0.5);
+        ub(bw - 0.12, 0.012, 0.42, basin, x, 0.944, 0.33);                                            // basin
+        const col = new T.Mesh(new T.CylinderGeometry(0.016, 0.02, 0.26, 14), tap); col.position.set(x, 1.07, 0.07); unit.add(col);
+        ub(0.03, 0.03, 0.2, tap, x, 1.2, 0.17); ub(0.04, 0.018, 0.02, dark, x, 1.15, 0.08);             // spout, sensor
+        ub(0.14, 0.03, 0.2, dark, x, 0.015, 0.7);                                                     // foot control
+        ub(0.08, 0.15, 0.07, white, x + bw / 2 - 0.12, 1.33, 0.055);                                   // soap / antiseptic
+      }
+      ub(0.26, 0.1, 0.02, dark, 0, 1.7, 0.01); ub(0.2, 0.05, 0.004, keep(new T.MeshBasicMaterial({ color: 0x4fe08a, toneMapped: false })), 0, 1.7, 0.022); // scrub timer
+      const [px, pz, nx, nz] = at, lim = v => Math.max(-w / 2 + 0.45, Math.min(w / 2 - 0.45, v)); // the camera: in front of the unit, a little to one side
+      const [sx2, sz2] = world(px, pz), [cx2, cz2] = world(px + nx * 2.3 + (across ? 0 : 0.6), lim(pz + nz * 2.3 + (across ? 0.6 : 0)));
+      return { x: sx2, z: sz2, camX: cx2, camZ: cz2, bays };
+    }
     // the ceiling in 600 mm tiles, then sky panels and diffusers just under it
     const tile = artTexture(T, drawCeilingTile, 128, 128); tile.wrapS = tile.wrapT = T.RepeatWrapping;
-    const ceil = new T.Mesh(scaleUv(new T.PlaneGeometry(len, w), len / 0.6, w / 0.6), keep(new T.MeshStandardMaterial({ map: tile, roughness: 0.7 }))); ceil.rotation.x = Math.PI / 2; ceil.position.y = H; strip.add(ceil);
+    const ceil = new T.Mesh(scaleUv(new T.PlaneGeometry(len, w), len / 0.6, w / 0.6), keep(film ? new T.MeshStandardMaterial({ color: 0xf3f4f5, roughness: 0.85, envMapIntensity: 0.05 }) : new T.MeshStandardMaterial({ map: tile, roughness: 0.7 }))); ceil.rotation.x = Math.PI / 2; ceil.position.y = H; strip.add(ceil);
     const skyMats = [drawCanopy, drawBlossom, drawSky].map(p => keep(new T.MeshBasicMaterial({ map: artTexture(T, p, 1024, 640), toneMapped: false })));
     const diffMat = keep(new T.MeshStandardMaterial({ map: artTexture(T, drawDiffuser, 256, 256), roughness: 0.6 })), frameMat = keep(new T.MeshStandardMaterial({ color: 0xf7f8fa, roughness: 0.4 }));
     const pl = Math.min(2.4, Math.max(1.4, (len - 1) / 3)), pw = Math.max(0.9, Math.min(1.8, w - 0.5)), gap = pl + 1.6;
@@ -154,16 +204,17 @@ export function createTour(ctx) {
     for (let i = 0; i < count; i++) {
       const t = first + i * gap;
       box(pl + 0.12, 0.04, pw + 0.12, frameMat, t, H - 0.02, 0);
-      const p = new T.Mesh(new T.PlaneGeometry(pl, pw), skyMats[i % 2]); p.rotation.x = Math.PI / 2; p.position.set(t, H - 0.042, 0); strip.add(p);
-      const [px, pz] = toScene(t); panels.push({ px, pz, mesh: p });
-      if (i % Math.ceil(count / 3) === 0) { const light = new T.PointLight(0xfff3e2, 0.55, 6, 2); light.position.set(px, H - 0.4, pz); group.add(light); } // the panels light the passage
+      const p = new T.Mesh(new T.PlaneGeometry(pl, pw), film ? keep(skyMats[i % 2].clone()) : skyMats[i % 2]); p.rotation.x = Math.PI / 2; p.position.set(t, H - 0.042, 0); strip.add(p);
+      const [px, pz] = toScene(t), P = { px, pz, mesh: p, t }; panels.push(P);
+      if (film) { P.light = new T.PointLight(0xfff3e2, 0, 6, 2); P.light.position.set(px, H - 0.4, pz); group.add(P.light); }
+      else if (i % Math.ceil(count / 3) === 0) { const light = new T.PointLight(0xfff3e2, 0.55, 6, 2); light.position.set(px, H - 0.4, pz); group.add(light); } // the panels light the passage
       if (i < count - 1 || count === 1) { // a diffuser after every panel (and one beside a lone panel)
         const tv = count === 1 ? t + pl / 2 + 0.7 : t + gap / 2;
         if (Math.abs(tv) < len / 2 - 0.4) { const v = new T.Mesh(new T.PlaneGeometry(0.6, 0.6), diffMat); v.rotation.x = Math.PI / 2; v.position.set(tv, H - 0.006, 0); strip.add(v); const [vx, vz] = toScene(tv); vents.push({ px: vx, pz: vz }); emitters.push({ kind: 'vent', x: vx, z: vz, y: H - 0.05 }); }
       }
     }
     group.userData.dispose = () => { for (const m of mats) { m.map?.dispose?.(); m.dispose(); } seam.dispose(); strip.traverse(o => o.geometry?.dispose?.()); };
-    return { panels, vents, H, skyMats, scrub };
+    return { panels, vents, H, skyMats, scrub, strip, len, w, mid, wallRuns, world };
   }
 
   // lights of the theatre while the tour is inside: the OT light on the table and the plenum's cool light
@@ -501,5 +552,5 @@ export function createTour(ctx) {
     cur.ac.close().catch(() => {});
   }
 
-  return { start, stop, frame, afterRender, get on() { return !!run; }, get recording() { return !!run?.rec; } };
+  return { start, stop, frame, afterRender, get on() { return !!run; }, get recording() { return !!run?.rec; }, parts: { route, fitCorridor, lightOt, makeAir, music, loadVoices } };
 }

@@ -7,6 +7,7 @@ import { roomSize, isOt, openOtStudio, finishText, quantitiesDialog } from './pl
 import { findRoom, highlightMeshes, otMark, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
 import { makeFitKit, fitOtRoom, restyle, mergeStatic } from './plan3d-otfit.js';
 import { createTour, corridorWidth } from './plan3d-tour.js';
+import { createFilm } from './plan3d-film.js';
 
 const ROLES = [['wall', 'Wall'], ['glass', 'Glass'], ['column', 'Column'], ['door', 'Door'], ['furniture', 'Furniture / fittings'], ['floor', 'Lines on floor'], ['hide', 'Hide']];
 const COLOR = { wall: 0xe9edf2, glass: 0x9fd0f2, column: 0x707b8c, door: 0x9a5b22, furniture: 0x52627a, floor: 0x9aa7b6 };
@@ -90,6 +91,8 @@ export async function plan3dView(root, fileId) {
 
 // premium look: solid walls with dark section-cut tops, soft shadows, studio light, tiled floor, raised furniture
 const TINT = name => (/NICOMAC|PANEL|HPL|CLEAN ROOM/i.test(name) ? 0xdde6ef : /PARTI/i.test(name) ? 0xf0f2f5 : 0xf5f1ea);
+// the client film's finishes: matte KLEENCLAD walls, antistatic vinyl, the hermetic sliding door
+const FILM_FINISH = { wall: 'kleenclad', floor_type: 'conductive', floor_main: 'Light grey', floor_border: 'Navy blue', picture: 'lake' };
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
@@ -143,6 +146,8 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   let labels = [], center = [0, 0], size = 50, box = { w: 50, h: 50 }, occ = new Float32Array(0); // occ: solid walls in scene x / z, for views from inside
   let occWalk = new Float32Array(0); // what a person walking cannot pass: walls, columns and glass
   let corridors = []; // corridor / passage names in the drawing, for the explainer tour
+  let fx = {}; // the drawing's doors, plenums and return-air grilles in scene x / z, so each OT is fitted as drawn
+  let filmHero = null; // the OT the client film is about: fitted round its main door
 
   // vertical faces for a list of plan segments (x1, y1, x2, y2 …), darker at the foot (reads as contact shadow)
   const faces = (s, X, Z, y0, y1, foot = 0.8) => {
@@ -210,6 +215,11 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       const glass = buckets.glass || [];
       occWalk = new Float32Array(occ.length + glass.length); occWalk.set(occ);
       for (let i = 0; i < glass.length; i += 4) occWalk.set([X(glass[i]), Z(glass[i + 1]), X(glass[i + 2]), Z(glass[i + 3])], occ.length + i);
+    }
+    { // the fixtures as drawn: the door layer, and layers named plenum / grille
+      const toScene = segs => { const o = new Float32Array(segs.length); for (let i = 0; i < segs.length; i += 4) o.set([X(segs[i]), Z(segs[i + 1]), X(segs[i + 2]), Z(segs[i + 3])], i); return o; };
+      const named = re => { const out = []; for (const [lname, L] of Object.entries(plan.layers)) if (re.test(lname) && roleOf(lname) !== 'hide') { const q = L.segs; for (let i = 0; i < q.length; i += 4) if (inA(q[i], q[i + 1])) out.push(q[i], q[i + 1], q[i + 2], q[i + 3]); } return out; };
+      fx = { walls: occ, furniture: toScene(buckets.furniture || []), door: toScene(buckets.door || []), plenum: toScene(named(/PLENUM|LAF\b|LAMINAR/i)), grille: toScene(named(/GRILLE|RETURN AIR|RISER/i)) };
     }
     const mesh = (g, m, cast = true) => { const o = new T.Mesh(g, m); o.castShadow = cast; o.receiveShadow = true; group.add(o); return o; };
 
@@ -362,10 +372,10 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   };
   document.addEventListener('keydown', onWalkKey); document.addEventListener('keyup', onWalkKey);
   // indoors: soft room light and little sun (soft: the tour, which brings its own lights); marks: the OT rails
-  function setIndoor(on, { soft = false, marks = !on, sun: sunAt } = {}) {
+  function setIndoor(on, { soft = false, marks = !on, sun: sunAt, keepShadow = false } = {}) {
     if (walkCeil) walkCeil.visible = on;
     walkLight.intensity = on ? (soft ? 0.2 : 0.42) : 0; sun.intensity = sunAt ?? (on ? (soft ? 0.12 : 0.45) : 1.55);
-    sun.castShadow = !(on && soft); // the tour lights the room itself: the dim sun need not redraw its shadows
+    sun.castShadow = keepShadow || !(on && soft); // the tour lights the room itself: the dim sun need not redraw its shadows
     markLayer.visible = hlLayer.visible = marks; if (on) hoverGlow.visible = false;
   }
   function startWalk(s) {
@@ -421,27 +431,37 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   }
 
   // ---------------------------------------------------------------- 🎬 explainer tour (plan3d-tour.js)
-  let touring = false;
-  const tour = createTour({
+  let touring = false, filmHold = false;
+  const tourCtx = {
     T, scene, camera, renderer, stage, rayDist, title, resize: () => resize(),
     walls: () => occWalk, ots: () => ots, selected: () => selected, corridors: () => corridors,
     finishOf: o => finishOf(o), finishText, wallH: () => wallH, indoor: (on, opts) => setIndoor(on, opts), shadows: () => { renderer.shadowMap.needsUpdate = true; },
     preview: (o, patch) => { if (o.fit) restyle(kit, o.fit.group, patch ? { ...finishOf(o), ...patch } : finishOf(o)); },
+    fixtures: () => fx, box: () => ({ ...box, size }),
+    layers: () => ({ group, fitLayer, ceilLayer, markLayer, hlLayer }),
+    // the client film: its OT fitted round the main door in the film's finishes (null puts everything back)
+    film: o => { filmHero = o || null; kit.filmLook(!!o); drawFitted(); return o?.fit || null; },
+    ambient: k => { walkLight.intensity = k; },
+    hold: on => { filmHold = !!on; if (!on) resize(); }, // an offline render draws the frames itself
+    draw: () => { ceilLayer.visible = camera.position.y < Math.min(wallH, 3) - 0.02; renderer.render(scene, camera); },
     focus: o => { for (const x of ots) if (x.fit) { const near = !o || Math.hypot(x.v.x - o.v.x, x.v.z - o.v.z) < 16; x.fit.group.visible = x.fit.ceiling.visible = near; } renderer.shadowMap.needsUpdate = true; },
     done: (o, early) => {
-      touring = false; setIndoor(false); controls.enabled = true; labelsLayer.style.display = ''; for (const x of ots) if (x.fit) x.fit.group.visible = x.fit.ceiling.visible = true;
+      touring = false; filmHold = false; if (filmHero) { filmHero = null; kit.filmLook(false); drawFitted(); } for (const L of [group, fitLayer, markLayer]) L.scale.y = 1; setIndoor(false); controls.enabled = true; labelsLayer.style.display = ''; for (const x of ots) if (x.fit) x.fit.group.visible = x.fit.ceiling.visible = true;
       const span = Math.max(o.x1 - o.x0, o.z1 - o.z0);
       controls.target.set(o.v.x, 0, o.v.z);
       if (early) { camera.position.set(o.v.x + span * 0.6, span * 1.15 + wallH + 2, o.v.z + span * 0.95); }
       drawSide();
     },
-  });
-  function startTour(record) {
-    if (touring || tour.on) return;
+  };
+  const tour = createTour(tourCtx), film = createFilm(tourCtx, tour.parts);
+  stage.p3debug = () => ({ ots, fx, selected, film: o => { filmHero = o; kit.filmLook(!!o); drawFitted(); }, select: o => { selected = o; }, startTour: (...a) => startTour(...a), T, camera, scene, renderer, setIndoor, layers: { group, fitLayer, ceilLayer, markLayer, hlLayer, labelsLayer },
+    shot: (p, t, w = 1280, hh = 720, fov = 54) => { renderer.setPixelRatio(1); renderer.setSize(w, hh, false); camera.aspect = w / hh; camera.fov = fov; camera.updateProjectionMatrix(); camera.rotation.order = 'XYZ'; camera.position.set(...p); camera.lookAt(...t); ceilLayer.visible = p[1] < Math.min(wallH, 3) - 0.02; renderer.render(scene, camera); return renderer.domElement.toDataURL('image/jpeg', 0.85); } }); // for checking from the console
+  function startTour(record, asFilm = false, opts = {}) {
+    if (touring || tour.on || film.on) return;
     if (walk.on) stopWalk(true);
     if (!showFitted) { showFitted = true; rebuild(); }
     touring = true; anim = null; controls.enabled = false; labelsLayer.style.display = 'none';
-    tour.start({ record }).then(() => { drawSide(); if (record) toast('Recording: keep this tab open and in front. The video downloads when the tour ends.'); })
+    (asFilm ? film : tour).start({ record, ...opts }).then(() => { drawSide(); if (record && !asFilm) toast('Recording: keep this tab open and in front. The video downloads when the tour ends.'); })
       .catch(e => { touring = false; setIndoor(false); controls.enabled = true; labelsLayer.style.display = ''; camera.rotation.order = 'XYZ'; drawSide(); fail(e); });
   }
 
@@ -460,7 +480,9 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     for (const o of ots) o.fit = null;
     if (!showFitted) return;
     for (const o of ots) {
-      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, finishOf(o), wallH, rayDist);
+      if (filmHero && !o.walls && o !== filmHero) continue;
+      const film = o === filmHero, f = film ? { ...finishOf(o), ...FILM_FINISH } : finishOf(o);
+      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null });
       mergeStatic(T, g); mergeStatic(T, ceiling); // a few meshes per OT instead of hundreds
       fitLayer.add(g); ceilLayer.add(ceiling); o.fit = { spots, group: g, ceiling };
     }
@@ -566,6 +588,9 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
         touring || tour.on || !ots.length ? null : h('div.p3-tourbtns',
           h('button.btn.small.primary', { type: 'button', title: 'An automatic walk from the corridor into the OT, with a voice explaining each part', onclick: () => startTour(false) }, '🎬 Explainer tour'),
           h('button.btn.small', { type: 'button', title: 'Play the tour and save it as a video file', onclick: () => startTour(true) }, '⏺ Save tour as video'),
+          h('button.btn.small', { type: 'button', title: 'Play the client film of this OT: from the drawing, through the passage, into the theatre', onclick: () => startTour(false, true) }, '🎞 Client film'),
+          h('button.btn.small', { type: 'button', title: 'Make the client film as a 1080p MP4 (30 fps, voice and music): a few minutes', onclick: () => startTour(true, true, { quality: '1080p' }) }, '🎞 Save film (1080p, quick)'),
+          h('button.btn.small', { type: 'button', title: 'Make the client film as a 4K MP4, and a 1080p copy. It takes a while: keep this tab open.', onclick: () => startTour(true, true, { quality: '4k' }) }, '🎞 Save 4K film'),
           h('p.muted', selected ? `Walks into ${selected.name}. Sound on.` : 'Walks from the corridor into the OT with the longest corridor outside. Tap an OT first to choose it. Sound on.')),
         h('div.toolbar', h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names'),
           h('label.p3-check', h('input', { type: 'checkbox', ...(showFitted ? { checked: true } : {}), onchange: e => { showFitted = e.target.checked; rebuild(); } }), ' Finished OTs')),
@@ -627,9 +652,11 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   }
   const v = new T.Vector3();
   const loop = now => {
-    if (!stage.isConnected) { tour.stop(true); ro.disconnect(); kit.dispose(); renderer.dispose(); document.removeEventListener('keydown', onWalkKey); document.removeEventListener('keyup', onWalkKey); document.removeEventListener('keydown', onTourKey); return; }
+    if (!stage.isConnected) { tour.stop(true); film.stop(true); ro.disconnect(); kit.dispose(); renderer.dispose(); document.removeEventListener('keydown', onWalkKey); document.removeEventListener('keyup', onWalkKey); document.removeEventListener('keydown', onTourKey); return; }
     requestAnimationFrame(loop);
-    if (tour.on) tour.frame(now);
+    if (filmHold) return;
+    if (film.on) film.frame(now);
+    else if (tour.on) tour.frame(now);
     else if (walk.on) walkStep(now);
     else {
       walk.last = 0;
@@ -639,7 +666,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     hlLayer.children[0]?.userData.pulse(now);
     ceilLayer.visible = camera.position.y < Math.min(wallH, 3) - 0.02; // ceilings only from inside a room
     renderer.render(scene, camera);
-    tour.afterRender();
+    tour.afterRender(); film.afterRender();
     // labels never overlap: room names are placed first, the rest only where there is space
     const W = stage.clientWidth, Hh = stage.clientHeight, placed = [];
     for (const l of labels) {
