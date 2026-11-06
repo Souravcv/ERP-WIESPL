@@ -5,7 +5,8 @@ import { h, api, toast, fail } from '../ui.js';
 import { guessRole } from '../plan-extract.js';
 import { roomSize, isOt, openOtStudio, finishText, quantitiesDialog } from './plan3d-extras.js';
 import { findRoom, highlightMeshes, otMark, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
-import { makeFitKit, fitOtRoom } from './plan3d-otfit.js';
+import { makeFitKit, fitOtRoom, restyle, mergeStatic } from './plan3d-otfit.js';
+import { createTour, corridorWidth } from './plan3d-tour.js';
 
 const ROLES = [['wall', 'Wall'], ['glass', 'Glass'], ['column', 'Column'], ['door', 'Door'], ['furniture', 'Furniture / fittings'], ['floor', 'Lines on floor'], ['hide', 'Hide']];
 const COLOR = { wall: 0xe9edf2, glass: 0x9fd0f2, column: 0x707b8c, door: 0x9a5b22, furniture: 0x52627a, floor: 0x9aa7b6 };
@@ -16,9 +17,14 @@ const saveRoles = r => { try { localStorage.setItem(ROLE_KEY, JSON.stringify(r))
 
 let three = null;
 function loadThree() {
-  if (window.THREE?.OrbitControls) return Promise.resolve();
+  if (window.THREE?.OrbitControls && window.THREE.BufferGeometryUtils) return Promise.resolve();
   const s = src => new Promise((ok, bad) => { const el = document.createElement('script'); el.src = src; el.onload = ok; el.onerror = () => bad(new Error('Could not load the 3D library (internet needed)')); document.head.append(el); });
-  three ||= (async () => { if (!window.THREE) await s('https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js'); await s('https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js'); })().catch(e => { three = null; throw e; });
+  const CDN = 'https://cdn.jsdelivr.net/npm/three@0.128.0/';
+  three ||= (async () => {
+    if (!window.THREE) await s(CDN + 'build/three.min.js');
+    if (!window.THREE.OrbitControls) await s(CDN + 'examples/js/controls/OrbitControls.js');
+    if (!window.THREE.BufferGeometryUtils) await s(CDN + 'examples/js/utils/BufferGeometryUtils.js').catch(() => {}); // only makes it faster
+  })().catch(e => { three = null; throw e; });
   return three;
 }
 
@@ -58,7 +64,7 @@ export async function plan3dView(root, fileId) {
   stage.append(fsCorner);
   const onFs = () => { const on = document.fullscreenElement === wrap || wrap.classList.contains('p3-full'); fsBtn.textContent = on ? '✕ Exit full screen' : '⛶ Full screen'; fsCorner.textContent = on ? '✕' : '⛶'; };
   document.addEventListener('fullscreenchange', onFs); wrap.onfullscreen = onFs;
-  const onKey = e => { if (!wrap.isConnected) return document.removeEventListener('keydown', onKey); if (e.key === 'Escape' && wrap.classList.contains('p3-full')) toggleFull(wrap); };
+  const onKey = e => { if (!wrap.isConnected) return document.removeEventListener('keydown', onKey); if (e.key === 'Escape' && wrap.classList.contains('p3-full') && !wrap.querySelector('.p3-touring')) toggleFull(wrap); };
   document.addEventListener('keydown', onKey);
   root.replaceChildren(
     h('div.page-head', h('h1', `🧊 ${name}`), h('div.actions', h('button.btn', { onclick: () => history.back() }, '‹ Back'), fsBtn, h('a.btn', { href: `/api/files/${id}` }, '⬇ Download drawing'))),
@@ -79,7 +85,7 @@ export async function plan3dView(root, fileId) {
     }
   } catch (e) { status.textContent = `⚠ ${e.message}`; return; }
   const [meta, saved] = await Promise.all([api(`/files/${id}/meta`).catch(() => null), api(`/files/${id}/finishes`).catch(() => null)]);
-  build(stage, side, plan, meta, saved?.finishes || {}, id);
+  build(stage, side, plan, meta, saved?.finishes || {}, id, name.replace(/\.(dwg|dxf)$/i, ''));
 }
 
 // premium look: solid walls with dark section-cut tops, soft shadows, studio light, tiled floor, raised furniture
@@ -87,7 +93,7 @@ const TINT = name => (/NICOMAC|PANEL|HPL|CLEAN ROOM/i.test(name) ? 0xdde6ef : /P
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
-function build(stage, side, plan, meta, finishes, fileId) {
+function build(stage, side, plan, meta, finishes, fileId, title) {
   const T = window.THREE;
   const roles = loadRoles();
   const roleOf = l => roles[l] || guessRole(l);
@@ -136,6 +142,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
   hoverGlow.rotation.x = -Math.PI / 2; hoverGlow.position.y = 0.025; hoverGlow.visible = false; scene.add(hoverGlow);
   let labels = [], center = [0, 0], size = 50, box = { w: 50, h: 50 }, occ = new Float32Array(0); // occ: solid walls in scene x / z, for views from inside
   let occWalk = new Float32Array(0); // what a person walking cannot pass: walls, columns and glass
+  let corridors = []; // corridor / passage names in the drawing, for the explainer tour
 
   // vertical faces for a list of plan segments (x1, y1, x2, y2 …), darker at the foot (reads as contact shadow)
   const faces = (s, X, Z, y0, y1, foot = 0.8) => {
@@ -243,6 +250,8 @@ function build(stage, side, plan, meta, finishes, fileId) {
       if (ot) { el.classList.add('pick'); el.onclick = open; }
     }
     labels.sort((a, b) => Number(b.ot) - Number(a.ot) || Number(b.room) - Number(a.room));
+    corridors = plan.texts.filter(t => inA(t.x, t.y) && KIND(t.t) === 'cor' && !/DUCT|DRAWING|DWG|DETAIL/i.test(t.t))
+      .map(t => ({ name: t.t.split('\n')[0].trim(), x: X(t.x + (t.w || 0) / 2), z: Z(t.y), width: corridorWidth(t.t) }));
     { // the outline of every OT, from the walls, glass and doors around its label
       const edges = [...(buckets.wall || []), ...(buckets.column || []), ...(buckets.glass || []), ...(buckets.door || [])];
       const sc = new Float32Array(edges.length);
@@ -341,6 +350,8 @@ function build(stage, side, plan, meta, finishes, fileId) {
     stick.addEventListener('pointerup', end); stick.addEventListener('pointercancel', end);
   }
   const typing = e => /INPUT|SELECT|TEXTAREA/.test(e.target?.tagName || '');
+  const onTourKey = e => { if (e.key === 'Escape' && tour.on && stage.isConnected) { e.preventDefault(); tour.stop(true); } };
+  document.addEventListener('keydown', onTourKey);
   const onWalkKey = e => {
     if (!walk.on || !stage.isConnected || typing(e)) return;
     if (e.key === 'Escape' && e.type === 'keydown') { stopWalk(); return; }
@@ -350,25 +361,30 @@ function build(stage, side, plan, meta, finishes, fileId) {
     if (e.type === 'keydown') walk.keys.add(k); else walk.keys.delete(k);
   };
   document.addEventListener('keydown', onWalkKey); document.addEventListener('keyup', onWalkKey);
+  // indoors: soft room light and little sun (soft: the tour, which brings its own lights); marks: the OT rails
+  function setIndoor(on, { soft = false, marks = !on, sun: sunAt } = {}) {
+    if (walkCeil) walkCeil.visible = on;
+    walkLight.intensity = on ? (soft ? 0.2 : 0.42) : 0; sun.intensity = sunAt ?? (on ? (soft ? 0.12 : 0.45) : 1.55);
+    sun.castShadow = !(on && soft); // the tour lights the room itself: the dim sun need not redraw its shadows
+    markLayer.visible = hlLayer.visible = marks; if (on) hoverGlow.visible = false;
+  }
   function startWalk(s) {
     s ||= selected ? spotInOt(selected) : current ? spotAt(current.v.x, current.v.z) : ots[0] ? spotInOt(ots[0]) : spotAt(0, 0);
     anim = null; walk.target = null; walk.keys.clear();
     if (!walk.on) { walk.on = true; controls.enabled = false; camera.rotation.order = 'YXZ'; stage.classList.add('p3-walking'); stick.classList.remove('hidden'); walkBar.classList.remove('hidden'); }
     camera.position.set(s.x, EYE, s.z);
     walk.yaw = Math.atan2(-s.dx, -s.dz); walk.pitch = -0.08;
-    if (walkCeil) walkCeil.visible = true;
-    walkLight.intensity = 0.42; sun.intensity = 0.45; markLayer.visible = hlLayer.visible = hoverGlow.visible = false; // indoors: soft room light, little sun
+    setIndoor(true);
     drawSide();
   }
-  function stopWalk() {
+  function stopWalk(quiet) {
     if (!walk.on) return;
     walk.on = false; walk.keys.clear(); walk.target = null; controls.enabled = true; camera.rotation.order = 'XYZ';
     stage.classList.remove('p3-walking'); stick.classList.add('hidden'); walkBar.classList.add('hidden');
-    if (walkCeil) walkCeil.visible = false;
-    walkLight.intensity = 0; sun.intensity = 1.55; markLayer.visible = hlLayer.visible = true;
+    setIndoor(false);
     const fx = -Math.sin(walk.yaw), fz = -Math.cos(walk.yaw), p = camera.position;
     controls.target.set(p.x + fx * 4, 0, p.z + fz * 4);
-    fly(new T.Vector3(p.x - fx * 9, 13, p.z - fz * 9 + 0.01), new T.Vector3(p.x + fx * 2, 0, p.z + fz * 2), 1100);
+    if (!quiet) fly(new T.Vector3(p.x - fx * 9, 13, p.z - fz * 9 + 0.01), new T.Vector3(p.x + fx * 2, 0, p.z + fz * 2), 1100);
     drawSide();
   }
   // one step: slide along a wall rather than stop dead
@@ -404,6 +420,31 @@ function build(stage, side, plan, meta, finishes, fileId) {
     camera.rotation.set(walk.pitch, walk.yaw, 0);
   }
 
+  // ---------------------------------------------------------------- 🎬 explainer tour (plan3d-tour.js)
+  let touring = false;
+  const tour = createTour({
+    T, scene, camera, renderer, stage, rayDist, title, resize: () => resize(),
+    walls: () => occWalk, ots: () => ots, selected: () => selected, corridors: () => corridors,
+    finishOf: o => finishOf(o), finishText, wallH: () => wallH, indoor: (on, opts) => setIndoor(on, opts), shadows: () => { renderer.shadowMap.needsUpdate = true; },
+    preview: (o, patch) => { if (o.fit) restyle(kit, o.fit.group, patch ? { ...finishOf(o), ...patch } : finishOf(o)); },
+    focus: o => { for (const x of ots) if (x.fit) { const near = !o || Math.hypot(x.v.x - o.v.x, x.v.z - o.v.z) < 16; x.fit.group.visible = x.fit.ceiling.visible = near; } renderer.shadowMap.needsUpdate = true; },
+    done: (o, early) => {
+      touring = false; setIndoor(false); controls.enabled = true; labelsLayer.style.display = ''; for (const x of ots) if (x.fit) x.fit.group.visible = x.fit.ceiling.visible = true;
+      const span = Math.max(o.x1 - o.x0, o.z1 - o.z0);
+      controls.target.set(o.v.x, 0, o.v.z);
+      if (early) { camera.position.set(o.v.x + span * 0.6, span * 1.15 + wallH + 2, o.v.z + span * 0.95); }
+      drawSide();
+    },
+  });
+  function startTour(record) {
+    if (touring || tour.on) return;
+    if (walk.on) stopWalk(true);
+    if (!showFitted) { showFitted = true; rebuild(); }
+    touring = true; anim = null; controls.enabled = false; labelsLayer.style.display = 'none';
+    tour.start({ record }).then(() => { drawSide(); if (record) toast('Recording: keep this tab open and in front. The video downloads when the tour ends.'); })
+      .catch(e => { touring = false; setIndoor(false); controls.enabled = true; labelsLayer.style.display = ''; camera.rotation.order = 'XYZ'; drawSide(); fail(e); });
+  }
+
   function placeOt(o) {
     const b = o.base;
     Object.assign(o, { x0: b.x0, x1: b.x1, z0: b.z0, z1: b.z1 }); o.v.set((b.x0 + b.x1) / 2, 0.15, (b.z0 + b.z1) / 2);
@@ -416,10 +457,12 @@ function build(stage, side, plan, meta, finishes, fileId) {
   const dropShapes = g => { for (const c of [...g.children]) { c.traverse(o => o.geometry?.dispose?.()); g.remove(c); } };
   function drawFitted() {
     dropShapes(fitLayer); dropShapes(ceilLayer);
+    for (const o of ots) o.fit = null;
     if (!showFitted) return;
     for (const o of ots) {
-      const { group: g, ceiling } = fitOtRoom(T, kit, o, finishOf(o), wallH, rayDist);
-      fitLayer.add(g); ceilLayer.add(ceiling);
+      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, finishOf(o), wallH, rayDist);
+      mergeStatic(T, g); mergeStatic(T, ceiling); // a few meshes per OT instead of hundreds
+      fitLayer.add(g); ceilLayer.add(ceiling); o.fit = { spots, group: g, ceiling };
     }
     renderer.shadowMap.needsUpdate = true;
   }
@@ -515,9 +558,15 @@ function build(stage, side, plan, meta, finishes, fileId) {
     side.replaceChildren(
       finishBox(),
       h('div.p3-box', h('b', 'View'),
-        walk.on
-          ? h('div.toolbar', h('button.btn.small', { onclick: () => stopWalk() }, '✕ Leave walk'), h('span.muted', 'Pick a room below to go there.'))
-          : h('div.toolbar', h('button.btn.small.primary', { onclick: () => startWalk() }, '🚶 Walk through'), h('button.btn.small', { onclick: views.persp }, '3D'), h('button.btn.small', { onclick: views.top }, 'Plan (top)')),
+        touring || tour.on
+          ? h('div.toolbar', h('button.btn.small', { onclick: () => tour.stop(true) }, '✕ Stop tour'), h('span.muted', 'The explainer tour is playing.'))
+          : walk.on
+            ? h('div.toolbar', h('button.btn.small', { onclick: () => stopWalk() }, '✕ Leave walk'), h('span.muted', 'Pick a room below to go there.'))
+            : h('div.toolbar', h('button.btn.small.primary', { onclick: () => startWalk() }, '🚶 Walk through'), h('button.btn.small', { onclick: views.persp }, '3D'), h('button.btn.small', { onclick: views.top }, 'Plan (top)')),
+        touring || tour.on || !ots.length ? null : h('div.p3-tourbtns',
+          h('button.btn.small.primary', { type: 'button', title: 'An automatic walk from the corridor into the OT, with a voice explaining each part', onclick: () => startTour(false) }, '🎬 Explainer tour'),
+          h('button.btn.small', { type: 'button', title: 'Play the tour and save it as a video file', onclick: () => startTour(true) }, '⏺ Save tour as video'),
+          h('p.muted', selected ? `Walks into ${selected.name}. Sound on.` : 'Walks from the corridor into the OT with the longest corridor outside. Tap an OT first to choose it. Sound on.')),
         h('div.toolbar', h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names'),
           h('label.p3-check', h('input', { type: 'checkbox', ...(showFitted ? { checked: true } : {}), onchange: e => { showFitted = e.target.checked; rebuild(); } }), ' Finished OTs')),
         roomSel, current && !walk.on ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
@@ -531,7 +580,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
         h('table.p3-layers', h('tbody', layerRows))));
   }
 
-  const resize = () => { const w = stage.clientWidth, hh = stage.clientHeight; renderer.setSize(w, hh, false); camera.aspect = w / Math.max(1, hh); camera.updateProjectionMatrix(); };
+  const resize = () => { if (tour.recording) return; const w = stage.clientWidth, hh = stage.clientHeight; renderer.setSize(w, hh, false); camera.aspect = w / Math.max(1, hh); camera.updateProjectionMatrix(); };
   const ro = new ResizeObserver(resize); ro.observe(stage);
   rebuild(); resize();
   camera.position.copy(hero()); controls.target.set(0, 0, 0);
@@ -549,6 +598,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
     el.addEventListener('pointerdown', e => { down = [e.clientX, e.clientY]; if (walk.on) { look = [e.clientX, e.clientY]; el.setPointerCapture?.(e.pointerId); } });
     el.addEventListener('pointerup', e => {
       look = null;
+      if (tour.on) return;
       if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 6) return;
       if (walk.on) { // tap the floor: walk there
         const r = el.getBoundingClientRect(); ptr.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
@@ -560,6 +610,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
       if (o) selectOt(o); else if (selected) { selected = null; drawHighlight(); drawSide(); }
     });
     el.addEventListener('pointermove', e => {
+      if (tour.on) return;
       if (walk.on) {
         if (!look) return;
         walk.yaw -= (e.clientX - look[0]) * 0.0042; walk.pitch = Math.max(-1.2, Math.min(1.2, walk.pitch - (e.clientY - look[1]) * 0.0042));
@@ -576,9 +627,10 @@ function build(stage, side, plan, meta, finishes, fileId) {
   }
   const v = new T.Vector3();
   const loop = now => {
-    if (!stage.isConnected) { ro.disconnect(); kit.dispose(); renderer.dispose(); document.removeEventListener('keydown', onWalkKey); document.removeEventListener('keyup', onWalkKey); return; }
+    if (!stage.isConnected) { tour.stop(true); ro.disconnect(); kit.dispose(); renderer.dispose(); document.removeEventListener('keydown', onWalkKey); document.removeEventListener('keyup', onWalkKey); document.removeEventListener('keydown', onTourKey); return; }
     requestAnimationFrame(loop);
-    if (walk.on) walkStep(now);
+    if (tour.on) tour.frame(now);
+    else if (walk.on) walkStep(now);
     else {
       walk.last = 0;
       if (anim) { const k = Math.min(1, (now - anim.start) / anim.ms), e = k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2; camera.position.lerpVectors(anim.p0, anim.p, e); controls.target.lerpVectors(anim.t0, anim.t, e); if (k >= 1) anim = null; }
@@ -587,6 +639,7 @@ function build(stage, side, plan, meta, finishes, fileId) {
     hlLayer.children[0]?.userData.pulse(now);
     ceilLayer.visible = camera.position.y < Math.min(wallH, 3) - 0.02; // ceilings only from inside a room
     renderer.render(scene, camera);
+    tour.afterRender();
     // labels never overlap: room names are placed first, the rest only where there is space
     const W = stage.clientWidth, Hh = stage.clientHeight, placed = [];
     for (const l of labels) {

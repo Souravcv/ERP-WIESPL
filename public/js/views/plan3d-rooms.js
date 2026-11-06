@@ -89,7 +89,7 @@ function probe(occ, cx, cz, want) {
 }
 
 // the finish a room starts with when it is first chosen
-export const DEFAULT_FINISH = { wall: 'ss', wall_colour: 'Natural steel', floor_type: 'conductive', floor_main: 'Beige', floor_border: 'Grey', door: 'sliding' };
+export const DEFAULT_FINISH = { wall: 'glass', wall_colour: 'Mint green', floor_type: 'conductive', floor_main: 'Sky blue', floor_border: 'Navy blue', door: 'sliding' };
 // the same choices as named in the detailed requirement form
 export const BRIEF_NAMES = {
   wall: { ss: 'SS 304', ppgi: 'PPGL', glass: 'Toughened glass', ssglass: 'SS 304 + glass' },
