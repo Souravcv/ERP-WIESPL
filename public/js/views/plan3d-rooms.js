@@ -111,11 +111,14 @@ export function highlightMeshes(T, room, wallH) {
 }
 
 // every OT is marked on the drawing: tinted floor and a rail on the walls (blue; green once its finishes are chosen)
-export function otMark(T, room, wallH, chosen) {
+// floor = false when the OT is shown fitted out: then only the rail marks it
+export function otMark(T, room, wallH, chosen, floor = true) {
   const g = new T.Group(), color = chosen ? 0x1e9e5a : 0x2563c9;
   const { x0, x1, z0, z1 } = room, w = x1 - x0, d = z1 - z0, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
-  const f = new T.Mesh(new T.PlaneGeometry(w, d), new T.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, depthWrite: false }));
-  f.rotation.x = -Math.PI / 2; f.position.set(cx, 0.02, cz); g.add(f);
+  if (floor) {
+    const f = new T.Mesh(new T.PlaneGeometry(w, d), new T.MeshBasicMaterial({ color, transparent: true, opacity: 0.3, depthWrite: false }));
+    f.rotation.x = -Math.PI / 2; f.position.set(cx, 0.02, cz); g.add(f);
+  }
   const rail = new T.MeshBasicMaterial({ color }), t = 0.08, y = wallH + 0.03;
   for (const [bw, bd, x, z] of [[w + t, t, cx, z0], [w + t, t, cx, z1], [t, d + t, x0, cz], [t, d + t, x1, cz]]) { const m = new T.Mesh(new T.BoxGeometry(bw, t, bd), rail); m.position.set(x, y, z); g.add(m); }
   return g;
