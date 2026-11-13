@@ -40,22 +40,36 @@ export function extractPlan(db, { maxSegments = 600000 } = {}) {
   const layers = {};   // name → number[] (x1, y1, x2, y2, …) in metres
   const texts = [];
   let count = 0, skipped = 0;
+  const far = v => !Number.isFinite(v) || Math.abs(v) > 1e9; // garbled numbers: lines thousands of km off the sheet
   const seg = (layer, m, x1, y1, x2, y2) => {
     if (count >= maxSegments) { skipped++; return; }
+    if (far(x1) || far(y1) || far(x2) || far(y2)) { broken++; return; }
     const [a, b] = ap(m, x1, y1), [c, d] = ap(m, x2, y2);
     (layers[layer] ||= []).push(a * scale, b * scale, c * scale, d * scale); count++;
   };
   const arcPts = (cx, cy, r, a0, a1) => {
-    while (a1 <= a0) a1 += Math.PI * 2;
-    const n = Math.max(4, Math.ceil((a1 - a0) / (Math.PI / 18)));
+    // garbled arcs (huge or missing numbers) would never end the loop below: drop them
+    if (![cx, cy, r, a0, a1].every(Number.isFinite) || r <= 0 || r > 1e7 || Math.abs(a0) > 1e4 || Math.abs(a1) > 1e4) { broken++; return []; }
+    const TAU = Math.PI * 2;
+    a0 = ((a0 % TAU) + TAU) % TAU; a1 = ((a1 % TAU) + TAU) % TAU;
+    if (a1 <= a0) a1 += TAU;
+    const n = Math.min(72, Math.max(4, Math.ceil((a1 - a0) / (Math.PI / 18))));
     const pts = []; for (let i = 0; i <= n; i++) { const a = a0 + (a1 - a0) * i / n; pts.push([cx + r * Math.cos(a), cy + r * Math.sin(a)]); }
     return pts;
   };
   const poly = (layer, m, pts) => { for (let i = 0; i < pts.length - 1; i++) seg(layer, m, pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]); };
 
+  // Some older DWGs (e.g. AutoCAD 2000) come out of the reader with nameless blocks and garbage inserts that point at
+  // each other: those are skipped, a block never opens inside itself, and the walk has a hard limit so it always ends.
+  const path = new Set();
+  let visits = 0, broken = 0;
+  const MAX_VISITS = 4000000;
+  const okScale = v => Number.isFinite(v ?? 1) && Math.abs(v ?? 1) > 1e-6 && Math.abs(v ?? 1) < 1e6;
+  const okPoint = p => !p || (Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) < 1e12 && Math.abs(p.y) < 1e12);
   const walk = (ents, m, parentLayer, depth) => {
     if (depth > 8) return;
     for (const e of ents || []) {
+      if (++visits > MAX_VISITS) return;
       if (e.isVisible === false) continue;                       // hidden states of dynamic blocks
       const layer = (e.layer === '0' || !e.layer) && parentLayer ? parentLayer : e.layer || '0';
       const mirror = (e.extrusionDirection?.z ?? 1) < 0;
@@ -90,8 +104,11 @@ export function extractPlan(db, { maxSegments = 600000 } = {}) {
           break;
         }
         case 'INSERT': {
+          if (!e.name || path.has(e.name) || !okScale(e.xScale) || !okScale(e.yScale) || !okPoint(e.insertionPoint)) { broken++; break; }
           const b = blocks.get(e.name); if (!b) break;
+          path.add(e.name);
           walk(b.entities, mul(m, insertMatrix(e, b.basePoint)), layer, depth + 1);
+          path.delete(e.name);
           break;
         }
         default: break; // HATCH, DIMENSION, VIEWPORT, ATTRIB …: not needed for the 3D plan
@@ -119,7 +136,7 @@ export function extractPlan(db, { maxSegments = 600000 } = {}) {
   areas.sort((a, b) => b.n - a.n);
   const round = a => a.map(v => Math.round(v * 1000) / 1000);
   return {
-    version: 1, units: 'm', segments: count, skipped,
+    version: 1, units: 'm', segments: count, skipped, broken, cut: visits > MAX_VISITS,
     layers: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, { color: layerColors[k] ?? 7, segs: round(v) }])),
     texts: texts.map(t => ({ ...t, x: Math.round(t.x * 1000) / 1000, y: Math.round(t.y * 1000) / 1000 })),
     areas: areas.slice(0, 12),

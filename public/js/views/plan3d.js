@@ -684,4 +684,10 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   };
   requestAnimationFrame(loop);
   toast(`${plan.segments.toLocaleString()} lines · ${labels.length} labels`);
+  // An old AutoCAD version (e.g. 2000) can come out of the reader badly damaged: say so, and how to fix it
+  if ((plan.broken || 0) > Math.max(300, plan.segments * 0.2)) {
+    stage.append(h('div.p3-warn', h('b', '⚠ Much of this drawing could not be read'),
+      h('span', `${plan.broken.toLocaleString()} parts came out damaged, so walls, doors and rooms may be missing. The file is probably saved in an old AutoCAD version. Open it in AutoCAD, choose Save As → AutoCAD 2018 Drawing (*.dwg) or DXF, and attach that file instead.`),
+      h('button.btn.small', { type: 'button', onclick: e => e.target.parentElement.remove() }, 'OK')));
+  }
 }
