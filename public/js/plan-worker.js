@@ -2,14 +2,14 @@
 // The reader is libredwg-web (GPL-3.0, WebAssembly), served from /vendor/libredwg and kept in this worker.
 import { LibreDwg, Dwg_File_Type } from '/vendor/libredwg/dist/libredwg-web.js';
 import { extractPlan, guardReader } from './plan-extract.js';
-import { readDxf } from './plan-dxf.js';
+import { readDxf, decodeDxf } from './plan-dxf.js';
 
 self.onmessage = async ({ data }) => {
   try {
     let db;
     if (data.dxf) { // plain text: our own reader
       self.postMessage({ step: 'Reading the DXF…' });
-      db = readDxf(new TextDecoder('utf-8').decode(data.buf));
+      db = readDxf(decodeDxf(new Uint8Array(data.buf)));
     } else {
       self.postMessage({ step: 'Loading the drawing reader…' });
       const lib = guardReader(await LibreDwg.create('/vendor/libredwg/wasm'));

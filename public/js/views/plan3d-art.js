@@ -289,6 +289,14 @@ export function drawGrille(g, w, h) {
   for (let y = h * 0.1; y < h * 0.9; y += h * 0.075) { g.fillStyle = '#e3e8ee'; g.fillRect(w * 0.1, y, w * 0.8, h * 0.035); g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(w * 0.1, y + h * 0.035, w * 0.8, h * 0.01); }
 }
 
+// the digital scrub timer above the scrub station: big green countdown and "SCRUB" under it
+export function drawScrubTimer(g, w, h) {
+  g.fillStyle = '#05140c'; g.fillRect(0, 0, w, h);
+  g.fillStyle = '#35e07a'; g.font = `bold ${Math.round(h * 0.5)}px "Segoe UI", Arial, sans-serif`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('04:59', w / 2, h * 0.42);
+  g.font = `${Math.round(h * 0.17)}px "Segoe UI", Arial, sans-serif`; g.fillStyle = '#9ff0c0'; g.fillText('SCRUB TIMER', w / 2, h * 0.82);
+}
+
 // a canvas texture from one of the painters above
 export function artTexture(T, draw, w, h, alpha = false) {
   const c = document.createElement('canvas'); c.width = w; c.height = h;

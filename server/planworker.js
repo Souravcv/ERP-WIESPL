@@ -7,13 +7,13 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parentPort, workerData } from 'node:worker_threads';
 import { extractPlan, guardReader } from '../public/js/plan-extract.js';
-import { readDxf } from '../public/js/plan-dxf.js';
+import { readDxf, decodeDxf } from '../public/js/plan-dxf.js';
 
 const pkg = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'node_modules', '@mlightcad', 'libredwg-web');
 
 try {
   let db;
-  if (/\.dxf$/i.test(workerData.file)) db = readDxf(fs.readFileSync(workerData.file, 'utf8'));
+  if (/\.dxf$/i.test(workerData.file)) db = readDxf(decodeDxf(new Uint8Array(fs.readFileSync(workerData.file))));
   else {
     const { LibreDwg, Dwg_File_Type } = await import(pathToFileURL(path.join(pkg, 'dist', 'libredwg-web.js')).href);
     const lib = guardReader(await LibreDwg.create(path.join(pkg, 'wasm')));

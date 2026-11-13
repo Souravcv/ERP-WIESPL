@@ -10,8 +10,18 @@ import { PART_UI, DOOR_TYPES, FLOOR_TYPES } from '../parts.js';
 const FT = 3.28084;
 
 // "OPERATION THEATER 01\n7722 x 6692 MM" → { name: 'OPERATION THEATER 01', w: 7.722, d: 6.692 } (metres); null when no size
+// feet and inches: 22'-0"X19'-1½" (½ ¼ ¾, or a damaged character where the fraction was) → metres
+const FT_IN = /(\d{1,3})\s*'\s*-?\s*(\d{1,2})?\s*(½|¼|¾|�|\s\d\/\d)?\s*"?\s*[xX×]\s*(\d{1,3})\s*'\s*-?\s*(\d{1,2})?\s*(½|¼|¾|�|\s\d\/\d)?\s*"?/;
+const frac = f => (!f ? 0 : f === '½' || f === '�' ? 0.5 : f === '¼' ? 0.25 : f === '¾' ? 0.75 : (([n, d]) => n / d)(f.trim().split('/').map(Number)));
+const feetIn = (ft, inch, f) => (Number(ft) * 12 + Number(inch || 0) + frac(f)) * 0.0254;
 export function roomSize(text) {
   const s = String(text || '');
+  const fi = s.match(FT_IN);
+  if (fi) {
+    const w = feetIn(fi[1], fi[2], fi[3]), d = feetIn(fi[4], fi[5], fi[6]);
+    if (w < 1.5 || w > 20 || d < 1.5 || d > 20) return null;
+    return { name: s.slice(0, fi.index).replace(/\s+/g, ' ').trim() || s.split('\n')[0].trim(), w, d };
+  }
   const m = s.match(/(\d{3,6})\D{0,3}[xX×]\s*(\d{3,5})\s*MM/i);
   if (!m) return null;
   let a = m[1], b = Number(m[2]), extra = '';

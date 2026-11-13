@@ -6,7 +6,7 @@
 // surgeon's control panel, X-ray viewer, return-air risers and a picture-glass panel. Kept light (shared materials and
 // textures, soft painted shadows under the equipment) so a floor with twenty OTs still turns smoothly on an office PC.
 import { OT_FINISHES, FLOOR_COLOURS } from '../ot3d.js';
-import { artTexture, drawAvenue, drawLake, drawForest, drawVision, drawGrille, drawPanelScreen, drawXray, drawPerforated, drawCeilingTile, brushed, drawVinyl, drawBlob, drawLedPanel, drawVitals, drawScope } from './plan3d-art.js';
+import { artTexture, drawAvenue, drawLake, drawForest, drawVision, drawGrille, drawPanelScreen, drawXray, drawPerforated, drawCeilingTile, brushed, drawVinyl, drawBlob, drawLedPanel, drawVitals, drawScope, drawScrubTimer } from './plan3d-art.js';
 
 // the printed picture-glass scenes a client can choose from
 export const PICTURES = [['avenue', 'Blossom avenue', drawAvenue], ['lake', 'Mountain lake', drawLake], ['forest', 'Sunlit forest', drawForest]];
@@ -59,6 +59,15 @@ export function makeFitKit(T) {
     rubber: get('rubber', () => std(0x2b2f36, 0, 0.85)),
     mattress: get('mattress', () => std(0x27384d, 0, 0.72)),
     glass: get('glass', () => std(0xd6ecff, 0.1, 0.05, { transparent: true, opacity: 0.28, depthWrite: false, envMapIntensity: 1.2 })),
+    // window glass with the electrostatic (switchable) privacy film: clear when the film is off, frosted white when on
+    smartGlass: get('smartGlass', () => new T.MeshPhysicalMaterial({ color: 0xeaf6ff, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.16, clearcoat: 1, envMapIntensity: 1.4, depthWrite: false, side: T.DoubleSide })),
+    setSmartFilm(on) {
+      const m = kit.smartGlass;
+      if (on) { m.color.setHex(0xf3f6f8); m.opacity = 0.94; m.roughness = 0.85; m.clearcoat = 0.2; m.envMapIntensity = 0.1; }
+      else { m.color.setHex(0xeaf6ff); m.opacity = 0.16; m.roughness = 0.03; m.clearcoat = 1; m.envMapIntensity = 1.4; }
+      m.depthWrite = on; m.needsUpdate = true;
+    },
+    scrubTimer: get('scrubTimer', () => basic({ map: tex('scrubTimer', drawScrubTimer, 256, 128) })),
     led: get('led', () => basic({ color: 0xfffbf0 })),
     ledCool: get('ledCool', () => basic({ color: 0xeaf4ff })),
     ledPanel: get('ledPanel', () => basic({ map: tex('ledPanel', drawLedPanel, 128, 128) })),
@@ -191,7 +200,8 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   add(group, B(w - band * 2, 0.014, d - band * 2), kit.floor(finish.floor_main), RX, 0.007, RZ).userData.part = 'floorMain';
 
   // ---- walls: panels only where the drawing has a wall; the openings get doors
-  const P = kit.panel(finish), DADO = 1.2, DOOR_H = 2.1, T_PANEL = 0.04;
+  const P = kit.panel(finish), DADO = 1.2, DOOR_H = 2.1, T_PANEL = 0.04, SILL = 0.9, HEAD = 2.1;
+  const openings = []; // doors and windows found in the walls, built once all walls are known
   const sides = [
     { along: 'x', a: x0, b: x1, fixed: z0, n: 1 }, { along: 'x', a: x0, b: x1, fixed: z1, n: -1 },
     { along: 'z', a: z0, b: z1, fixed: x0, n: 1 }, { along: 'z', a: z0, b: z1, fixed: x1, n: -1 },
@@ -256,14 +266,100 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
       put(from, to, 0, 0.1, kit.floor(finish.floor_border), 'floorBorder', T_PANEL / 2 + 0.006, 0.012); // coved vinyl skirting
       allRuns.push({ s, from, to, len: to - from, plane });
       const next = runs[i + 1];
-      if (next) { // the opening up to the next run: a door if it is door-sized
-        const g0 = to, g1 = Math.max(s.a, next.a - 0.1), gap = g1 - g0;
-        const drawn = drawnDoor(s, g0, g1);
-        if (gap >= 0.7 && gap <= 3.2 && (drawn || !doorSegs.length)) { put(g0, g1, DOOR_H, H, P.high, 'wallHigh'); door(s, g0, g1, plane, drawn); }
+      if (next) { // the opening up to the next run: a window when the drawing tags it W…, else a door if it is door-sized
+        const g0 = to, g1 = Math.max(s.a, next.a - 0.1), gap = g1 - g0, tag = tagAt(s, (g0 + g1) / 2);
+        if (tag && /^[WV]/i.test(tag.t) && gap >= 0.4 && gap <= 6) {
+          put(g0, g1, 0, Math.min(SILL, DADO), P.low, 'wallLow'); put(g0, g1, HEAD, H, P.high, 'wallHigh');
+          openings.push({ kind: 'window', s, g0, g1, plane, tag });
+        } else {
+          const drawn = drawnDoor(s, g0, g1);
+          if (gap >= 0.7 && gap <= 3.2 && (drawn || tag || !doorSegs.length)) { put(g0, g1, DOOR_H, H, P.high, 'wallHigh'); openings.push({ kind: 'door', s, g0, g1, plane, drawn, tag }); }
+        }
       }
     });
   }
+  // the main door is the one from the passage / corridor (the others, e.g. into a lab, are secondary swing doors)
+  {
+    const doorOps = openings.filter(o => o.kind === 'door');
+    const outside = o => { const mid = (o.g0 + o.g1) / 2, [x, z] = o.s.along === 'x' ? [mid, o.plane] : [o.plane, mid], nx = o.s.along === 'x' ? 0 : o.s.n, nz = o.s.along === 'x' ? o.s.n : 0; return [x - nx * 2, z - nz * 2]; };
+    let main = null;
+    if (doorOps.length > 1 && fx.passages?.length) {
+      const score = o => { const [x, z] = outside(o); return Math.min(...fx.passages.map(p => Math.hypot(p.x - x, p.z - z))); };
+      main = doorOps.reduce((p, q) => (score(q) < score(p) ? q : p));
+      if (score(main) > 10) main = null;
+    }
+    main ||= doorOps.find(o => o.drawn?.kind === 'sliding' && !o.tag) || doorOps.reduce((p, q) => (!p || q.g1 - q.g0 > p.g1 - p.g0 ? q : p), null);
+    for (const o of doorOps) door(o.s, o.g0, o.g1, o.plane, o.drawn, o === main);
+    for (const o of openings) if (o.kind === 'window') windowAt(o);
+    const m = spots.doors.find(dd => dd.main);
+    if (m) scrubStation(m);
+  }
   spots.runs = allRuns;
+
+  // the door / window number written next to an opening in the drawing (D2, W10 …), if any
+  function tagAt(s, t) {
+    if (!fx.tags?.length) return null;
+    const [x, z] = s.along === 'x' ? [t, s.fixed] : [s.fixed, t];
+    let best = null;
+    for (const g of fx.tags) { const dd = Math.hypot(g.x - x, g.z - z); if (dd < 1.6 && (!best || dd < best.d)) best = { ...g, d: dd }; }
+    return best;
+  }
+
+  // a window: clear glass between sill and head in a slim steel frame, with the switchable privacy film (kit.setSmartFilm)
+  function windowAt(o) {
+    const { s, g0, g1, plane } = o, len = g1 - g0, mid = (g0 + g1) / 2, hgt = HEAD - SILL;
+    const xz = (t, off = 0) => (s.along === 'x' ? [t, plane + s.n * off] : [plane + s.n * off, t]);
+    const [gx, gz] = xz(mid, -0.01);
+    add(group, s.along === 'x' ? B(len, hgt, 0.012) : B(0.012, hgt, len), kit.smartGlass, gx, SILL + hgt / 2, gz).userData.part = 'smartGlass';
+    for (const t of [g0 + 0.02, g1 - 0.02]) { const [fxx, fzz] = xz(t, -0.01); add(group, s.along === 'x' ? B(0.04, hgt, 0.06) : B(0.06, hgt, 0.04), kit.ss, fxx, SILL + hgt / 2, fzz); }
+    for (const y of [SILL, HEAD]) { const [fxx, fzz] = xz(mid, -0.01); add(group, s.along === 'x' ? B(len, 0.04, 0.06) : B(0.06, 0.04, len), kit.ss, fxx, y, fzz); }
+    (spots.windows ||= []).push({ x: gx, z: gz, w: len, tag: o.tag?.t });
+  }
+
+  // the WIESPL scrub station outside the main door, where the drawing has its hand-wash basins (they are left out of
+  // the drawn furniture: spots.scrub is their outline); without basins drawn there, nothing is added
+  function scrubStation(m) {
+    const segs = fx.furniture; if (!segs?.length) return;
+    const ox = m.x - m.inX * 1.2, oz = m.z - m.inZ * 1.2, inRoom = (x, z) => x > x0 - 0.1 && x < x1 + 0.1 && z > z0 - 0.1 && z < z1 + 0.1;
+    const pts = [];
+    for (let i = 0; i < segs.length; i += 4) { const a = segs[i], b = segs[i + 1], c = segs[i + 2], e = segs[i + 3]; const mx = (a + c) / 2, mz = (b + e) / 2; if (Math.hypot(mx - ox, mz - oz) < 3.2 && !inRoom(a, b) && !inRoom(c, e)) pts.push([a, b, c, e]); }
+    if (!pts.length) return;
+    // groups of touching lines; the one nearest the door that is basin-sized
+    const groups = [];
+    for (const p of pts) { const g = groups.find(q => q.some(r => Math.min(Math.hypot(r[0] - p[0], r[1] - p[1]), Math.hypot(r[2] - p[2], r[3] - p[3]), Math.hypot(r[0] - p[2], r[1] - p[3]), Math.hypot(r[2] - p[0], r[3] - p[1])) < 0.35)); if (g) g.push(p); else groups.push([p]); }
+    const boxOf = g => { let a = 1e9, b = -1e9, c = 1e9, e = -1e9; for (const p of g) { a = Math.min(a, p[0], p[2]); b = Math.max(b, p[0], p[2]); c = Math.min(c, p[1], p[3]); e = Math.max(e, p[1], p[3]); } return { x0: a, x1: b, z0: c, z1: e }; };
+    const cands = groups.filter(g => g.length >= 6).map(boxOf).filter(bx => Math.max(bx.x1 - bx.x0, bx.z1 - bx.z0) >= 0.45 && Math.max(bx.x1 - bx.x0, bx.z1 - bx.z0) <= 3.5 && Math.min(bx.x1 - bx.x0, bx.z1 - bx.z0) <= 1.0);
+    if (!cands.length) return;
+    // basins near each other (two sinks side by side) make one station
+    const near = cands.sort((p, q) => Math.hypot((p.x0 + p.x1) / 2 - ox, (p.z0 + p.z1) / 2 - oz) - Math.hypot((q.x0 + q.x1) / 2 - ox, (q.z0 + q.z1) / 2 - oz))[0];
+    const bx = cands.filter(c => Math.hypot((c.x0 + c.x1) / 2 - (near.x0 + near.x1) / 2, (c.z0 + c.z1) / 2 - (near.z0 + near.z1) / 2) < 1.6).reduce((p, q) => ({ x0: Math.min(p.x0, q.x0), x1: Math.max(p.x1, q.x1), z0: Math.min(p.z0, q.z0), z1: Math.max(p.z1, q.z1) }));
+    spots.scrub = { ...bx };
+    const alongX = bx.x1 - bx.x0 >= bx.z1 - bx.z0, len = Math.max(1.2, Math.min(2.6, alongX ? bx.x1 - bx.x0 : bx.z1 - bx.z0));
+    const cxs = (bx.x0 + bx.x1) / 2, czs = (bx.z0 + bx.z1) / 2;
+    // its back goes to the nearer wall
+    const dA = alongX ? rayDist(cxs, czs, 0, -1, 2) : rayDist(cxs, czs, -1, 0, 2), dB = alongX ? rayDist(cxs, czs, 0, 1, 2) : rayDist(cxs, czs, 1, 0, 2);
+    const back = dA <= dB ? -1 : 1, wallD = Math.min(dA, dB, 1.5), D = 0.6;
+    const g = new T.Group(); g.position.set(alongX ? cxs : cxs + back * (wallD - D / 2 - 0.02), 0, alongX ? czs + back * (wallD - D / 2 - 0.02) : czs);
+    g.rotation.y = alongX ? (back < 0 ? 0 : Math.PI) : (back < 0 ? -Math.PI / 2 : Math.PI / 2); group.add(g);
+    const S = (geo, mat, x, y, z) => { const o2 = new T.Mesh(geo, mat); o2.position.set(x, y, z); o2.castShadow = true; o2.receiveShadow = true; g.add(o2); return o2; };
+    // local frame: x along the trough, -z towards the wall behind it
+    S(B(len, 0.86, D * 0.6), kit.ss, 0, 0.43, -D * 0.2);                 // the cabinet under the trough
+    S(B(len, 0.08, D), kit.ss, 0, 0.9, 0);                               // the rim
+    S(B(len - 0.12, 0.05, D - 0.14), kit.dark, 0, 0.925, 0.01);          // the deep trough seen from above
+    S(B(len, 0.75, 0.04), kit.ss, 0, 1.33, -D / 2 + 0.02);               // splash-back
+    const taps = Math.max(1, Math.min(3, Math.floor(len / 0.6)));
+    for (let k = 0; k < taps; k++) {
+      const x = -len / 2 + len * (k + 0.5) / taps;
+      S(Cy(0.016, 0.016, 0.34, 10), kit.ss, x, 1.12, -D / 2 + 0.07);      // sensor gooseneck
+      S(B(0.03, 0.03, 0.18), kit.ss, x, 1.28, -D / 2 + 0.15);
+      S(B(0.08, 0.05, 0.04), kit.dark, x, 1.22, -D / 2 + 0.05);           // the sensor eye
+      S(B(0.1, 0.16, 0.06), kit.white, x + 0.22, 1.42, -D / 2 + 0.05);    // soap / antiseptic dispenser
+    }
+    S(B(Math.min(0.5, len - 0.2), 0.22, 0.03), kit.dark, 0, 1.86, -D / 2 + 0.03); // the digital scrub timer
+    { const t2 = new T.Mesh(new T.PlaneGeometry(Math.min(0.46, len - 0.24), 0.18), kit.scrubTimer); t2.position.set(0, 1.86, -D / 2 + 0.05); g.add(t2); }
+    for (const x of [-len / 2 + 0.2, len / 2 - 0.2]) S(B(0.12, 0.05, 0.12), kit.ssDark, x, 0.05, -D * 0.05); // knee / foot pedals
+    spots.scrubAt = { x: g.position.x, z: g.position.z };
+  }
   const planeAt = (sd, t) => (sd.runs || []).find(r => t >= r.a - 0.15 && t <= r.b + 0.15)?.plane ?? sd.plane;
 
   // what the drawing shows in an opening: a straight line along the wall (a sliding door, parked where the line goes on
@@ -284,17 +380,20 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   }
 
   // both kinds of door are built in each opening; the chosen one shows (restyle switches them)
-  function door(s, g0, g1, plane, drawn) {
-    const gap = g1 - g0, mid = (g0 + g1) / 2, kind = drawn && !opt.chosen ? drawn.kind : doorKind(finish);
+  // the main door takes the chosen kind (hermetic sliding as standard); a secondary door stays as the drawing shows it
+  // (a swing door when nothing says otherwise) and is not switched by restyle
+  function door(s, g0, g1, plane, drawn, isMain) {
+    const gap = g1 - g0, mid = (g0 + g1) / 2, kind = isMain ? (drawn && !opt.chosen && !fx.tags?.length ? drawn.kind : doorKind(finish)) : (drawn?.kind || 'swing');
     const xz = (t, off = 0) => (s.along === 'x' ? [t, plane + s.n * off] : [plane + s.n * off, t]);
-    const [dx, dz] = xz(mid), info = { x: dx, z: dz, inX: s.along === 'x' ? 0 : s.n, inZ: s.along === 'x' ? s.n : 0, gap, kind: drawn && !opt.chosen ? drawn.kind : finish.door || 'sliding', main: drawn?.kind === 'sliding', side: s };
+    const [dx, dz] = xz(mid), info = { x: dx, z: dz, inX: s.along === 'x' ? 0 : s.n, inZ: s.along === 'x' ? s.n : 0, gap, kind, main: !!isMain, side: s };
+    const partOf = k => (isMain ? `door:${k}` : `fixed:${k}`);
     spots.doors.push(info);
     // the steel frame round the opening
     // (slim, so it stays within the wall's depth and does not stand out into the corridor)
     for (const t of [g0, g1]) { const [jx, jz] = xz(t, -0.04); add(group, s.along === 'x' ? B(0.06, DOOR_H + 0.06, 0.13) : B(0.13, DOOR_H + 0.06, 0.06), kit.ss, jx, (DOOR_H + 0.06) / 2, jz); }
     { const [jx, jz] = xz(mid, -0.04); add(group, s.along === 'x' ? B(gap + 0.12, 0.06, 0.13) : B(0.13, 0.06, gap + 0.12), kit.ss, jx, DOOR_H + 0.03, jz); }
     // hermetic sliding: parked open beside the opening, on its track; setOpen(0) slides it shut
-    const slide = new T.Group(); slide.userData.part = 'door:sliding'; slide.visible = kind === 'sliding'; group.add(slide);
+    const slide = new T.Group(); slide.userData.part = partOf('sliding'); slide.visible = kind === 'sliding'; group.add(slide);
     const leafW = Math.min(gap, 1.6), fitsHi = g1 + 0.02 <= s.b - leafW, t0 = drawn?.park === 'lo' || (!drawn?.park && !fitsHi) ? g0 - leafW - 0.02 : g1 + 0.02;
     parked.push({ s, a: t0 - 0.08, b: t0 + leafW + 0.08 });
     const slider = new T.Group(); slide.add(slider);
@@ -302,7 +401,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     { const [rx, rz] = xz(mid + (t0 > mid ? leafW / 2 : -leafW / 2), 0.06); add(slide, B(s.along === 'x' ? gap + leafW : 0.06, 0.1, s.along === 'x' ? 0.06 : gap + leafW), kit.ssDark, rx, DOOR_H + 0.08, rz); }
     const shut = mid - (t0 + leafW / 2);
     // swing: one leaf, or two meeting in the middle when the opening is wide (as WIESPL fits them), standing open into the room
-    const swing = new T.Group(); swing.userData.part = 'door:swing'; swing.visible = kind === 'swing'; group.add(swing);
+    const swing = new T.Group(); swing.userData.part = partOf('swing'); swing.visible = kind === 'swing'; group.add(swing);
     const pair = gap >= 1.15, lw = pair ? gap / 2 - 0.01 : Math.min(gap, 1.2), openAng = s.along === 'x' ? (s.n > 0 ? 0 : Math.PI) : (s.n > 0 ? Math.PI / 2 : -Math.PI / 2);
     const hinges = (pair ? [[g0, 1], [g1, -1]] : [[g0, 1]]).map(([t, dir]) => {
       const [hx, hz] = xz(t, 0.02), pivot = new T.Group(); pivot.position.set(hx, 0, hz); swing.add(pivot);

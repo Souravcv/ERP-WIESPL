@@ -7,6 +7,14 @@
 const RAD = Math.PI / 180;
 const num = v => { const n = parseFloat(v); return Number.isFinite(n) ? n : 0; };
 
+// DXF text: from AutoCAD 2007 (AC1021) on it is UTF-8; older DXFs use the drawing's Windows code page (½ ° ±).
+export function decodeDxf(bytes) {
+  const head = new TextDecoder('latin1').decode(bytes.subarray(0, 8192));
+  const ver = (head.match(/\$ACADVER\s*\r?\n\s*1\s*\r?\n\s*AC(\d{4})/) || [])[1];
+  const utf8 = !ver || Number(ver) >= 1021;
+  try { return new TextDecoder(utf8 ? 'utf-8' : 'windows-1252').decode(bytes); } catch { return new TextDecoder('utf-8').decode(bytes); }
+}
+
 export function readDxf(text) {
   const lines = text.split(/\r?\n/);
   let i = 0;

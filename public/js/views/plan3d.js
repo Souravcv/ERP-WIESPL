@@ -101,7 +101,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   const roles = loadRoles();
   const roleOf = l => roles[l] || guessRole(l);
   const small = Math.min(stage.clientWidth, stage.clientHeight) < 500 || /Mobi|Android/i.test(navigator.userAgent);
-  let areaIdx = 0, wallH = 3, furnH = 0.6, showLabels = true, current = null, showFitted = true;
+  let areaIdx = 0, wallH = 3, furnH = 0.6, showLabels = true, current = null, showFitted = true, smartFilm = false;
 
   stage.replaceChildren(...stage.querySelectorAll('.p3-fs'));
   const renderer = new T.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -219,7 +219,9 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     { // the fixtures as drawn: the door layer, and layers named plenum / grille
       const toScene = segs => { const o = new Float32Array(segs.length); for (let i = 0; i < segs.length; i += 4) o.set([X(segs[i]), Z(segs[i + 1]), X(segs[i + 2]), Z(segs[i + 3])], i); return o; };
       const named = re => { const out = []; for (const [lname, L] of Object.entries(plan.layers)) if (re.test(lname) && roleOf(lname) !== 'hide') { const q = L.segs; for (let i = 0; i < q.length; i += 4) if (inA(q[i], q[i + 1])) out.push(q[i], q[i + 1], q[i + 2], q[i + 3]); } return out; };
-      fx = { walls: occ, furniture: toScene(buckets.furniture || []), door: toScene(buckets.door || []), plenum: toScene(named(/PLENUM|LAF\b|LAMINAR/i)), grille: toScene(named(/GRILLE|RETURN AIR|RISER/i)) };
+      fx = { walls: occ, furniture: toScene(buckets.furniture || []), door: toScene(buckets.door || []), plenum: toScene(named(/PLENUM|LAF\b|LAMINAR/i)), grille: toScene(named(/GRILLE|RETURN AIR|RISER/i)),
+        // the door / window numbers written in the drawing (D, D2, W10, V1 …): an opening tagged W is a window
+        tags: plan.texts.filter(t => inA(t.x, t.y) && /^\s*(D|W|V|DW)\s*-?\s*\d{0,3}\s*[A-Z]?\s*$/i.test(t.t)).map(t => ({ t: t.t.trim().toUpperCase(), x: X(t.x + (t.w || 0) / 2), z: Z(t.y) })) };
     }
     const mesh = (g, m, cast = true) => { const o = new T.Mesh(g, m); o.castShadow = cast; o.receiveShadow = true; group.add(o); return o; };
 
@@ -262,6 +264,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     labels.sort((a, b) => Number(b.ot) - Number(a.ot) || Number(b.room) - Number(a.room));
     corridors = plan.texts.filter(t => inA(t.x, t.y) && KIND(t.t) === 'cor' && !/DUCT|DRAWING|DWG|DETAIL/i.test(t.t))
       .map(t => ({ name: t.t.split('\n')[0].trim(), x: X(t.x + (t.w || 0) / 2), z: Z(t.y), width: corridorWidth(t.t) }));
+    fx.passages = corridors; // the OT's main door is the one from the passage
     { // the outline of every OT, from the walls, glass and doors around its label
       const edges = [...(buckets.wall || []), ...(buckets.column || []), ...(buckets.glass || []), ...(buckets.door || [])];
       const sc = new Float32Array(edges.length);
@@ -272,17 +275,21 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
         if (!inA(t.x, t.y) || !/[A-Za-z]{2,}/.test(first) || !isOt(first)) continue;
         const key = `${Math.round(t.x * 10)}_${Math.round(t.y * 10)}`;
         if (ots.some(o => o.key === key)) continue;
-        const sz = roomSize(t.t), cx = X(t.x + (t.w || 0) / 2), cz = Z(t.y), hh = t.h || 0.25;
+        // the size is in the label, or in its own text just under it ("22'-0"X19'-1½"")
+        const nearSize = () => { const q = plan.texts.filter(u => u !== t && Math.abs(u.x - t.x) < 2.5 && Math.abs(u.y - t.y) < 1.2).map(u => ({ u, s: roomSize(u.t) })).filter(v => v.s).sort((a, b) => Math.hypot(a.u.x - t.x, a.u.y - t.y) - Math.hypot(b.u.x - t.x, b.u.y - t.y))[0]; return q ? { ...q.s, name: first.trim() } : null; };
+        const sz = roomSize(t.t) || nearSize(), cx = X(t.x + (t.w || 0) / 2), cz = Z(t.y), hh = t.h || 0.25;
         const base = findRoom(sc, [[cx, cz], [cx, cz + hh * 3], [cx, cz - hh * 3]], sz ? [sz.w, sz.d] : null);
         const o = { key, t, size: sz, name: sz?.name || first.trim(), base, walls: base.walls, v: new T.Vector3() };
         placeOt(o); ots.push(o);
       }
       selected = ots.find(o => o.key === was) || null;
     }
+    drawFitted(); // before the furniture: the fit-out says where its scrub station replaces the drawn basins
     // furniture and equipment as low white blocks (or flat when the height is 0); inside a fitted OT the WIESPL fit-out replaces it
     let furn = buckets.furniture || [];
     if (showFitted && ots.length && furn.length) {
-      const inOt = (x, z) => ots.some(o => x > o.x0 - 0.05 && x < o.x1 + 0.05 && z > o.z0 - 0.05 && z < o.z1 + 0.05);
+      const scrubs = ots.map(o => o.fit?.spots?.scrub).filter(Boolean);
+      const inOt = (x, z) => ots.some(o => x > o.x0 - 0.05 && x < o.x1 + 0.05 && z > o.z0 - 0.05 && z < o.z1 + 0.05) || scrubs.some(b => x > b.x0 - 0.05 && x < b.x1 + 0.05 && z > b.z0 - 0.05 && z < b.z1 + 0.05);
       const keep = [];
       for (let i = 0; i < furn.length; i += 4) if (!(inOt(X(furn[i]), Z(furn[i + 1])) && inOt(X(furn[i + 2]), Z(furn[i + 3])))) keep.push(furn[i], furn[i + 1], furn[i + 2], furn[i + 3]);
       furn = keep;
@@ -291,7 +298,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       if (furnH > 0.01) mesh(faces(furn, X, Z, 0, furnH, 0.86), new T.MeshStandardMaterial({ color: 0xfbfcfd, vertexColors: true, roughness: 0.9, side: T.DoubleSide, envMapIntensity: 0.12 }));
       group.add(new T.LineSegments(outline(furn, X, Z, Math.max(0.012, furnH + 0.002)), new T.LineBasicMaterial({ color: 0x8693a4, transparent: true, opacity: 0.8 })));
     }
-    drawOtMarks(); drawHighlight(); drawFitted();
+    drawOtMarks(); drawHighlight();
     drawSide();
   };
 
@@ -593,7 +600,8 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
           h('button.btn.small', { type: 'button', title: 'Make the client film as a 4K MP4, and a 1080p copy. It takes a while: keep this tab open.', onclick: () => startTour(true, true, { quality: '4k' }) }, '🎞 Save 4K film'),
           h('p.muted', selected ? `Walks into ${selected.name}. Sound on.` : 'Walks from the corridor into the OT with the longest corridor outside. Tap an OT first to choose it. Sound on.')),
         h('div.toolbar', h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names'),
-          h('label.p3-check', h('input', { type: 'checkbox', ...(showFitted ? { checked: true } : {}), onchange: e => { showFitted = e.target.checked; rebuild(); } }), ' Finished OTs')),
+          h('label.p3-check', h('input', { type: 'checkbox', ...(showFitted ? { checked: true } : {}), onchange: e => { showFitted = e.target.checked; rebuild(); } }), ' Finished OTs'),
+          h('label.p3-check', { title: 'Windows: electrostatic (switchable) film, clear when off, frosted for privacy when on' }, h('input', { type: 'checkbox', ...(smartFilm ? { checked: true } : {}), onchange: e => { smartFilm = e.target.checked; kit.setSmartFilm(smartFilm); } }), ' Window film on (frosted)')),
         roomSel, current && !walk.on ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
         null),
       h('div.p3-box', h('b', 'Quantities'), h('p.muted', 'Floor, wall panels, ceiling and coving per OT, from the room sizes in the drawing.'), h('button.btn.small', { onclick: () => openQuantities().catch(fail) }, '📐 Quantities from the drawing')),
