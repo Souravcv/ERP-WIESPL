@@ -6,7 +6,7 @@
 // surgeon's control panel, X-ray viewer, return-air risers and a picture-glass panel. Kept light (shared materials and
 // textures, soft painted shadows under the equipment) so a floor with twenty OTs still turns smoothly on an office PC.
 import { OT_FINISHES, FLOOR_COLOURS } from '../ot3d.js';
-import { artTexture, drawAvenue, drawLake, drawForest, drawVision, drawGrille, drawPanelScreen, drawXray, drawPerforated, drawCeilingTile, brushed, drawVinyl, drawBlob, drawLedPanel, drawVitals, drawScope, drawScrubTimer } from './plan3d-art.js';
+import { artTexture, drawAvenue, drawLake, drawForest, drawVision, drawGrille, drawPanelScreen, drawXray, drawPerforated, drawCeilingTile, brushed, drawVinyl, drawBlob, drawLedPanel, drawVitals, drawScope, drawScrubTimer, drawSky } from './plan3d-art.js';
 
 // the printed picture-glass scenes a client can choose from
 export const PICTURES = [['avenue', 'Blossom avenue', drawAvenue], ['lake', 'Mountain lake', drawLake], ['forest', 'Sunlit forest', drawForest]];
@@ -60,6 +60,7 @@ export function makeFitKit(T) {
     mattress: get('mattress', () => std(0x27384d, 0, 0.72)),
     glass: get('glass', () => std(0xd6ecff, 0.1, 0.05, { transparent: true, opacity: 0.28, depthWrite: false, envMapIntensity: 1.2 })),
     // window glass with the electrostatic (switchable) privacy film: clear when the film is off, frosted white when on
+    outside: get('outside', () => basic({ map: tex('outside', drawSky, 1024, 640) })), // the view through a window
     smartGlass: get('smartGlass', () => new T.MeshPhysicalMaterial({ color: 0xeaf6ff, metalness: 0, roughness: 0.03, transparent: true, opacity: 0.16, clearcoat: 1, envMapIntensity: 1.4, depthWrite: false, side: T.DoubleSide })),
     setSmartFilm(on) {
       const m = kit.smartGlass;
@@ -313,6 +314,8 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     add(group, s.along === 'x' ? B(len, hgt, 0.012) : B(0.012, hgt, len), kit.smartGlass, gx, SILL + hgt / 2, gz).userData.part = 'smartGlass';
     for (const t of [g0 + 0.02, g1 - 0.02]) { const [fxx, fzz] = xz(t, -0.01); add(group, s.along === 'x' ? B(0.04, hgt, 0.06) : B(0.06, hgt, 0.04), kit.ss, fxx, SILL + hgt / 2, fzz); }
     for (const y of [SILL, HEAD]) { const [fxx, fzz] = xz(mid, -0.01); add(group, s.along === 'x' ? B(len, 0.04, 0.06) : B(0.06, 0.04, len), kit.ss, fxx, y, fzz); }
+    { const [vx, vz] = xz(mid, -0.45), view = add(group, new T.PlaneGeometry(len + 1.4, hgt + 1.2), kit.outside, vx, SILL + hgt / 2, vz); // the sky outside, facing in
+      view.rotation.y = s.along === 'x' ? (s.n > 0 ? 0 : Math.PI) : (s.n > 0 ? Math.PI / 2 : -Math.PI / 2); view.receiveShadow = false; }
     (spots.windows ||= []).push({ x: gx, z: gz, w: len, tag: o.tag?.t });
   }
 
@@ -340,7 +343,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     const dA = alongX ? rayDist(cxs, czs, 0, -1, 2) : rayDist(cxs, czs, -1, 0, 2), dB = alongX ? rayDist(cxs, czs, 0, 1, 2) : rayDist(cxs, czs, 1, 0, 2);
     const back = dA <= dB ? -1 : 1, wallD = Math.min(dA, dB, 1.5), D = 0.6;
     const g = new T.Group(); g.position.set(alongX ? cxs : cxs + back * (wallD - D / 2 - 0.02), 0, alongX ? czs + back * (wallD - D / 2 - 0.02) : czs);
-    g.rotation.y = alongX ? (back < 0 ? 0 : Math.PI) : (back < 0 ? -Math.PI / 2 : Math.PI / 2); group.add(g);
+    g.rotation.y = alongX ? (back < 0 ? 0 : Math.PI) : (back < 0 ? Math.PI / 2 : -Math.PI / 2); group.add(g); // its front (local +z) away from the wall
     const S = (geo, mat, x, y, z) => { const o2 = new T.Mesh(geo, mat); o2.position.set(x, y, z); o2.castShadow = true; o2.receiveShadow = true; g.add(o2); return o2; };
     // local frame: x along the trough, -z towards the wall behind it
     S(B(len, 0.86, D * 0.6), kit.ss, 0, 0.43, -D * 0.2);                 // the cabinet under the trough
@@ -358,7 +361,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     S(B(Math.min(0.5, len - 0.2), 0.22, 0.03), kit.dark, 0, 1.86, -D / 2 + 0.03); // the digital scrub timer
     { const t2 = new T.Mesh(new T.PlaneGeometry(Math.min(0.46, len - 0.24), 0.18), kit.scrubTimer); t2.position.set(0, 1.86, -D / 2 + 0.05); g.add(t2); }
     for (const x of [-len / 2 + 0.2, len / 2 - 0.2]) S(B(0.12, 0.05, 0.12), kit.ssDark, x, 0.05, -D * 0.05); // knee / foot pedals
-    spots.scrubAt = { x: g.position.x, z: g.position.z };
+    spots.scrubAt = { x: g.position.x, z: g.position.z, fx: Math.sin(g.rotation.y), fz: Math.cos(g.rotation.y), len }; // fx, fz: the way it faces
   }
   const planeAt = (sd, t) => (sd.runs || []).find(r => t >= r.a - 0.15 && t <= r.b + 0.15)?.plane ?? sd.plane;
 

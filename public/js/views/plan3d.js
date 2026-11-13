@@ -449,6 +449,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     // the client film: its OT fitted round the main door in the film's finishes (null puts everything back)
     film: o => { filmHero = o || null; kit.filmLook(!!o); drawFitted(); return o?.fit || null; },
     ambient: k => { walkLight.intensity = k; },
+    smartFilm: on => kit.setSmartFilm(on == null ? smartFilm : on),
     hold: on => { filmHold = !!on; if (!on) resize(); }, // an offline render draws the frames itself
     draw: () => { ceilLayer.visible = camera.position.y < Math.min(wallH, 3) - 0.02; renderer.render(scene, camera); },
     focus: o => { for (const x of ots) if (x.fit) { const near = !o || Math.hypot(x.v.x - o.v.x, x.v.z - o.v.z) < 16; x.fit.group.visible = x.fit.ceiling.visible = near; } renderer.shadowMap.needsUpdate = true; },

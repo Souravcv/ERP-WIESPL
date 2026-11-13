@@ -27,8 +27,8 @@ const COMPANY = ['Western India Electromedical Systems Pvt. Ltd.', 'Sct. No. 4, 
 
 // "3000MM WIDE STERILE CORRIDOR", "Passage 2.60m wide", "2.16 M. WIDE CORRIDOR" → width in metres
 export function corridorWidth(text) {
-  const s = String(text || ''), mm = s.match(/(\d{3,4})\s*MM\.?\s*WIDE/i), m = s.match(/(\d+(?:\.\d+)?)\s*M\.?\s*WIDE/i);
-  const w = mm ? Number(mm[1]) / 1000 : m ? Number(m[1]) : null;
+  const s = String(text || '').replace(/W\s+I\s+D\s+E/gi, 'WIDE'), mm = s.match(/(\d{3,4})\s*MM\.?\s*WIDE/i), m = s.match(/(\d+(?:\.\d+)?)\s*M\.?\s*WIDE/i), ft = s.match(/(\d{1,2})\s*'\s*-?\s*(\d{1,2})?\s*"?\s*WIDE/i);
+  const w = mm ? Number(mm[1]) / 1000 : m ? Number(m[1]) : ft ? (Number(ft[1]) * 12 + Number(ft[2] || 0)) * 0.0254 : null;
   return w && w >= 0.9 && w <= 6 ? w : null;
 }
 
@@ -68,9 +68,17 @@ export function createTour(ctx) {
     const { d, ax, az, f1, f2, label } = best, dir = f1 >= f2 ? 1 : -1, free = Math.max(f1, f2), other = Math.min(f1, f2);
     const ux = ax * dir, uz = az * dir; // from the door towards the start of the walk
     // the corridor's width, measured a little along from the door (the door's own gap would let the ray through)
-    const s = Math.min(1.4, Math.max(0.3, free - 0.5)), px = d.x - d.inX * 1.3 + ux * s, pz = d.z - d.inZ * 1.3 + uz * s;
-    const toOt = ray(px, pz, d.inX, d.inZ, 6), away = Math.min(ray(px, pz, -d.inX, -d.inZ, 6), 3.5);
-    const width = Math.max(1.2, Math.min(5, toOt + away)), k = Math.max(0.9, 1.3 + width / 2 - toOt);
+    // measured at several points along it, as a recess (a scrub bay), a door or a side passage changes one reading
+    const reads = [];
+    for (let s = 0.6; s <= Math.max(0.6, Math.min(free - 0.3, 6)); s += 0.4) {
+      const px = d.x - d.inX * 1.3 + ux * s, pz = d.z - d.inZ * 1.3 + uz * s;
+      const toOt = ray(px, pz, d.inX, d.inZ, 6), away = Math.min(ray(px, pz, -d.inX, -d.inZ, 6), 3.5), wd = toOt + away;
+      if (wd >= 1.0 && wd <= 6) reads.push({ wd, toOt, away });
+    }
+    if (!reads.length) { const s = Math.min(1.4, Math.max(0.3, free - 0.5)), px = d.x - d.inX * 1.3 + ux * s, pz = d.z - d.inZ * 1.3 + uz * s, toOt = ray(px, pz, d.inX, d.inZ, 6), away = Math.min(ray(px, pz, -d.inX, -d.inZ, 6), 3.5); reads.push({ wd: toOt + away, toOt, away }); }
+    const low = key => { const v = reads.map(q => q[key]).sort((p, q) => p - q); return v[Math.floor((v.length - 1) * 0.25)]; }; // the lower quartile
+    const tO = low('toOt'), aw = low('away'), drawnW = label?.width && Math.hypot(label.x - (d.x - d.inX * 1.3), label.z - (d.z - d.inZ * 1.3)) < 12 ? label.width : null;
+    const width = Math.max(1.2, Math.min(5, drawnW && Math.abs(drawnW - (tO + aw)) < 1.2 ? drawnW : tO + aw)), k = Math.max(0.9, 1.3 + width / 2 - tO);
     const cx = d.x - d.inX * k, cz = d.z - d.inZ * k; // the corridor's middle, opposite the door
     const L = Math.max(2.2, Math.min(10, free - 1.2)), beyond = Math.max(0.4, Math.min(4, other - 0.6));
     return { o, d, ux, uz, width, cx, cz, L, beyond, other, label };
@@ -119,7 +127,11 @@ export function createTour(ctx) {
     const world = (x, z) => [mx + Math.cos(rot) * x + Math.sin(rot) * z, mz - Math.sin(rot) * x + Math.cos(rot) * z];
     if (film && r.other < 4.8) { const xe = -len / 2 - 0.015; box(0.03, H, w + 0.06, wallMat, xe, H / 2, 0, w / 1.2); box(0.012, 0.1, w, border, xe + 0.021, 0.05, 0); }
     // the surgical scrub station in the passage (two bays, sensor taps, foot pedals), on a wall near the OT's door
-    let scrub = film ? drawnScrub() : null;
+    let scrub = null;
+    { const own = r.o.fit?.spots?.scrubAt;
+      if (own) { const back = Math.max(1.2, Math.min(2.4, ctx.rayDist(own.x, own.z, own.fx, own.fz, 3, segs) - 0.4)), side = ctx.rayDist(own.x, own.z, -own.fz, own.fx, 3, segs) > ctx.rayDist(own.x, own.z, own.fz, -own.fx, 3, segs) ? 1 : -1;
+        scrub = { x: own.x, z: own.z, camX: own.x + own.fx * back - own.fz * side * 0.5, camZ: own.z + own.fz * back + own.fx * side * 0.5, own: true }; } }
+    if (!scrub && film) scrub = drawnScrub();
     if (!scrub) {
       const otSide = Math.sign(-r.uz * r.d.inX + r.ux * r.d.inZ) || 1, tDoor = -mid;
       for (const side of [otSide, -otSide]) for (const t of [tDoor + 2.1, tDoor + 2.9, tDoor + 3.8, tDoor - 2.1]) {
@@ -157,7 +169,7 @@ export function createTour(ctx) {
       const groups = [];
       for (let i = 0; i < F.length; i += 4) {
         const [a, b] = local(F[i], F[i + 1]), [p, q] = local(F[i + 2], F[i + 3]);
-        if (Math.min(a, p) < -len / 2 - 0.3 || Math.max(a, p) > len / 2 + 0.3 || Math.min(Math.abs(b), Math.abs(q)) > w / 2 + 0.1 || Math.max(Math.abs(b), Math.abs(q)) > w / 2 + 0.4) continue;
+        if (Math.min(a, p) < -len / 2 - 0.3 || Math.max(a, p) > len / 2 + 0.3 || Math.min(Math.abs(b), Math.abs(q)) > w / 2 + 0.1 || Math.max(Math.abs(b), Math.abs(q)) > w / 2 + 1.0) continue; // in the passage or in a recess off it
         const gx = (a + p) / 2, gz = (b + q) / 2; let g = groups.find(k => gx > k.x0 - 0.5 && gx < k.x1 + 0.5 && gz > k.z0 - 0.5 && gz < k.z1 + 0.5);
         if (!g) groups.push(g = { x0: 1e9, x1: -1e9, z0: 1e9, z1: -1e9, n: 0 });
         g.x0 = Math.min(g.x0, a, p); g.x1 = Math.max(g.x1, a, p); g.z0 = Math.min(g.z0, b, q); g.z1 = Math.max(g.z1, b, q); g.n++;

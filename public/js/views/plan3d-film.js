@@ -86,6 +86,7 @@ export function createFilm(ctx, parts) {
     const corr = parts.fitCorridor(r, group, emitters, true);
     parts.lightOt(o, group);
     const S = o.fit.spots, H = S.H, d = r.d, [cx, cz] = S.center;
+    for (const q of S.doors) if (q !== d && !q.main) q.setOpen?.(0);
     if (S.laf) emitters.push({ kind: 'laf', x: S.laf.x, z: S.laf.z, sx: S.laf.sx * 0.9, sz: S.laf.sz * 0.9, y: S.laf.y });
     const air = parts.makeAir(group, emitters);
     // shading: where the walls meet the floor and the ceiling, in the theatre and along the passage
@@ -133,10 +134,16 @@ export function createFilm(ctx, parts) {
 
     // where to stand: the first place that really sees the target, kept inside the room
     const things = [...S.kit, ...S.pendants.map(p => [p.x, p.z])];
+    const clearOfThings = (x, z) => things.every(([px, pz]) => Math.hypot(px - x, pz - z) > 0.85);
     const inWay = (x, z, tx, tz) => { const dx = tx - x, dz = tz - z, L2 = dx * dx + dz * dz || 1; return things.some(([px, pz]) => { const k = ((px - x) * dx + (pz - z) * dz) / L2; if (k < 0.05 || k > 0.85) return false; return Math.hypot(x + dx * k - px, z + dz * k - pz) < 0.45; }); };
     const sees = (x, z, tx, tz) => { const dx = tx - x, dz = tz - z, L = Math.hypot(dx, dz); return L < 0.4 || (ctx.rayDist(x, z, dx / L, dz / L, L, ctx.walls()) >= L - 0.12 && !inWay(x, z, tx, tz)); };
     const inRoom = (x, z) => [Math.max(o.x0 + 0.6, Math.min(o.x1 - 0.6, x)), Math.max(o.z0 + 0.6, Math.min(o.z1 - 0.6, z))];
-    const view = (tx, ty, tz, places, y = EYE) => { for (const [x0, z0] of places) { const [x, z] = inRoom(x0, z0); if (sees(x, z, tx, tz)) return look(x, y, z, tx, ty, tz); } const [x, z] = inRoom(...places[0]); return look(x, y, z, tx, ty, tz); };
+    // the first place that sees the target and stands clear of the equipment; then any place that sees it; then a
+    // place pulled towards the target until it is clear
+    const view = (tx, ty, tz, places, y = EYE) => {
+      for (const [x0, z0] of places) { const [x, z] = inRoom(x0, z0); if (sees(x, z, tx, tz) && clearOfThings(x, z)) return look(x, y, z, tx, ty, tz); }
+      for (const [x0, z0] of places) { const [x, z] = inRoom(x0, z0); for (let k = 0.1; k < 0.75; k += 0.1) { const xx = x + (tx - x) * k, zz = z + (tz - z) * k; if (clearOfThings(xx, zz) && sees(xx, zz, tx, tz)) return look(xx, y, zz, tx, ty, tz); } }
+      const [x, z] = inRoom(...places[0]); return look(x, y, z, tx, ty, tz); };
     const facing = (P, dist, lat = 0) => [P.x + P.inX * dist + P.inZ * lat, P.z + P.inZ * dist - P.inX * lat]; // in front of a thing on a wall
 
     // outside: the drawing from above, then the OT from above, then a three-quarter view over it and its passage
@@ -166,13 +173,21 @@ export function createFilm(ctx, parts) {
     const P_store = C ? view(C.x, 1.15, C.z, [facing(C, 2.7, -0.5), facing(C, 2.7, 0.5), facing(C, 2.3), facing(C, 3.2)]) : null;
     // the surgeon's wall: the control panel and X-ray viewer, and the writing board (beside them, or on the next stretch)
     const Bd = S.board, Q = P && Bd ? { x: (P.x + Bd.x) / 2, z: (P.z + Bd.z) / 2, inX: P.inX, inZ: P.inZ } : P, far = P && Bd ? Math.max(2.9, Math.hypot(P.x - Bd.x, P.z - Bd.z) * 0.75 + 1.6) : 2.9;
-    const P_surg = Q ? view(Q.x, 1.4, Q.z, [facing(Q, far), facing(Q, far, 0.4), facing(Q, far, -0.4), facing(Q, far - 0.5)]) : null;
+    const P_surg = Q ? (() => {
+      for (const dd of [far, far - 0.5, far + 0.4, far - 1.0]) for (const lat of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]) {
+        const [x, z] = inRoom(...facing(Q, dd, lat));
+        if (clearOfThings(x, z) && sees(x, z, P.x, P.z) && (!Bd || sees(x, z, Bd.x, Bd.z))) return look(x, EYE, z, Q.x, 1.4, Q.z);
+      }
+      return view(Q.x, 1.4, Q.z, [facing(Q, far), facing(Q, far, 0.4), facing(Q, far, -0.4), facing(Q, far - 0.5)]); })() : null;
     const P_dig = P ? view(P.x, 1.45, P.z, [facing(P, 1.9, -0.25), facing(P, 1.9, 0.25), facing(P, 2.3)]) : null;
     const pend = S.pendants.find(q => q.kind === 'surgeon') || S.pendants[0];
     const P_dig2 = P_dig && pend ? look(P_dig.x, EYE, P_dig.z, pend.x, 1.85, pend.z) : P_dig;
     const P_centre = view(cx, 0.95, cz, [S.at(1.9, 1.7), S.at(-1.9, 1.7), S.at(1.9, -1.7), S.at(-1.9, -1.7)]);
     const P_plenum = { ...P_centre, pitch: Math.atan2(H - EYE, Math.hypot(cx - P_centre.x, cz - P_centre.z) || 1) * 0.9 };
-    const floorAt = F || C, P_floor = floorAt ? (() => { const [x, z] = inRoom(...facing(floorAt, 2.0, 1.6)); return look(x, EYE, z, floorAt.x + floorAt.inX * 0.35 - floorAt.inZ * 0.4, 0.05, floorAt.z + floorAt.inZ * 0.35 + floorAt.inX * 0.4); })() : P_in;
+    const floorAt = F || C, P_floor = floorAt ? (() => {
+      const tx = floorAt.x + floorAt.inX * 0.35 - floorAt.inZ * 0.4, tz = floorAt.z + floorAt.inZ * 0.35 + floorAt.inX * 0.4;
+      for (const [dd, lat] of [[2.0, 1.6], [2.0, -1.6], [2.4, 1.0], [2.4, -1.0], [1.8, 0.6], [1.8, -0.6], [2.6, 0]]) { const [x, z] = inRoom(...facing(floorAt, dd, lat)); if (clearOfThings(x, z) && sees(x, z, tx, tz)) return look(x, EYE, z, tx, 0.05, tz); }
+      const [x, z] = inRoom(...facing(floorAt, 2.0, 1.6)); return look(x, EYE, z, tx, 0.05, tz); })() : P_in;
     const P_high = look(ox + span * 0.45, span * 1.25 + H + 2, oz + span * 0.95, ox, 0, oz);
     const P_far = look(B.w * 0.12, Math.max(B.w, B.h) * 0.62 + 10, B.h * 0.62 + 6, 0, 0, 0);
 
@@ -181,6 +196,14 @@ export function createFilm(ctx, parts) {
     // scenes: key (its voice line), the shortest it may be, when the voice starts, labels [fraction, text], and go()
     // placing the camera at lt seconds into a scene dur long; st collects what the overlay draws
     const L = (k, a, b, hold = 0) => soft(seg(k, a, b)) * (1 - hold);
+    // when the turn inside (from P_in, a full circle eased over the scene) faces the windows, as a fraction of the scene
+    let winAt = null;
+    if (S.windows?.length) {
+      const wx = S.windows.reduce((a2, q) => a2 + q.x, 0) / S.windows.length, wz = S.windows.reduce((a2, q) => a2 + q.z, 0) / S.windows.length;
+      const want = Math.atan2(-(wx - P_in.x), -(wz - P_in.z)), f = ((((P_in.yaw - want) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2);
+      let lo = 0, hi = 1; for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (ease(m) < f) lo = m; else hi = m; } // ease(k) = f
+      winAt = Math.max(0.3, Math.min(0.82, ((0.3 + lo * (11 - 0.6)) / 11) - 0.06)); // the scene is about 11 s, the turn from 0.3 s to the end
+    }
     const scenes = [
       { key: 'film_plan', min: 10, vAt: 1.6, labels: [[0.12, `${project || 'Your project'} · OT complex`]], pin: name,
         go: (lt, dur) => lerpPose(P_full, P_ot, ease(seg(lt, 2.2, dur - 0.3))), outside: true, rise: () => 0.03, glow: () => 1 },
@@ -188,7 +211,7 @@ export function createFilm(ctx, parts) {
         go: (lt, dur, s) => run.path(s.start + lt), outside: true, shadows: true,
         rise: lt => 0.03 + 0.97 * ease(seg(lt, 0.3, 5)), glow: lt => 1 - seg(lt, 2.5, 5.5), roof: (lt, dur) => ease(seg(lt, 5.2, Math.min(dur - 0.4, 7.8))) },
       { key: 'film_passage', min: 7, vAt: 3.2, labels: [[0.62, 'Clean passage']],
-        go: (lt, dur, s) => run.path(s.start + lt), dip: true, roof: () => 1 },
+        go: (lt, dur, s) => run.path(s.start + lt), dip: true, roof: lt => 1 - ease(seg(lt, 0, 1.6)) },
       { key: 'film_walk', min: 14, vAt: 1.2, lightsOn: true,
         labels: [[0.06, 'KLEENCLAD™ walls · Silver-Ion antimicrobial'], [0.3, 'Matte cladding · 2–2.5 mm'], [0.52, 'Sky ceiling · air diffusers'], [0.76, 'Antistatic vinyl floor']],
         go: (lt, dur) => { const k = ease(seg(lt, 0.4, dur - 0.2)), p = lerpPose(P_eye, P_near, k); p.pitch += 0.34 * Math.sin(Math.PI * seg(k, 0.4, 0.72)) - 0.22 * Math.sin(Math.PI * seg(k, 0.8, 1)); return p; } },
@@ -196,7 +219,7 @@ export function createFilm(ctx, parts) {
       P_disp && { key: 'film_entrance', min: 9, vAt: 1.4, labels: [[0.1, 'WIESPL Digital OR · entrance display'], [0.5, 'Surgery · patient · surgeon · temperature · humidity · pressure']], go: (lt, dur) => lerpPose(P_scrub || P_near, P_disp, ease(seg(lt, 0, Math.min(3.4, dur * 0.4)))) },
       { key: 'film_enter', min: 8, vAt: 3.1, labels: [[0.22, 'WIESPL hermetic sliding door']], door: (lt, dur) => soft(seg(lt, dur * 0.3, dur * 0.3 + 2.2)), shadows: true,
         go: (lt, dur) => (lt < dur * 0.3 ? lerpPose(P_disp || P_scrub || P_near, P_door, ease(seg(lt, 0, dur * 0.3))) : lerpPose(P_door, P_in, ease(seg(lt, dur * 0.48, dur)))) },
-      { key: 'film_inside', min: 11, vAt: 1.0, labels: [[0.1, name]], inside: true, door: lt => 1 - soft(seg(lt, 0.6, 3)), shadows: true,
+      { key: 'film_inside', min: 11, vAt: 1.0, labels: [[0.1, name], winAt ? [winAt, 'Clear glass windows · switchable privacy film'] : null].filter(Boolean), inside: true, smart: winAt ? (lt, dur) => lt > dur * (winAt + 0.07) : null, door: lt => 1 - soft(seg(lt, 0.6, 3)), shadows: true,
         go: (lt, dur) => ({ ...P_in, yaw: P_in.yaw - Math.PI * 2 * ease(seg(lt, 0.3, dur - 0.3)) }) },
       F && { key: 'film_front', min: 7, vAt: 0.9, labels: [[0.15, 'Full-height glass · picture panel']], inside: true, go: (lt, dur) => lerpPose(P_in, P_front, ease(seg(lt, 0, Math.min(3.6, dur * 0.6)))) },
       { key: 'film_walls', min: 10, vAt: 0.5, inside: true, labels: [[0.05, 'KLEENCLAD™ · RAL 7035 light grey, matte'], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
@@ -244,6 +267,7 @@ export function createFilm(ctx, parts) {
     const gl = s.glow ? s.glow(lt, dur) : 0, pulse = 0.5 + 0.5 * Math.sin(t * 2.2);
     R.glowMat.opacity = gl * (0.16 + 0.14 * pulse); R.ringMat.opacity = gl * (0.6 + 0.4 * pulse);
     // the door: shut while we walk up, opening, closing behind us
+    if (s.smart) { const on = !!s.smart(lt, dur); if (on !== R.smartWas) { R.smartWas = on; ctx.smartFilm?.(on); } }
     const door = s.door ? s.door(lt, dur) : 0;
     if (door !== R.doorWas) { R.doorWas = door; R.r.d.setOpen(door); }
     // the passage lights: off until the walk, then on one by one
@@ -321,6 +345,7 @@ export function createFilm(ctx, parts) {
       if (s.key === 'film_walk') run.walkStart = s.start;
     }
     run.walkStart ??= 1e9; run.end = t; run.total = t + END_CARD;
+    ctx.smartFilm?.(false); run.smartWas = false; // windows start clear
     { const rise = run.scenes.find(x => x.key === 'film_rise'), pas = run.scenes.find(x => x.key === 'film_passage'), K = run.keys;
       run.path = posePath([[rise.start, K.P_ot], [rise.start + rise.dur * 0.72, K.P_obl], [pas.start + pas.dur * 0.5, K.P_above], [pas.start + pas.dur, K.P_eye]]); }
     camera.rotation.order = 'YXZ'; camera.fov = FOV; camera.updateProjectionMatrix(); renderer.toneMappingExposure = 0.95;
@@ -447,7 +472,7 @@ export function createFilm(ctx, parts) {
     const cur = run; run = null;
     for (const src of cur.sources || []) { try { src.stop(); } catch { /* already over */ } }
     cur.ac?.close().catch(() => {});
-    cur.r.d?.setOpen?.(1); if (cur.hemi) cur.hemi.intensity = cur.hemiWas;
+    cur.r.d?.setOpen?.(1); if (cur.hemi) cur.hemi.intensity = cur.hemiWas; ctx.smartFilm?.(null); // the window film as the viewer had it
     for (const e of cur.risers) { e.obj.scale.y = 1; e.obj.position.y = e.y0; } camera.near = cur.near; camera.updateProjectionMatrix();
     cur.air?.dispose(); cur.group.userData.dispose?.(); cur.group.userData.disposeFilm?.(); ctx.scene.remove(cur.group);
     box.classList.add('hidden'); note.classList.add('hidden'); stage.classList.remove('p3-touring');
