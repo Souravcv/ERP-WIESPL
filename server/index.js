@@ -47,7 +47,7 @@ const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
 import * as roles from './roles.js';
-import { planFile, isCad, preparePlan, prepareMissingPlans } from './plans.js';
+import { planFile, planReady, isCad, preparePlan, prepareMissingPlans } from './plans.js';
 import { fyOf } from '../public/js/calc.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -963,8 +963,8 @@ api.get('/files/:id/plan', wrap(async (req, res) => {
   const a = cadFile(req.params.id);
   if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
   const f = planCache(a.id);
-  if (!fs.existsSync(f)) await Promise.race([preparePlan(a), new Promise(ok => setTimeout(ok, 120000))]);
-  if (!fs.existsSync(f)) throw new HttpError(404, 'Not converted yet');
+  if (!planReady(a)) await Promise.race([preparePlan(a), new Promise(ok => setTimeout(ok, 120000))]);
+  if (!planReady(a)) throw new HttpError(404, 'Not converted yet');
   res.type('application/json').sendFile(f);
 }));
 api.put('/files/:id/plan', express.json({ limit: '60mb' }), wrap(req => {

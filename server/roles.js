@@ -336,6 +336,7 @@ export function saveAttachment(entity, recordId, { filename, mime, note }, buf, 
   fs.writeFileSync(path.join(UPLOAD_DIR, stored), buf);
   const id = Number(db.prepare('INSERT INTO attachments (entity, record_id, filename, mime, size, stored, note, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(entity, Number(recordId), name, mime || 'application/octet-stream', buf.length, stored, note || null, user.name).lastInsertRowid);
+  dropDrawingCache(id); // a number freed by a deleted file can come back: never show that file's 3D for this one
   audit(user.name, entity, Number(recordId), 'attach', name);
   return { id, filename: name, size: buf.length };
 }
@@ -348,11 +349,15 @@ export function attachmentFile(id) {
   return { ...a, full };
 }
 
+// The 3D of a CAD drawing and the OT finishes chosen on it are kept by the file's number (server/plans.js).
+const dropDrawingCache = id => { for (const f of [`${Number(id)}.json`, `${Number(id)}.finishes.json`]) fs.rmSync(path.join(UPLOAD_DIR, 'plans', f), { force: true }); };
+
 // Files of a record that was deleted.
 export function removeAttachmentsOf(entity, recordId) {
   for (const a of db.prepare('SELECT id, stored FROM attachments WHERE entity = ? AND record_id = ?').all(entity, Number(recordId))) {
     fs.rmSync(path.join(UPLOAD_DIR, a.stored), { force: true });
     db.prepare('DELETE FROM attachments WHERE id = ?').run(a.id);
+    dropDrawingCache(a.id);
   }
 }
 
@@ -361,5 +366,6 @@ export function deleteAttachment(id, user, canDeleteAny) {
   if (a.uploaded_by !== user.name && !canDeleteAny) throw new HttpError(403, 'Only the person who uploaded it (or a manager) can remove this file');
   fs.rmSync(a.full, { force: true });
   db.prepare('DELETE FROM attachments WHERE id = ?').run(a.id);
+  dropDrawingCache(a.id);
   audit(user.name, a.entity, a.record_id, 'remove file', a.filename);
 }

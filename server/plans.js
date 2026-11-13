@@ -66,8 +66,11 @@ function readFile(a, file, via) {
   });
 }
 
+// A 3D older than its drawing belongs to an earlier file that had the same number: read the drawing again.
+export const planReady = a => { try { return fs.statSync(planFile(a.id)).mtimeMs >= fs.statSync(a.full).mtimeMs; } catch { return false; } };
+
 export function preparePlan(a) {
-  if (fs.existsSync(planFile(a.id))) return Promise.resolve(true);
+  if (planReady(a)) return Promise.resolve(true);
   if (jobs.has(a.id)) return jobs.get(a.id);
   const job = chain.then(() => read(a)).catch(() => false).finally(() => jobs.delete(a.id));
   jobs.set(a.id, job); chain = job;
@@ -76,7 +79,7 @@ export function preparePlan(a) {
 
 export function prepareMissingPlans() {
   for (const { id } of db.prepare("SELECT id FROM attachments WHERE lower(filename) LIKE '%.dwg' OR lower(filename) LIKE '%.dxf'").all()) {
-    if (fs.existsSync(planFile(id))) continue;
+    if (fs.existsSync(planFile(id))) { try { if (planReady(roles.attachmentFile(id))) continue; } catch { continue; } }
     try { preparePlan(roles.attachmentFile(id)); } catch { /* the file is gone */ }
   }
 }
