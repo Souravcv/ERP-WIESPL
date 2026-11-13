@@ -600,7 +600,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       h('div.p3-box', h('b', 'Heights'), h('div.p3-row', h('span', 'Walls'), num(wallH, 1, 10, 0.1, v => { wallH = v; }), h('span', 'm')),
         h('div.p3-row', h('span', 'Furniture'), num(furnH, 0, 2, 0.1, v => { furnH = v; }), h('span', 'm (0 = flat)'))),
       plan.areas.length > 1 ? h('div.p3-box', h('b', 'Part of the sheet'), h('select', { onchange: e => { areaIdx = Number(e.target.value); current = null; rebuild(); views.persp(); } },
-        plan.areas.map((a, i) => h('option', { value: i, ...(i === areaIdx ? { selected: true } : {}) }, `${i === 0 ? 'Main drawing' : 'Other area ' + i} · ${Math.round(a.x1 - a.x0)} × ${Math.round(a.y1 - a.y0)} m`)))) : null,
+        plan.areas.map((a, i) => h('option', { value: i, ...(i === areaIdx ? { selected: true } : {}) }, `${a.title || (i === 0 ? 'Main drawing' : 'Other area ' + i)} · ${Math.round(a.x1 - a.x0)} × ${Math.round(a.y1 - a.y0)} m`)))) : null,
       h('div.p3-box', h('b', 'Layers'), h('p.muted', 'What each CAD layer is. Your choices are remembered for the next drawing.'),
         h('table.p3-layers', h('tbody', layerRows))));
   }
@@ -687,7 +687,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   // An old AutoCAD version (e.g. 2000) can come out of the reader badly damaged: say so, and how to fix it
   if ((plan.broken || 0) > Math.max(300, plan.segments * 0.2)) {
     stage.append(h('div.p3-warn', h('b', '⚠ Much of this drawing could not be read'),
-      h('span', `${plan.broken.toLocaleString()} parts came out damaged, so walls, doors and rooms may be missing. The file is probably saved in an old AutoCAD version. Open it in AutoCAD, choose Save As → AutoCAD 2018 Drawing (*.dwg) or DXF, and attach that file instead.`),
+      h('span', `${plan.broken.toLocaleString()} parts came out damaged, so walls, doors and rooms may be missing: the DWG reader cannot read this file properly. Open it in AutoCAD, choose Save As → AutoCAD 2018 DXF (*.dxf), and attach the DXF instead (the CRM reads DXF itself). Or install the free ODA File Converter on the CRM computer: then every DWG is converted automatically.`),
       h('button.btn.small', { type: 'button', onclick: e => e.target.parentElement.remove() }, 'OK')));
   }
 }

@@ -17,6 +17,20 @@ export function cleanText(s) {
     .replace(/[ \t]+/g, ' ').replace(/\n /g, '\n').trim();
 }
 
+// The reader turns C arrays into JS arrays by their stored length. A damaged item (e.g. MTEXT column heights with a
+// garbage count) makes that throw and stops the whole drawing: give such a field an empty list instead.
+export function guardReader(lib) {
+  for (const name of Object.getOwnPropertyNames(Object.getPrototypeOf(lib))) {
+    if (!/^dwg_ptr_to_.*array$/.test(name) || typeof lib[name] !== 'function') continue;
+    const orig = lib[name].bind(lib);
+    lib[name] = (ptr, size) => {
+      if (!ptr || !Number.isFinite(size) || size < 0 || size > 5e6) return [];
+      try { return orig(ptr, size); } catch { return []; }
+    };
+  }
+  return lib;
+}
+
 // 2D affine transform [a, b, c, d, e, f]: x' = a x + c y + e, y' = b x + d y + f
 const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3], m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
 const ap = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
@@ -31,8 +45,29 @@ const insertMatrix = (ins, base) => {
   return m;
 };
 
+// Drawings saved without units (INSUNITS 0): feet-and-inch labels (15'-9") mean the drawing is in inches; otherwise mm.
+function guessUnits(db) {
+  const set = UNIT_TO_M[db.header?.INSUNITS];
+  if (set) return { scale: set, units: { 1: 'inch', 2: 'feet', 4: 'mm', 5: 'cm', 6: 'm', 14: 'dm' }[db.header.INSUNITS], guessed: false };
+  let feet = 0, mm = 0, seen = 0;
+  const look = ents => { for (const e of ents || []) { if (seen > 20000) return; if (e.type !== 'TEXT' && e.type !== 'MTEXT') continue; seen++; const t = String(e.text || ''); if (/\d+\s*'\s*-?\s*\d*(\s*\d\/\d|[½¼¾])?\s*"/.test(t)) feet++; if (/\d\s*MM\b/i.test(t)) mm++; } };
+  for (const b of db.tables?.BLOCK_RECORD?.entries || []) look(b.entities);
+  look(db.entities);
+  return feet > mm * 2 && feet >= 5 ? { scale: 0.0254, units: 'inch', guessed: true } : { scale: 0.001, units: 'mm', guessed: true };
+}
+
+// The title of each separate drawing on the sheet: a floor-plan / section / elevation heading inside it, else its
+// biggest text. "THIRD FLOOR PLAN" lets the viewer offer that floor by name.
+const TITLE_RE = /\b(BASEMENT|GROUND|FIRST|SECOND|THIRD|FOURTH|FIFTH|SIXTH|SEVENTH|EIGHTH|NINTH|TENTH|TERRACE|ROOF|STILT|PODIUM|MEZZANINE|TYPICAL|\d+\s*(ST|ND|RD|TH))\b[^\n]*\b(FLOOR|LEVEL)\b[^\n]*\bPLAN\b|\b(FLOOR|SITE|ROOF|TERRACE|LAYOUT|FURNITURE)\s+PLAN\b|\bSECTION\s+[A-Z0-9]+\s*-\s*[A-Z0-9]+\b|\bELEVATION\b/i;
+function areaTitle(texts, A) {
+  const inside = texts.filter(t => t.x >= A.x0 && t.x <= A.x1 && t.y >= A.y0 && t.y <= A.y1 && /[A-Za-z]{3,}/.test(t.t));
+  const heads = inside.filter(t => TITLE_RE.test(t.t) && !/\bLVL\b|SLAB|LINTEL/i.test(t.t)).sort((a, b) => b.h - a.h);
+  const t = heads[0] || inside.sort((a, b) => b.h - a.h)[0];
+  return t ? t.t.split('\n')[0].replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+}
+
 export function extractPlan(db, { maxSegments = 600000 } = {}) {
-  const scale = UNIT_TO_M[db.header?.INSUNITS] ?? 0.001;
+  const unit = guessUnits(db), scale = unit.scale;
   const blocks = new Map((db.tables?.BLOCK_RECORD?.entries || []).map(b => [b.name, b]));
   const modelSpace = (db.tables?.BLOCK_RECORD?.entries || []).find(b => /^\*model_space$/i.test(b.name));
   const roots = modelSpace?.entities?.length ? modelSpace.entities : (db.entities || []).filter(e => !modelSpace || e.ownerBlockRecordSoftId === modelSpace.handle);
@@ -100,6 +135,7 @@ export function extractPlan(db, { maxSegments = 600000 } = {}) {
           const p = e.insertionPoint || e.startPoint; if (!p) break;
           const t = cleanText(e.text); if (!t) break;
           const [x, y] = ap(m, p.x, p.y);
+          if (far(x) || far(y)) { broken++; break; } // a label thrown off the sheet by a garbled drawing
           texts.push({ x: x * scale, y: y * scale, h: (e.textHeight || 100) * scale * Math.hypot(m[0], m[1]), t, layer, w: e.type === 'MTEXT' ? (e.rectWidth || 0) * scale : 0 });
           break;
         }
@@ -134,9 +170,10 @@ export function extractPlan(db, { maxSegments = 600000 } = {}) {
     areas.push({ x0, y0, x1, y1, n });
   }
   areas.sort((a, b) => b.n - a.n);
+  for (const a of areas.slice(0, 12)) a.title = areaTitle(texts, a);
   const round = a => a.map(v => Math.round(v * 1000) / 1000);
   return {
-    version: 1, units: 'm', segments: count, skipped, broken, cut: visits > MAX_VISITS,
+    version: 1, units: 'm', drawingUnits: unit.units, unitsGuessed: unit.guessed, segments: count, skipped, broken, cut: visits > MAX_VISITS,
     layers: Object.fromEntries(Object.entries(layers).map(([k, v]) => [k, { color: layerColors[k] ?? 7, segs: round(v) }])),
     texts: texts.map(t => ({ ...t, x: Math.round(t.x * 1000) / 1000, y: Math.round(t.y * 1000) / 1000 })),
     areas: areas.slice(0, 12),
