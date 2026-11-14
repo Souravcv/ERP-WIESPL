@@ -86,7 +86,7 @@ export async function plan3dView(root, fileId) {
     }
   } catch (e) { status.textContent = `⚠ ${e.message}`; return; }
   const [meta, saved] = await Promise.all([api(`/files/${id}/meta`).catch(() => null), api(`/files/${id}/finishes`).catch(() => null)]);
-  build(stage, side, plan, meta, saved?.finishes || {}, id, name.replace(/\.(dwg|dxf)$/i, ''));
+  build(stage, side, plan, meta, saved?.finishes || {}, id, meta?.place || name.replace(/\.(dwg|dxf)$/i, '')); // the hospital's name when the form has it
 }
 
 // premium look: solid walls with dark section-cut tops, soft shadows, studio light, tiled floor, raised furniture
@@ -101,7 +101,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   const roles = loadRoles();
   const roleOf = l => roles[l] || guessRole(l);
   const small = Math.min(stage.clientWidth, stage.clientHeight) < 500 || /Mobi|Android/i.test(navigator.userAgent);
-  let areaIdx = 0, wallH = 3, furnH = 0.6, showLabels = true, current = null, showFitted = true, smartFilm = false;
+  let areaIdx = 0, wallH = 3, furnH = 0.6, showLabels = true, current = null, showFitted = true, smartFilm = false, otherDoors = false;
 
   stage.replaceChildren(...stage.querySelectorAll('.p3-fs'));
   const renderer = new T.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
@@ -144,7 +144,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   const hoverGlow = new T.Mesh(new T.PlaneGeometry(1, 1), new T.MeshBasicMaterial({ color: 0x2f9bff, transparent: true, opacity: 0.16, depthWrite: false }));
   hoverGlow.rotation.x = -Math.PI / 2; hoverGlow.position.y = 0.025; hoverGlow.visible = false; scene.add(hoverGlow);
   let labels = [], center = [0, 0], size = 50, box = { w: 50, h: 50 }, occ = new Float32Array(0); // occ: solid walls in scene x / z, for views from inside
-  let occWalk = new Float32Array(0); // what a person walking cannot pass: walls, columns and glass
+  let occWalk = new Float32Array(0), occWalkDrawn = occWalk; // what a person walking cannot pass: walls, columns and glass (and the OTs' closed-off openings)
   let corridors = []; // corridor / passage names in the drawing, for the explainer tour
   let fx = {}; // the drawing's doors, plenums and return-air grilles in scene x / z, so each OT is fitted as drawn
   let filmHero = null; // the OT the client film is about: fitted round its main door
@@ -215,6 +215,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       const glass = buckets.glass || [];
       occWalk = new Float32Array(occ.length + glass.length); occWalk.set(occ);
       for (let i = 0; i < glass.length; i += 4) occWalk.set([X(glass[i]), Z(glass[i + 1]), X(glass[i + 2]), Z(glass[i + 3])], occ.length + i);
+      occWalkDrawn = occWalk;
     }
     { // the fixtures as drawn: the door layer, and layers named plenum / grille
       const toScene = segs => { const o = new Float32Array(segs.length); for (let i = 0; i < segs.length; i += 4) o.set([X(segs[i]), Z(segs[i + 1]), X(segs[i + 2]), Z(segs[i + 3])], i); return o; };
@@ -236,7 +237,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       mesh(faces(buckets.glass, X, Z, 0, wallH, 1), new T.MeshStandardMaterial({ color: 0xa8d3f3, roughness: 0.04, metalness: 0.1, transparent: true, opacity: 0.32, depthWrite: false, side: T.DoubleSide, envMapIntensity: 1.4 }), false);
       group.add(new T.LineSegments(outline(buckets.glass, X, Z, wallH), new T.LineBasicMaterial({ color: 0x4f8fc7 })));
     }
-    for (const [r, y, c] of [['floor', 0.006, 0xa7b2bf], ['door', 0.02, 0xb4733a]]) if (buckets[r]?.length) group.add(new T.LineSegments(outline(buckets[r], X, Z, y), new T.LineBasicMaterial({ color: c })));
+    if (buckets.floor?.length) group.add(new T.LineSegments(outline(buckets.floor, X, Z, 0.006), new T.LineBasicMaterial({ color: 0xa7b2bf })));
     // floor: tiled vinyl on a slab
     const fw = box.w + 4, fd = box.h + 4;
     const ft = tile.clone(); ft.needsUpdate = true; ft.repeat.set(fw / 1.2, fd / 1.2);
@@ -285,6 +286,11 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
       selected = ots.find(o => o.key === was) || null;
     }
     drawFitted(); // before the furniture: the fit-out says where its scrub station replaces the drawn basins
+    { // the drawing's door lines, except inside a fitted OT (it shows its own doors)
+      let dl = buckets.door || [];
+      if (showFitted && ots.length && dl.length) { const inOt = (x, z) => ots.some(o => x > o.x0 - 0.25 && x < o.x1 + 0.25 && z > o.z0 - 0.25 && z < o.z1 + 0.25); const keep = []; for (let i = 0; i < dl.length; i += 4) if (!(inOt(X(dl[i]), Z(dl[i + 1])) && inOt(X(dl[i + 2]), Z(dl[i + 3])))) keep.push(dl[i], dl[i + 1], dl[i + 2], dl[i + 3]); dl = keep; }
+      if (dl.length) group.add(new T.LineSegments(outline(dl, X, Z, 0.02), new T.LineBasicMaterial({ color: 0xb4733a })));
+    }
     // furniture and equipment as low white blocks (or flat when the height is 0); inside a fitted OT the WIESPL fit-out replaces it
     let furn = buckets.furniture || [];
     if (showFitted && ots.length && furn.length) {
@@ -490,10 +496,13 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     for (const o of ots) {
       if (filmHero && !o.walls && o !== filmHero) continue;
       const film = o === filmHero, f = film ? { ...finishOf(o), ...FILM_FINISH } : finishOf(o);
-      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null });
+      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null, otherDoors });
       mergeStatic(T, g); mergeStatic(T, ceiling); // a few meshes per OT instead of hundreds
       fitLayer.add(g); ceilLayer.add(ceiling); o.fit = { spots, group: g, ceiling };
     }
+    // the openings closed off in the OTs are walls for a person walking (and for the tour and the film)
+    const closed = ots.flatMap(o => o.fit?.spots?.closed || []);
+    occWalk = new Float32Array(occWalkDrawn.length + closed.length * 4); occWalk.set(occWalkDrawn); closed.forEach((q, i) => occWalk.set(q, occWalkDrawn.length + i * 4));
     renderer.shadowMap.needsUpdate = true;
   }
   const finishesChanged = () => { saveSoon(); drawOtMarks(); drawFitted(); drawSide(); };
@@ -602,7 +611,8 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
           h('p.muted', selected ? `Walks into ${selected.name}. Sound on.` : 'Walks from the corridor into the OT with the longest corridor outside. Tap an OT first to choose it. Sound on.')),
         h('div.toolbar', h('label.p3-check', h('input', { type: 'checkbox', ...(showLabels ? { checked: true } : {}), onchange: e => { showLabels = e.target.checked; rebuild(); } }), ' Room names'),
           h('label.p3-check', h('input', { type: 'checkbox', ...(showFitted ? { checked: true } : {}), onchange: e => { showFitted = e.target.checked; rebuild(); } }), ' Finished OTs'),
-          h('label.p3-check', { title: 'Windows: electrostatic (switchable) film, clear when off, frosted for privacy when on' }, h('input', { type: 'checkbox', ...(smartFilm ? { checked: true } : {}), onchange: e => { smartFilm = e.target.checked; kit.setSmartFilm(smartFilm); } }), ' Window film on (frosted)')),
+          h('label.p3-check', { title: 'Windows: electrostatic (switchable) film, clear when off, frosted for privacy when on' }, h('input', { type: 'checkbox', ...(smartFilm ? { checked: true } : {}), onchange: e => { smartFilm = e.target.checked; kit.setSmartFilm(smartFilm); } }), ' Window film on (frosted)'),
+          h('label.p3-check', { title: 'Show the drawing’s other doors of each OT (e.g. into a lab). Off: only the main door, from the passage' }, h('input', { type: 'checkbox', ...(otherDoors ? { checked: true } : {}), onchange: e => { otherDoors = e.target.checked; rebuild(); } }), ' Other OT doors')),
         roomSel, current && !walk.on ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
         null),
       h('div.p3-box', h('b', 'Quantities'), h('p.muted', 'Floor, wall panels, ceiling and coving per OT, from the room sizes in the drawing.'), h('button.btn.small', { onclick: () => openQuantities().catch(fail) }, '📐 Quantities from the drawing')),

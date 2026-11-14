@@ -290,12 +290,22 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
       if (score(main) > 10) main = null;
     }
     main ||= doorOps.find(o => o.drawn?.kind === 'sliding' && !o.tag) || doorOps.reduce((p, q) => (!p || q.g1 - q.g0 > p.g1 - p.g0 ? q : p), null);
-    for (const o of doorOps) door(o.s, o.g0, o.g1, o.plane, o.drawn, o === main);
+    for (const o of doorOps) { if (o === main || opt.otherDoors) door(o.s, o.g0, o.g1, o.plane, o.drawn, o === main); else closeOff(o); }
     for (const o of openings) if (o.kind === 'window') windowAt(o);
     const m = spots.doors.find(dd => dd.main);
     if (m) scrubStation(m);
   }
   spots.runs = allRuns;
+
+  // an opening that gets no door: panelled up like the wall round it, so the OT has its one main door
+  function closeOff(o) {
+    const { s, g0, g1, plane } = o, len = g1 - g0, mid = (g0 + g1) / 2;
+    const at = (y0, y1, mat, part, off = 0, thick = T_PANEL) => { const g = panelBox(T, len, y1 - y0, thick, s.along), p = plane + s.n * off; const m = add(group, g, mat, s.along === 'x' ? mid : p, (y0 + y1) / 2, s.along === 'x' ? p : mid); m.userData.part = part; (s.meshes ||= []).push(m); };
+    at(0, DADO, P.low, 'wallLow'); at(DADO, DOOR_H, P.high, 'wallHigh');
+    at(0, 0.1, kit.floor(finish.floor_border), 'floorBorder', T_PANEL / 2 + 0.006, 0.012);
+    const [ax, az] = s.along === 'x' ? [g0, plane] : [plane, g0], [bx, bz] = s.along === 'x' ? [g1, plane] : [plane, g1];
+    (spots.closed ||= []).push([ax, az, bx, bz]); // walls for walking: nobody walks through it
+  }
 
   // the door / window number written next to an opening in the drawing (D2, W10 …), if any
   function tagAt(s, t) {

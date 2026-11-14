@@ -174,7 +174,7 @@ export function createFilm(ctx, parts) {
     // the surgeon's wall: the control panel and X-ray viewer, and the writing board (beside them, or on the next stretch)
     const Bd = S.board, Q = P && Bd ? { x: (P.x + Bd.x) / 2, z: (P.z + Bd.z) / 2, inX: P.inX, inZ: P.inZ } : P, far = P && Bd ? Math.max(2.9, Math.hypot(P.x - Bd.x, P.z - Bd.z) * 0.75 + 1.6) : 2.9;
     const P_surg = Q ? (() => {
-      for (const dd of [far, far - 0.5, far + 0.4, far - 1.0]) for (const lat of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5]) {
+      for (const dd of [far, far - 0.5, far + 0.4, far - 1.0, far - 1.5]) for (const lat of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5]) {
         const [x, z] = inRoom(...facing(Q, dd, lat));
         if (clearOfThings(x, z) && sees(x, z, P.x, P.z) && (!Bd || sees(x, z, Bd.x, Bd.z))) return look(x, EYE, z, Q.x, 1.4, Q.z);
       }

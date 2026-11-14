@@ -1006,7 +1006,14 @@ api.put('/files/:id/finishes', express.json({ limit: '500kb' }), wrap(req => {
 api.get('/files/:id/meta', wrap(req => {
   const a = roles.attachmentFile(req.params.id);
   if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
-  return { id: a.id, entity: a.entity, record_id: a.record_id, filename: a.filename, canWrite: canWrite(a.entity, req.user.role) };
+  // the name the 3D, the tour and the film show: the hospital on the enquiry form, else its client; a project's name
+  let place = null;
+  try {
+    if (a.entity === 'enquiries') { const e = db.prepare('SELECT hospital_name, client_name FROM enquiries WHERE id = ?').get(a.record_id); place = e?.hospital_name || e?.client_name || null; }
+    else if (a.entity === 'projects') place = db.prepare('SELECT name FROM projects WHERE id = ?').get(a.record_id)?.name || null;
+    else if (a.entity === 'material_approvals') place = db.prepare('SELECT p.name FROM material_approvals m JOIN projects p ON p.id = m.project_id WHERE m.id = ?').get(a.record_id)?.name || null;
+  } catch { place = null; }
+  return { id: a.id, entity: a.entity, record_id: a.record_id, filename: a.filename, place: place ? String(place).trim() : null, canWrite: canWrite(a.entity, req.user.role) };
 }));
 // OT names and sizes read from a CAD drawing → the enquiry's detailed requirement form (same name = updated, new = added)
 api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: '200kb' }), wrap(req => {
