@@ -367,8 +367,17 @@ export function createTour(ctx) {
   }
 
   // ---------------------------------------------------------------- what is drawn over the 3D (on screen and in the video)
-  const overlay = h('canvas.p3-tourov'), box = h('div.p3-tour.hidden', overlay, h('button.btn.small.p3-tourstop', { type: 'button', onclick: () => stop(true) }, '✕ Stop tour'));
+  const overlay = h('canvas.p3-tourov');
+  const pauseBtn = h('button.btn.small', { type: 'button', onclick: () => pause() }, '⏸ Pause');
+  const box = h('div.p3-tour.hidden', overlay, h('div.p3-filmbtns', pauseBtn, h('button.btn.small', { type: 'button', onclick: () => stop(true) }, '✕ Stop tour')));
   stage.append(box);
+  // paused by the viewer (run.held): the voice, music, clock and any recording wait until Play
+  function pause() {
+    if (!run?.ac || !run.steps) return;
+    run.held = !run.held; pauseBtn.textContent = run.held ? '▶ Play' : '⏸ Pause';
+    if (run.held) { run.ac.suspend().catch(() => {}); if (run.rec?.rec.state === 'recording') run.rec.rec.pause(); }
+    else { run.paused = false; run.ac.resume().catch(() => {}); if (run.rec?.rec.state === 'paused') run.rec.rec.resume(); }
+  }
   const wrapped = new Map();
   function wrap(g, text, maxW) { const key = `${g.font}|${Math.round(maxW)}|${text}`; if (!wrapped.has(key)) wrapped.set(key, wrapRaw(g, text, maxW)); return wrapped.get(key); }
   function wrapRaw(g, text, maxW) { const words = text.split(' '), lines = []; let line = ''; for (const w of words) { const t = line ? `${line} ${w}` : w; if (g.measureText(t).width > maxW && line) { lines.push(line); line = w; } else line = t; } if (line) lines.push(line); return lines; }
@@ -478,11 +487,12 @@ export function createTour(ctx) {
     // all wait, so nothing runs ahead of the picture; they carry on with the next frame drawn
     run.lastFrame = performance.now();
     run.watch = setInterval(() => {
-      if (!run || run.paused || performance.now() - run.lastFrame < 500) return;
+      if (!run || run.held || run.paused || performance.now() - run.lastFrame < 500) return;
       run.paused = true; run.ac.suspend().catch(() => {}); if (run.rec?.rec.state === 'recording') run.rec.rec.pause();
     }, 250);
     ctx.focus?.(r.o); ctx.indoor(true, { soft: true }); camera.rotation.order = 'YXZ'; ctx.shadows?.();
     if (!record) { renderer.setPixelRatio(Math.min(1.25, run.pr)); ctx.resize?.(); } // fewer pixels: smooth movement on any PC
+    pauseBtn.textContent = '⏸ Pause';
     box.classList.remove('hidden'); stage.classList.add('p3-touring');
   }
 
@@ -496,8 +506,8 @@ export function createTour(ctx) {
   function frame(now) {
     if (!run?.steps) return false;
     run.lastFrame = performance.now();
-    if (run.paused) { run.paused = false; run.ac.resume().catch(() => {}); if (run.rec?.rec.state === 'paused') run.rec.rec.resume(); }
-    const t = run.ac.currentTime - run.t0, dt = Math.min(0.1, (now - (run.last || now)) / 1000); run.last = now;
+    if (run.paused && !run.held) { run.paused = false; run.ac.resume().catch(() => {}); if (run.rec?.rec.state === 'paused') run.rec.rec.resume(); }
+    const t = run.ac.currentTime - run.t0, dt = run.held ? 0 : Math.min(0.1, (now - (run.last || now)) / 1000); run.last = now;
     run.air?.step(dt);
     let i = run.steps.findIndex(x => t < x.start + x.dur); if (i === -1) i = run.steps.length - 1;
     const s = t < TITLE ? null : run.steps[i];

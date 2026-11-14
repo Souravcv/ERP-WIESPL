@@ -107,12 +107,12 @@ export const TOUR_LINES = {
     show: 'From the corridor to the table, every part is designed, built and installed by WIESPL. Turnkey solutions for healthcare.',
     say: 'From the corridor to the table, every part is designed, built and installed by Wee-spell. Turnkey solutions for healthcare.',
   },
-  // the client film (plan3d-film.js): spoken only, the screen shows one-line labels. Written for the Sindhu Hospital
-  // OT 09 film: change the lines that name the OT and run tools/tour-voice.mjs film_plan film_enter for another one.
+  // the client film (plan3d-film.js): spoken only, the screen shows one-line labels. The lines name no hospital and no
+  // OT: the labels show the enquiry's hospital name and the OT's own name, so one set of clips serves every drawing.
   film_plan: {
     title: "The complex",
-    show: "This is the operation theatre complex at Sindhu Hospital, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into Operation Theatre number nine.",
-    say: "This is the operation theatre complex at Sindhu Hospital, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into Operation Theatre number nine.",
+    show: "This is your operation theatre complex, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into the operation theatre.",
+    say: "This is your operation theatre complex, built in 3D from your own drawing: every theatre, clean passage and support room, just as it is drawn. We will take you into the operation theatre.",
   },
   film_rise: {
     title: "Self-standing system",
@@ -136,8 +136,8 @@ export const TOUR_LINES = {
   },
   film_enter: {
     title: "Entering the theatre",
-    show: "Now, we enter Operation Theatre number nine.",
-    say: "Now, we enter Operation Theatre number nine.",
+    show: "Now, we enter the operation theatre.",
+    say: "Now, we enter the operation theatre.",
   },
   film_inside: {
     title: "Inside",
