@@ -154,6 +154,11 @@ export const TOUR_LINES = {
     show: "Facing us is a full height glass wall, with a calming picture at its centre, from floor to ceiling.",
     say: "Facing us is a full height glass wall, with a calming picture at its centre, from floor to ceiling.",
   },
+  film_front_store: {
+    title: "Glass wall",
+    show: "Facing us is a full height glass wall, with a calming picture from floor to ceiling, and built-in storage set into the glass.",
+    say: "Facing us is a full height glass wall, with a calming picture from floor to ceiling, and built-in storage set into the glass.",
+  },
   film_walls: {
     title: "Walls and ceiling",
     show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
@@ -168,6 +173,11 @@ export const TOUR_LINES = {
     title: "Storage",
     show: "On the right is built-in storage, with glass fronted doors.",
     say: "On the right is built-in storage, with glass fronted doors.",
+  },
+  film_storage_front: {
+    title: "Storage",
+    show: "The storage is built into the glass wall, with glass fronted doors, so supplies are always in sight.",
+    say: "The storage is built into the glass wall, with glass fronted doors, so supplies are always in sight.",
   },
   film_surgeon: {
     title: "Surgeon’s wall",
@@ -188,6 +198,26 @@ export const TOUR_LINES = {
     title: "Surgeon’s wall",
     show: "Here is the surgeon’s wall, with the control panel and an X-ray viewer.",
     say: "Here is the surgeon’s wall, with the control panel and an X-ray viewer.",
+  },
+  film_surgeon_nx: {
+    title: "Surgeon’s wall",
+    show: "Opposite the storage is the surgeon’s wall, with the control panel and a writing board.",
+    say: "Opposite the storage is the surgeon’s wall, with the control panel and a writing board.",
+  },
+  film_surgeon_nx_nb: {
+    title: "Surgeon’s wall",
+    show: "Opposite the storage is the surgeon’s wall, with the control panel.",
+    say: "Opposite the storage is the surgeon’s wall, with the control panel.",
+  },
+  film_surgeon_ns_nx: {
+    title: "Surgeon’s wall",
+    show: "Here is the surgeon’s wall, with the control panel and a writing board.",
+    say: "Here is the surgeon’s wall, with the control panel and a writing board.",
+  },
+  film_surgeon_ns_nx_nb: {
+    title: "Surgeon’s wall",
+    show: "Here is the surgeon’s wall, with the control panel.",
+    say: "Here is the surgeon’s wall, with the control panel.",
   },
   film_centre_np: {
     title: "The centre",

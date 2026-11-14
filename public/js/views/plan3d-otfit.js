@@ -174,12 +174,14 @@ function doorLeaf(T, kit, mat, w, h, handle = false) {
 // drawing shows them (a straight track: sliding, parked on the drawn side; arcs: swing), the plenum and the return-air
 // grilles where they are drawn. opt.chosen: the client chose this OT's door, so it wins over the drawing.
 // opt.layout 'entry': laid out round the main door (the client film): the wall facing the door is full-height glass
-// with a picture from floor to ceiling in its middle, storage on the right, the surgeon's wall on the left.
+// with a picture from floor to ceiling, storage set into it at its right end, the surgeon's wall on the left.
+// opt.parts: what the OT has, each on unless false (FILM_PARTS in plan3d.js): picture, frontStore, store, panel, xray,
+// board, risers, pendants (winFilm and display are for the film itself).
 export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   const group = new T.Group(), ceiling = new T.Group();
   const { x0, x1, z0, z1 } = room, w = x1 - x0, d = z1 - z0, cx0 = (x0 + x1) / 2, cz0 = (z0 + z1) / 2;
   const H = Math.min(wallH, 3.0), long = w >= d, span = long ? w : d, across = long ? d : w;
-  const fx = opt.fx || {};
+  const fx = opt.fx || {}, parts = opt.parts || {}, has = k => parts[k] !== false;
   const within = (segs, m) => { const out = []; if (!segs) return out; for (let i = 0; i < segs.length; i += 4) { const a = segs[i], b = segs[i + 1], c = segs[i + 2], e = segs[i + 3]; if (Math.min(a, c) > x1 + m || Math.max(a, c) < x0 - m || Math.min(b, e) > z1 + m || Math.max(b, e) < z0 - m) continue; out.push(a, b, c, e); } return out; };
   const doorSegs = within(fx.door, 0.6);
   let plen = null; // the plenum as drawn: the outline of its lines inside the room
@@ -193,7 +195,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   const rotLong = long ? 0 : Math.PI / 2;
   // faces: every stretch of panelled wall (runs, under and over windows, over doors, closed-off doorways) for the film's
   // shading; foot: false where there is no wall down to the floor (a doorway)
-  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, faces: [], tPanel: 0.04 };
+  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, faces: [], tPanel: 0.04, parts };
   const RX = (x0 + x1) / 2, RZ = (z0 + z1) / 2; // the room's own middle (floor and ceiling)
 
   // ---- floor: border colour all round, main colour in the field, dark inlay line between them
@@ -491,7 +493,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   // monitor on its own arm (the endoscope picture for the surgeon, the patient's vitals for the anaesthetist)
   const bar = (a, b, y, r, mat = kit.white) => { const du = b[0] - a[0], dv = b[1] - a[1], L = Math.hypot(du, dv) || 0.01, g = new T.Group(); g.position.set((a[0] + b[0]) / 2, y, (a[1] + b[1]) / 2); g.rotation.y = Math.atan2(-dv, du); const m = new T.Mesh(Cy(r, r, L, 18), mat); m.rotation.z = Math.PI / 2; m.castShadow = true; g.add(m); kitGroup.add(g); };
   const sideOff = Math.min(1.55, across / 2 - 0.45);
-  if (sideOff > 0.9) for (const [v, kind] of [[sideOff, 'surgeon'], [-sideOff, 'anaes']]) {
+  if (sideOff > 0.9 && has('pendants')) for (const [v, kind] of [[sideOff, 'surgeon'], [-sideOff, 'anaes']]) {
     const u = kind === 'anaes' ? -0.75 : 0.35, sv = Math.sign(v), du = kind === 'anaes' ? -1 : 1;
     { const [px, pz] = at(u, v); spots.pendants.push({ x: px, z: pz, kind, u, v }); }
     shadow(0.8, 0.8, u, v, true);
@@ -570,29 +572,32 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     const [f0, f1] = clearOf(run); return { s: sd, inX, inZ, xz, box, plane2, from: f0, to: f1, len: f1 - f0, mid: (f0 + f1) / 2 }; };
   // the surgeon's control panel and the X-ray viewer (and, on the surgeon's wall, a writing board)
   const surgeonWall = (run, board) => {
-    const W2 = onRun(run), c = W2.mid, order = board ? [['board', c - 1.2], ['panel', c + 0.15], ['xray', c + 1.3]] : [['panel', c - 0.5], ['xray', c + 0.65]];
+    const W2 = onRun(run), c = W2.mid, want = [board && has('board') && 'board', has('panel') && 'panel', has('xray') && 'xray'].filter(Boolean), wide = { board: 1.24, panel: 1.15, xray: 0.86 }, gap = 0.3;
+    let t0 = c - (want.reduce((a, k) => a + wide[k], 0) + gap * Math.max(0, want.length - 1)) / 2;
+    const order = want.map(k => { const tc = t0 + wide[k] / 2; t0 += wide[k] + gap; return [k, tc]; });
     for (const [what, t] of order) {
       if (what === 'panel') { W2.box(1.15, 0.78, 0.02, kit.dark, t, 1.45, 0.01); W2.plane2(1.02, 0.62, kit.panelUi, t, 1.45, 0.022); const [x, z] = W2.xz(t, 0.01); spots.panel = { x, z, y: 1.45, inX: W2.inX, inZ: W2.inZ }; }
-      if (what === 'xray') { W2.box(0.86, 0.6, 0.02, kit.ssDark, t, 1.5, 0.01); W2.plane2(0.8, 0.55, kit.xray, t, 1.5, 0.022); }
+      if (what === 'xray') { W2.box(0.86, 0.6, 0.02, kit.ssDark, t, 1.5, 0.01); W2.plane2(0.8, 0.55, kit.xray, t, 1.5, 0.022); spots.xray = true; }
       if (what === 'board') boardAt(W2, t);
     }
   };
   // a writing board (white, with a marker tray)
   const boardAt = (W2, t) => { W2.box(1.24, 0.94, 0.02, kit.ssDark, t, 1.45, 0.01); W2.box(1.2, 0.9, 0.01, kit.board, t, 1.45, 0.021); W2.box(1.0, 0.025, 0.05, kit.ssDark, t, 0.99, 0.035); const [x, z] = W2.xz(t, 0.01); spots.board = { x, z, inX: W2.inX, inZ: W2.inZ }; };
   // a printed picture on glass; tall: from the coving to the ceiling
-  const pictureOn = (run, tall) => {
-    const W2 = onRun(run), pw = Math.min(tall ? 2.4 : 3.6, run.freeLen - (tall ? 1.0 : 0.8)), ph = tall ? H - 0.14 : Math.min(1.6, H - 1.25), y = tall ? 0.1 + ph / 2 : 0.85 + ph / 2;
+  const pictureOn = (run, tall, span = null) => {
+    const W2 = onRun(run), [a1, b1] = span || [W2.from, W2.to], mid = (a1 + b1) / 2;
+    const pw = Math.min(tall ? 2.4 : 3.6, (b1 - a1) - (tall ? 0.6 : 0.8)), ph = tall ? H - 0.14 : Math.min(1.6, H - 1.25), y = tall ? 0.1 + ph / 2 : 0.85 + ph / 2;
     if (pw < 0.8) return;
-    W2.box(pw + 0.04, ph + 0.04, 0.01, tall ? kit.frontGlass : kit.ssDark, W2.mid, y, 0.003);
-    W2.plane2(pw, ph, tall ? kit.pictureTall(finish.picture || 'lake') : kit.picture(finish.picture), W2.mid, y, 0.01).userData.part = tall ? 'pictureTall' : 'picture';
-    const [x, z] = W2.xz(W2.mid, 0.01); spots.picture = { x, z, y, w: pw, inX: W2.inX, inZ: W2.inZ };
+    if (!tall) W2.box(pw + 0.04, ph + 0.04, 0.01, kit.ssDark, mid, y, 0.003);
+    W2.plane2(pw, ph, tall ? kit.pictureTall(finish.picture || 'lake') : kit.picture(finish.picture), mid, y, 0.01).userData.part = tall ? 'pictureTall' : 'picture';
+    const [x, z] = W2.xz(mid, 0.01); spots.picture = { x, z, y, w: pw, inX: W2.inX, inZ: W2.inZ };
   };
   // built-in storage cabinets: n of them side by side, two doors each: the upper 60 % of each door is glass, with the
   // shelves and supplies seen through it, the lower 40 % a solid panel
-  const cabinetsOn = (run, most = 4) => {
+  const cabinetsOn = (run, most = 4, at = null, where = 'side') => {
     const W2 = onRun(run), dw = 0.73, doors = Math.max(2, Math.min(most, Math.floor((W2.len - 0.2) / dw))), cw = doors * dw, ch = 1.9, y0 = 0.2, top = y0 + ch, glassFrom = y0 + ch * 0.4;
     if (W2.len < 1.5) return;
-    const tc = W2.mid, tA = tc - cw / 2;
+    const tc = at ?? W2.mid, tA = tc - cw / 2;
     W2.box(cw + 0.1, 0.05, 0.05, kit.cabinet, tc, top + 0.025, 0.025); W2.box(cw + 0.1, 0.05, 0.05, kit.cabinet, tc, y0 - 0.025, 0.025); // the surround
     for (const k of [-1, 1]) W2.box(0.05, ch + 0.1, 0.05, kit.cabinet, tc + k * (cw / 2 + 0.025), y0 + ch / 2, 0.025);
     W2.plane2(cw, ch, kit.cabInside, tc, y0 + ch / 2, 0.004); // the inside of the recess
@@ -609,7 +614,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
       W2.box(w0 - 0.09, top - glassFrom - 0.05, 0.006, kit.cabGlass, td, (glassFrom + top - 0.05) / 2, 0.05);
       W2.box(0.018, 0.32, 0.03, kit.ssDark, td + (k % 2 ? -1 : 1) * (w0 / 2 - 0.06), glassFrom, 0.075); // handle
     }
-    const [x, z] = W2.xz(tc, 0.05); spots.cabinet = { x, z, y: y0 + ch / 2, w: cw, inX: W2.inX, inZ: W2.inZ };
+    const [x, z] = W2.xz(tc, 0.05); spots.cabinet ||= { x, z, y: y0 + ch / 2, w: cw, inX: W2.inX, inZ: W2.inZ, where };
   };
   // a return-air riser with its grille low down, at t along a wall run's side
   const riserAt = (sd, t, wide = 0.36) => {
@@ -623,12 +628,14 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   const slantRiser = (sl, gw) => {
     let nx = -sl.uz, nz = sl.ux; if ((RX - sl.mx) * nx + (RZ - sl.mz) * nz < 0) { nx = -nx; nz = -nz; }
     const ry = -Math.atan2(sl.uz, sl.ux), at = off => [sl.mx + nx * off, sl.mz + nz * off], L = sl.L + 0.06;
-    { const [x, z] = at(0.03); add(group, B(L, DADO, 0.04), P.low, x, DADO / 2, z, ry).userData.part = 'wallLow'; add(group, B(L, H - DADO, 0.04), P.high, x, (DADO + H) / 2, z, ry).userData.part = 'wallHigh'; }
+    const faceMeshes = [];
+    { const [x, z] = at(0.03); const lo = add(group, B(L, DADO, 0.04), P.low, x, DADO / 2, z, ry), hi = add(group, B(L, H - DADO, 0.04), P.high, x, (DADO + H) / 2, z, ry); lo.userData.part = 'wallLow'; hi.userData.part = 'wallHigh'; faceMeshes.push(lo, hi); }
     { const [x, z] = at(0.056); add(group, B(L, 0.1, 0.012), kit.floor(finish.floor_border), x, 0.05, z, ry).userData.part = 'floorBorder'; }
     const w2 = Math.max(0.3, Math.min(sl.L - 0.3, gw, 0.75));
     { const [x, z] = at(0.054); add(group, B(w2 + 0.05, 0.48, 0.006), kit.ssDark, x, 0.4, z, ry); }
     { const [x, z] = at(0.058); add(group, B(w2, 0.42, 0.008), kit.grille, x, 0.4, z, ry); }
     const [x, z] = at(0.08); spots.risers.push({ x, z, y: 0.4, inX: nx, inZ: nz, slant: true });
+    return faceMeshes;
   };
   const flushRiser = (sd, t, wide) => {
     const [inX, inZ] = inOf(sd), base = planeAt(sd, t) + sd.n * (T_PANEL / 2), xz = off => (sd.along === 'x' ? [t, base + sd.n * off] : [base + sd.n * off, t]);
@@ -639,7 +646,8 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   };
   // no return-air grilles drawn: a riser across each corner of the room, as WIESPL builds them (a slanted face with its
   // grille low down), where both walls meet with no door, window or parked door leaf near the corner
-  if (!grilles.length) {
+  const corners = []; // the corner risers and the two walls each stands between
+  if (!grilles.length && has('risers')) {
     const LEG = 0.45, near = (sd, lo, hi) => openings.some(o => o.s === sd && o.g1 > lo && o.g0 < hi) || parked.some(p => p.s === sd && p.b > lo && p.a < hi);
     const walled = (sd, lo, hi) => (sd.runs || []).some(r => r.a - 0.3 <= lo && r.b + 0.3 >= hi);
     for (const A of sides.filter(q => q.along === 'x')) for (const Bs of sides.filter(q => q.along === 'z')) {
@@ -649,11 +657,11 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
       const xa = Math.min(xc, xc + dx * (LEG + 0.25)), xb = Math.max(xc, xc + dx * (LEG + 0.25)), za = Math.min(zc, zc + dz * (LEG + 0.25)), zb = Math.max(zc, zc + dz * (LEG + 0.25));
       if (!walled(A, xa, xb) || !walled(Bs, za, zb) || near(A, xa, xb) || near(Bs, za, zb)) continue;
       const p1 = [xc + dx * LEG, zc], p2 = [xc, zc + dz * LEG], len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
-      slantRiser({ mx: (p1[0] + p2[0]) / 2, mz: (p1[1] + p2[1]) / 2, L: len, ux: (p2[0] - p1[0]) / len, uz: (p2[1] - p1[1]) / len }, 0.5);
+      corners.push({ A, Bs, meshes: slantRiser({ mx: (p1[0] + p2[0]) / 2, mz: (p1[1] + p2[1]) / 2, L: len, ux: (p2[0] - p1[0]) / len, uz: (p2[1] - p1[1]) / len }, 0.5) });
       spots.riserSpans ||= []; spots.riserSpans.push({ s: A, a: Math.min(xc, p1[0]) - 0.05, b: Math.max(xc, p1[0]) + 0.05 }, { s: Bs, a: Math.min(zc, p2[1]) - 0.05, b: Math.max(zc, p2[1]) + 0.05 });
     }
   }
-  for (const [gi, gpt] of grilles.entries()) {
+  if (has('risers')) for (const [gi, gpt] of grilles.entries()) {
     const sl = slants[gi];
     if (sl) { slantRiser(sl, Math.hypot(gpt.sx, gpt.sz)); continue; }
     const near = sides.filter(sd => sd.plane != null).map(sd => ({ sd, dist: Math.abs((sd.along === 'x' ? gpt.z : gpt.x) - sd.plane) })).sort((p, q) => p.dist - q.dist)[0];
@@ -668,17 +676,29 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     const front = sides.find(sd => is(sd, f2)), rightSide = sides.find(sd => is(sd, right)), leftSide = sides.find(sd => is(sd, [-right[0], -right[1]]));
     spots.entry = entry;
     if (front?.meshes) for (const m of front.meshes) if (m.userData.part === 'wallLow' || m.userData.part === 'wallHigh') { m.material = kit.frontGlass; m.userData.part = 'wallFront'; }
-    const fr = front && bestRun(front); if (fr) { used.add(fr); pictureOn(fr, true); spots.front = { ...spots.picture }; }
-    const rr = rightSide && bestRun(rightSide); if (rr && rr.freeLen >= 1.6) { used.add(rr); cabinetsOn(rr); }
+    for (const c of corners) if (c.A === front || c.Bs === front) for (const m of c.meshes) { m.material = kit.frontGlass; m.userData.part = 'wallFront'; } // a riser on the glass wall is glass too
+    const fr = front && bestRun(front);
+    if (fr) {
+      used.add(fr); const W2 = onRun(fr); let pic = [W2.from, W2.to];
+      if (has('frontStore')) { // storage set into the glass wall at its right end, the picture in the rest
+        const doors = Math.max(2, Math.min(3, Math.floor((W2.len - 2.2) / 0.73))), cw = doors * 0.73 + 0.1;
+        if (W2.len - cw - 0.2 >= 1.6) {
+          const hi = (front.along === 'x' ? right[0] : right[1]) > 0, tc = hi ? W2.to - cw / 2 : W2.from + cw / 2;
+          cabinetsOn(fr, doors, tc, 'front'); pic = hi ? [W2.from, W2.to - cw - 0.2] : [W2.from + cw + 0.2, W2.to];
+        }
+      }
+      if (has('picture')) { pictureOn(fr, true, pic); spots.front = { ...spots.picture }; }
+    }
+    const rr = rightSide && bestRun(rightSide); if (rr && rr.freeLen >= 1.6 && has('store')) { used.add(rr); cabinetsOn(rr); }
     const lr = leftSide && bestRun(leftSide); if (lr && lr.freeLen >= 2.0) {
       used.add(lr); const all = clearOf(lr)[1] - clearOf(lr)[0] >= 3.6; surgeonWall(lr, all);
-      const lr2 = !all && bestRun(leftSide); if (lr2) { const W3 = onRun(lr2); if (W3.len >= 1.45) { used.add(lr2); boardAt(W3, W3.mid); } } // the writing board on the next stretch of the same wall
+      const lr2 = !all && has('board') && bestRun(leftSide); if (lr2) { const W3 = onRun(lr2); if (W3.len >= 1.45) { used.add(lr2); boardAt(W3, W3.mid); } } // the writing board on the next stretch of the same wall
     }
   } else {
     // ---- the standard layout: control panel on the longest wall, picture glass facing it, storage on a third
     if (longest && longest.freeLen > 2.2) {
       used.add(longest); surgeonWall(longest, false);
-      if (!grilles.length && !spots.risers.length) { // no grilles drawn and no free corner: risers at both ends of this wall
+      if (!grilles.length && !spots.risers.length && has('risers')) { // no grilles drawn and no free corner: risers at both ends of this wall
         const { s: sd, plane } = longest, [from, to] = longest.free, [inX, inZ] = inOf(sd), off = sd.n * 0.03;
         const xz = t => (sd.along === 'x' ? [t, plane + off] : [plane + off, t]);
         const perp = sd.along === 'x' ? [sides[2], sides[3]] : [sides[0], sides[1]];

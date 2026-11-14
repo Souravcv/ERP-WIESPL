@@ -163,7 +163,7 @@ export function createFilm(ctx, parts) {
     const back = Math.max(1.2, Math.min(r.width - 0.45, 2.2)), P_door = look(d.x - d.inX * back, EYE, d.z - d.inZ * back, d.x, 1.25, d.z);
     const [ix, iz] = [d.x + d.inX * 1.5, d.z + d.inZ * 1.5], P_in = look(ix, EYE, iz, ix + d.inX * 5, 1.4, iz + d.inZ * 5);
     // inside
-    const F = S.front || S.picture, C = S.cabinet, P = S.panel;
+    const F = S.front || S.picture, C = S.cabinet, P = S.panel, want = S.parts || {};
     const P_front = F ? view(F.x, 1.45, F.z, [facing(F, 4.4), facing(F, 3.8, 0.6), facing(F, 4.0, -0.7), [ix, iz]]) : P_in;
     const P_front2 = F ? view(F.x, 1.5, F.z, [facing(F, 3.6), facing(F, 3.2, 0.5), facing(F, 3.4, -0.6), [ix, iz]]) : P_in;
     const riser = [...S.risers].sort((a, b) => (!!b.slant - !!a.slant) || Math.hypot(a.x - P_front.x, a.z - P_front.z) - Math.hypot(b.x - P_front.x, b.z - P_front.z))[0]; // a riser corner first
@@ -172,13 +172,13 @@ export function createFilm(ctx, parts) {
     const [lwx, lwz] = sideWall(1), P_wallA = look(P_front2.x, EYE, P_front2.z, lwx, 1.35, lwz);
     const P_riser = riser ? view(riser.x, 0.45, riser.z, [[riser.x + riser.inX * 2.4 + riser.inZ * 0.8, riser.z + riser.inZ * 2.4 + riser.inX * 0.8], [riser.x + riser.inX * 2.4 - riser.inZ * 0.8, riser.z + riser.inZ * 2.4 - riser.inX * 0.8], [P_front2.x, P_front2.z]]) : P_wallA;
     const P_ceil = F ? { ...look(P_front2.x, EYE, P_front2.z, F.x, H, F.z), pitch: 0.5 } : { ...P_riser, pitch: 0.55 };
-    const P_store = C ? view(C.x, 1.15, C.z, [facing(C, 2.7, -0.5), facing(C, 2.7, 0.5), facing(C, 2.3), facing(C, 3.2)]) : null;
+    const P_store = C ? view(C.x, 1.15, C.z, [[2.7, -0.5], [2.7, 0.5], [2.3, 0], [3.2, 0], [2.4, -1.0], [2.4, 1.0], [3.4, -1.2], [3.4, 1.2], [2.0, -1.4], [2.0, 1.4], [3.8, 0], [1.9, 0]].map(([dd, lat]) => facing(C, dd, lat))) : null;
     // the surgeon's wall: the control panel and X-ray viewer, and the writing board (beside them, or on the next stretch)
     const Bd = S.board, Q = P && Bd ? { x: (P.x + Bd.x) / 2, z: (P.z + Bd.z) / 2, inX: P.inX, inZ: P.inZ } : P, far = P && Bd ? Math.max(2.9, Math.hypot(P.x - Bd.x, P.z - Bd.z) * 0.75 + 1.6) : 2.9;
     const P_surg = Q ? (() => {
       for (const dd of [far, far - 0.5, far + 0.4, far - 1.0, far - 1.5]) for (const lat of [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 2.5, -2.5]) {
         const [x, z] = inRoom(...facing(Q, dd, lat));
-        if (clearOfThings(x, z) && sees(x, z, P.x, P.z) && (!Bd || sees(x, z, Bd.x, Bd.z))) return look(x, EYE, z, Q.x, 1.4, Q.z);
+        if (clearOfThings(x, z) && sees(x, z, Q.x, Q.z) && (!P || sees(x, z, P.x, P.z)) && (!Bd || sees(x, z, Bd.x, Bd.z))) return look(x, EYE, z, Q.x, 1.4, Q.z);
       }
       return view(Q.x, 1.4, Q.z, [facing(Q, far), facing(Q, far, 0.4), facing(Q, far, -0.4), facing(Q, far - 0.5)]); })() : null;
     const P_dig = P ? view(P.x, 1.45, P.z, [facing(P, 1.9, -0.25), facing(P, 1.9, 0.25), facing(P, 2.3)]) : null;
@@ -200,7 +200,7 @@ export function createFilm(ctx, parts) {
     const L = (k, a, b, hold = 0) => soft(seg(k, a, b)) * (1 - hold);
     // when the turn inside (from P_in, a full circle eased over the scene) faces the windows, as a fraction of the scene
     let winAt = null;
-    if (S.windows?.length) {
+    if (S.windows?.length && want.winFilm !== false) {
       const wx = S.windows.reduce((a2, q) => a2 + q.x, 0) / S.windows.length, wz = S.windows.reduce((a2, q) => a2 + q.z, 0) / S.windows.length;
       const want = Math.atan2(-(wx - P_in.x), -(wz - P_in.z)), f = ((((P_in.yaw - want) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2);
       let lo = 0, hi = 1; for (let i = 0; i < 30; i++) { const m = (lo + hi) / 2; if (ease(m) < f) lo = m; else hi = m; } // ease(k) = f
@@ -218,17 +218,18 @@ export function createFilm(ctx, parts) {
         labels: [[0.06, 'KLEENCLAD™ walls · Silver-Ion antimicrobial'], [0.3, 'Matte cladding · 2–2.5 mm'], [0.52, 'Sky ceiling · air diffusers'], [0.76, 'Antistatic vinyl floor']],
         go: (lt, dur) => { const k = ease(seg(lt, 0.4, dur - 0.2)), p = lerpPose(P_eye, P_near, k); p.pitch += 0.34 * Math.sin(Math.PI * seg(k, 0.4, 0.72)) - 0.22 * Math.sin(Math.PI * seg(k, 0.8, 1)); return p; } },
       P_scrub && { key: 'film_scrub', min: 6, vAt: 0.6, labels: [[0.15, 'Scrub station']], go: (lt, dur) => lerpPose(P_near, P_scrub, ease(seg(lt, 0, Math.min(3.5, dur * 0.7)))) },
-      P_disp && { key: 'film_entrance', min: 9, vAt: 1.4, labels: [[0.1, 'WIESPL Digital OR · entrance display'], [0.5, 'Surgery · patient · surgeon · temperature · humidity · pressure']], go: (lt, dur) => lerpPose(P_scrub || P_near, P_disp, ease(seg(lt, 0, Math.min(3.4, dur * 0.4)))) },
+      P_disp && want.display !== false && { key: 'film_entrance', min: 9, vAt: 1.4, labels: [[0.1, 'WIESPL Digital OR · entrance display'], [0.5, 'Surgery · patient · surgeon · temperature · humidity · pressure']], go: (lt, dur) => lerpPose(P_scrub || P_near, P_disp, ease(seg(lt, 0, Math.min(3.4, dur * 0.4)))) },
       { key: 'film_enter', min: 8, vAt: 3.1, labels: [[0.22, d.kind === 'swing' ? (d.gap >= 1.15 ? 'WIESPL double-leaf swing door' : 'WIESPL swing door') : 'WIESPL hermetic sliding door']], door: (lt, dur) => soft(seg(lt, dur * 0.3, dur * 0.3 + 2.2)), shadows: true,
         go: (lt, dur) => (lt < dur * 0.3 ? lerpPose(P_disp || P_scrub || P_near, P_door, ease(seg(lt, 0, dur * 0.3))) : lerpPose(P_door, P_in, ease(seg(lt, dur * 0.48, dur)))) },
       // with windows: the voice tells of the privacy film, which turns the glass frosted for a moment, then clear again
       { key: winAt ? 'film_inside_win' : 'film_inside', min: 11, vAt: 1.0, labels: [[0.1, name], winAt ? [winAt, 'Clear glass windows · switchable privacy film'] : null].filter(Boolean), inside: true, smart: winAt ? (lt, dur) => lt > dur * (winAt + 0.07) && lt < dur - 0.6 : null, door: lt => 1 - soft(seg(lt, 0.6, 3)), shadows: true,
         go: (lt, dur) => ({ ...P_in, yaw: P_in.yaw - Math.PI * 2 * ease(seg(lt, 0.3, dur - 0.3)) }) },
-      F && { key: 'film_front', min: 7, vAt: 0.9, labels: [[0.15, 'Full-height glass · picture panel']], inside: true, go: (lt, dur) => lerpPose(P_in, P_front, ease(seg(lt, 0, Math.min(3.6, dur * 0.6)))) },
+      F && { key: C?.where === 'front' ? 'film_front_store' : 'film_front', min: 7, vAt: 0.9, labels: [[0.15, C?.where === 'front' ? 'Full-height glass · picture panel · built-in storage' : 'Full-height glass · picture panel']], inside: true, go: (lt, dur) => lerpPose(P_in, P_front, ease(seg(lt, 0, Math.min(3.6, dur * 0.6)))) },
       { key: riser ? 'film_walls' : 'film_walls_nr', min: 10, vAt: 0.5, inside: true, labels: [[0.05, 'KLEENCLAD™ · RAL 7035 light grey, matte'], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
         go: (lt, dur) => { const k = lt / dur; return k < 0.32 ? lerpPose(P_front, P_wallA, ease(seg(k, 0, 0.3))) : k < 0.66 ? lerpPose(P_wallA, P_riser, ease(seg(k, 0.32, 0.62))) : lerpPose(P_riser, P_ceil, ease(seg(k, 0.66, 0.95))); } },
-      P_store && { key: 'film_storage', min: 6.5, vAt: 0.9, inside: true, labels: [[0.18, 'Built-in storage · 60% glass doors']], go: (lt, dur) => lerpPose(P_ceil, P_store, ease(seg(lt, 0, Math.min(3.4, dur * 0.6)))) },
-      P_surg && { key: 'film_surgeon' + (P_store ? '' : '_ns') + (Bd ? '' : '_nb'), min: 8, vAt: 1.0, inside: true, labels: [[0.16, Bd ? 'Control panel · X-ray viewer · Writing board' : 'Control panel · X-ray viewer']], go: (lt, dur) => lerpPose(P_store || P_ceil, P_surg, ease(seg(lt, 0, Math.min(3.6, dur * 0.55)))) },
+      P_store && { key: C.where === 'front' ? 'film_storage_front' : 'film_storage', min: 6.5, vAt: 0.9, inside: true, labels: [[0.18, 'Built-in storage · 60% glass doors']], go: (lt, dur) => lerpPose(P_ceil, P_store, ease(seg(lt, 0, Math.min(3.4, dur * 0.6)))) },
+      // "opposite the storage" only when the storage is on the other side wall
+      P_surg && { key: 'film_surgeon' + (P_store && C.where !== 'front' ? '' : '_ns') + (S.xray ? '' : '_nx') + (Bd ? '' : '_nb'), min: 8, vAt: 1.0, inside: true, labels: [[0.16, ['Control panel', S.xray && 'X-ray viewer', Bd && 'Writing board'].filter(Boolean).join(' · ')]], go: (lt, dur) => lerpPose(P_store || P_ceil, P_surg, ease(seg(lt, 0, Math.min(3.6, dur * 0.55)))) },
       P_dig && { key: 'film_digital', min: 16, vAt: 1.0, inside: true, labels: [[0.04, 'WIESPL Digital OR · control at the surgeon’s panel'], [0.3, '4K multi-camera recording · live streaming'], [0.55, 'PACS · DICOM · HMS integration'], [0.78, 'Central OR server · surgery schedule display']],
         go: (lt, dur) => { const k = lt / dur; return k < 0.45 ? lerpPose(P_surg || P_store || P_front, P_dig, ease(seg(k, 0, 0.25))) : lerpPose(P_dig, P_dig2, ease(seg(k, 0.45, 0.75))); } },
       { key: S.pendants.length ? 'film_centre' : 'film_centre_np', min: 10, vAt: 0.9, inside: true, labels: [[0.12, 'Laminar airflow plenum'], S.pendants.length ? [0.55, 'Surgeon’s and anaesthesia pendants'] : null].filter(Boolean),

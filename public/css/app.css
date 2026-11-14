@@ -731,3 +731,4 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .p3-tourbtns .muted { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; }
 .p3-recording canvas { object-fit: contain; background: #000; }
 .p3-warn { position: absolute; left: 50%; top: 56px; transform: translateX(-50%); z-index: 5; width: min(560px, calc(100% - 24px)); display: grid; gap: 6px; justify-items: start; padding: 12px 14px; border-radius: 12px; background: #fff8ec; border: 1px solid #e8a33d; color: #5c3d00; box-shadow: 0 6px 24px rgba(0, 0, 0, .15); font-size: 13px; }
+.p3-filmparts { display: grid; gap: 2px; }
