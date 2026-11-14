@@ -191,7 +191,9 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   // local frame: u along the room's long side, v across; returns scene x, z
   const at = (u, v) => (long ? [cx + u, cz + v] : [cx + v, cz + u]);
   const rotLong = long ? 0 : Math.PI / 2;
-  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, tPanel: 0.04 };
+  // faces: every stretch of panelled wall (runs, under and over windows, over doors, closed-off doorways) for the film's
+  // shading; foot: false where there is no wall down to the floor (a doorway)
+  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, faces: [], tPanel: 0.04 };
   const RX = (x0 + x1) / 2, RZ = (z0 + z1) / 2; // the room's own middle (floor and ceiling)
 
   // ---- floor: border colour all round, main colour in the field, dark inlay line between them
@@ -265,16 +267,21 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
       const from = Math.max(s.a, r.a - 0.1), to = Math.min(s.b, r.b + 0.1);
       put(from, to, 0, DADO, P.low, 'wallLow'); put(from, to, DADO, H, P.high, 'wallHigh');
       put(from, to, 0, 0.1, kit.floor(finish.floor_border), 'floorBorder', T_PANEL / 2 + 0.006, 0.012); // coved vinyl skirting
-      allRuns.push({ s, from, to, len: to - from, plane });
+      allRuns.push({ s, from, to, len: to - from, plane }); spots.faces.push({ s, from, to, plane, foot: true });
       const next = runs[i + 1];
       if (next) { // the opening up to the next run: a window when the drawing tags it W…, else a door if it is door-sized
         const g0 = to, g1 = Math.max(s.a, next.a - 0.1), gap = g1 - g0, tag = tagAt(s, (g0 + g1) / 2);
         if (tag && /^[WV]/i.test(tag.t) && gap >= 0.4 && gap <= 6) {
           put(g0, g1, 0, Math.min(SILL, DADO), P.low, 'wallLow'); put(g0, g1, HEAD, H, P.high, 'wallHigh');
+          put(g0, g1, 0, 0.1, kit.floor(finish.floor_border), 'floorBorder', T_PANEL / 2 + 0.006, 0.012); // coved vinyl skirting
+          spots.faces.push({ s, from: g0, to: g1, plane, foot: true });
           openings.push({ kind: 'window', s, g0, g1, plane, tag });
         } else {
           const drawn = drawnDoor(s, g0, g1);
-          if (gap >= 0.7 && gap <= 3.2 && (drawn || tag || !doorSegs.length)) { put(g0, g1, DOOR_H, H, P.high, 'wallHigh'); openings.push({ kind: 'door', s, g0, g1, plane, drawn, tag }); }
+          if (gap >= 0.7 && gap <= 3.2 && (drawn || tag || !doorSegs.length)) {
+            put(g0, g1, DOOR_H, H, P.high, 'wallHigh'); const face = { s, from: g0, to: g1, plane, foot: false }; spots.faces.push(face);
+            openings.push({ kind: 'door', s, g0, g1, plane, drawn, tag, face });
+          }
         }
       }
     });
@@ -305,6 +312,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     at(0, 0.1, kit.floor(finish.floor_border), 'floorBorder', T_PANEL / 2 + 0.006, 0.012);
     const [ax, az] = s.along === 'x' ? [g0, plane] : [plane, g0], [bx, bz] = s.along === 'x' ? [g1, plane] : [plane, g1];
     (spots.closed ||= []).push([ax, az, bx, bz]); // walls for walking: nobody walks through it
+    if (o.face) o.face.foot = true;
   }
 
   // the door / window number written next to an opening in the drawing (D2, W10 …), if any
@@ -324,6 +332,10 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     add(group, s.along === 'x' ? B(len, hgt, 0.012) : B(0.012, hgt, len), kit.smartGlass, gx, SILL + hgt / 2, gz).userData.part = 'smartGlass';
     for (const t of [g0 + 0.02, g1 - 0.02]) { const [fxx, fzz] = xz(t, -0.01); add(group, s.along === 'x' ? B(0.04, hgt, 0.06) : B(0.06, hgt, 0.04), kit.ss, fxx, SILL + hgt / 2, fzz); }
     for (const y of [SILL, HEAD]) { const [fxx, fzz] = xz(mid, -0.01); add(group, s.along === 'x' ? B(len, 0.04, 0.06) : B(0.06, 0.04, len), kit.ss, fxx, y, fzz); }
+    { const face = T_PANEL / 2, tw = 0.05, bar = (l, h2, t, y, along) => { const [bx, bz] = xz(t, face + 0.006); add(group, (along ? s.along === 'x' : s.along !== 'x') ? B(l, h2, 0.012) : B(0.012, h2, l), kit.ss, bx, y, bz); };
+      for (const t of [g0 - tw / 2, g1 + tw / 2]) bar(tw, hgt + tw * 2, t, SILL + hgt / 2, true);
+      bar(len + tw * 2, tw, mid, HEAD + tw / 2, true);
+      const [sx2, sz2] = xz(mid, face + 0.03); add(group, s.along === 'x' ? B(len + tw * 2 + 0.04, 0.03, 0.06) : B(0.06, 0.03, len + tw * 2 + 0.04), kit.ss, sx2, SILL - 0.015, sz2); } // the sill
     { const [vx, vz] = xz(mid, -0.45), view = add(group, new T.PlaneGeometry(len + 1.4, hgt + 1.2), kit.outside, vx, SILL + hgt / 2, vz); // the sky outside, facing in
       view.rotation.y = s.along === 'x' ? (s.n > 0 ? 0 : Math.PI) : (s.n > 0 ? Math.PI / 2 : -Math.PI / 2); view.receiveShadow = false; }
     (spots.windows ||= []).push({ x: gx, z: gz, w: len, tag: o.tag?.t });
@@ -625,6 +637,22 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     { const [x, z] = xz(0.009); add(group, sd.along === 'x' ? B(wide - 0.05, 0.42, 0.006) : B(0.006, 0.42, wide - 0.05), kit.grille, x, 0.4, z); }
     const [x, z] = xz(0.03); spots.risers.push({ x, z, y: 0.4, inX, inZ });
   };
+  // no return-air grilles drawn: a riser across each corner of the room, as WIESPL builds them (a slanted face with its
+  // grille low down), where both walls meet with no door, window or parked door leaf near the corner
+  if (!grilles.length) {
+    const LEG = 0.45, near = (sd, lo, hi) => openings.some(o => o.s === sd && o.g1 > lo && o.g0 < hi) || parked.some(p => p.s === sd && p.b > lo && p.a < hi);
+    const walled = (sd, lo, hi) => (sd.runs || []).some(r => r.a - 0.3 <= lo && r.b + 0.3 >= hi);
+    for (const A of sides.filter(q => q.along === 'x')) for (const Bs of sides.filter(q => q.along === 'z')) {
+      if (A.plane == null || Bs.plane == null) continue;
+      const dx = Bs.n, dz = A.n; // from the corner into the room
+      const zc = planeAt(A, Bs.fixed + dx * 0.3) + dz * (T_PANEL / 2), xc = planeAt(Bs, A.fixed + dz * 0.3) + dx * (T_PANEL / 2); // the panel faces
+      const xa = Math.min(xc, xc + dx * (LEG + 0.25)), xb = Math.max(xc, xc + dx * (LEG + 0.25)), za = Math.min(zc, zc + dz * (LEG + 0.25)), zb = Math.max(zc, zc + dz * (LEG + 0.25));
+      if (!walled(A, xa, xb) || !walled(Bs, za, zb) || near(A, xa, xb) || near(Bs, za, zb)) continue;
+      const p1 = [xc + dx * LEG, zc], p2 = [xc, zc + dz * LEG], len = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+      slantRiser({ mx: (p1[0] + p2[0]) / 2, mz: (p1[1] + p2[1]) / 2, L: len, ux: (p2[0] - p1[0]) / len, uz: (p2[1] - p1[1]) / len }, 0.5);
+      spots.riserSpans ||= []; spots.riserSpans.push({ s: A, a: Math.min(xc, p1[0]) - 0.05, b: Math.max(xc, p1[0]) + 0.05 }, { s: Bs, a: Math.min(zc, p2[1]) - 0.05, b: Math.max(zc, p2[1]) + 0.05 });
+    }
+  }
   for (const [gi, gpt] of grilles.entries()) {
     const sl = slants[gi];
     if (sl) { slantRiser(sl, Math.hypot(gpt.sx, gpt.sz)); continue; }
@@ -650,7 +678,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
     // ---- the standard layout: control panel on the longest wall, picture glass facing it, storage on a third
     if (longest && longest.freeLen > 2.2) {
       used.add(longest); surgeonWall(longest, false);
-      if (!grilles.length) { // no grilles drawn: risers at both ends of this wall, clear of anything the drawing has there
+      if (!grilles.length && !spots.risers.length) { // no grilles drawn and no free corner: risers at both ends of this wall
         const { s: sd, plane } = longest, [from, to] = longest.free, [inX, inZ] = inOf(sd), off = sd.n * 0.03;
         const xz = t => (sd.along === 'x' ? [t, plane + off] : [plane + off, t]);
         const perp = sd.along === 'x' ? [sides[2], sides[3]] : [sides[0], sides[1]];

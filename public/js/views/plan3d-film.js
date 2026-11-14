@@ -91,10 +91,12 @@ export function createFilm(ctx, parts) {
     const air = parts.makeAir(group, emitters);
     // shading: where the walls meet the floor and the ceiling, in the theatre and along the passage
     const shade = shadeKit(T), tp = S.tPanel || 0.04;
-    for (const run of S.runs || []) {
+    // every stretch of wall alike (runs, under and over windows, over doors), so no strip of wall reads lighter
+    for (const run of S.faces?.length ? S.faces : S.runs || []) {
       const sd = run.s, face = run.plane + sd.n * (tp / 2 + 0.004), at = (t, y, off = 0) => (sd.along === 'x' ? [t, y, face + sd.n * off] : [face + sd.n * off, y, t]);
-      group.add(shade.quad(at(run.from, 0.016), at(run.to, 0.016), at(run.from, 0.016, 0.5), at(run.to, 0.016, 0.5), 0.3)); // on the floor
       group.add(shade.quad(at(run.from, H - 0.004), at(run.to, H - 0.004), at(run.from, H - 0.6), at(run.to, H - 0.6), 0.22)); // the top of the wall
+      if (run.foot === false) continue;
+      group.add(shade.quad(at(run.from, 0.016), at(run.to, 0.016), at(run.from, 0.016, 0.5), at(run.to, 0.016, 0.5), 0.3)); // on the floor
       group.add(shade.quad(at(run.from, 0.1, 0.012), at(run.to, 0.1, 0.012), at(run.from, 0.45, 0.012), at(run.to, 0.45, 0.012), 0.12)); // the foot of the wall
     }
     { const st2 = corr.strip; for (const side of [1, -1]) for (const q of corr.wallRuns[side]) {
@@ -217,18 +219,19 @@ export function createFilm(ctx, parts) {
         go: (lt, dur) => { const k = ease(seg(lt, 0.4, dur - 0.2)), p = lerpPose(P_eye, P_near, k); p.pitch += 0.34 * Math.sin(Math.PI * seg(k, 0.4, 0.72)) - 0.22 * Math.sin(Math.PI * seg(k, 0.8, 1)); return p; } },
       P_scrub && { key: 'film_scrub', min: 6, vAt: 0.6, labels: [[0.15, 'Scrub station']], go: (lt, dur) => lerpPose(P_near, P_scrub, ease(seg(lt, 0, Math.min(3.5, dur * 0.7)))) },
       P_disp && { key: 'film_entrance', min: 9, vAt: 1.4, labels: [[0.1, 'WIESPL Digital OR · entrance display'], [0.5, 'Surgery · patient · surgeon · temperature · humidity · pressure']], go: (lt, dur) => lerpPose(P_scrub || P_near, P_disp, ease(seg(lt, 0, Math.min(3.4, dur * 0.4)))) },
-      { key: 'film_enter', min: 8, vAt: 3.1, labels: [[0.22, 'WIESPL hermetic sliding door']], door: (lt, dur) => soft(seg(lt, dur * 0.3, dur * 0.3 + 2.2)), shadows: true,
+      { key: 'film_enter', min: 8, vAt: 3.1, labels: [[0.22, d.kind === 'swing' ? (d.gap >= 1.15 ? 'WIESPL double-leaf swing door' : 'WIESPL swing door') : 'WIESPL hermetic sliding door']], door: (lt, dur) => soft(seg(lt, dur * 0.3, dur * 0.3 + 2.2)), shadows: true,
         go: (lt, dur) => (lt < dur * 0.3 ? lerpPose(P_disp || P_scrub || P_near, P_door, ease(seg(lt, 0, dur * 0.3))) : lerpPose(P_door, P_in, ease(seg(lt, dur * 0.48, dur)))) },
-      { key: 'film_inside', min: 11, vAt: 1.0, labels: [[0.1, name], winAt ? [winAt, 'Clear glass windows · switchable privacy film'] : null].filter(Boolean), inside: true, smart: winAt ? (lt, dur) => lt > dur * (winAt + 0.07) : null, door: lt => 1 - soft(seg(lt, 0.6, 3)), shadows: true,
+      // with windows: the voice tells of the privacy film, which turns the glass frosted for a moment, then clear again
+      { key: winAt ? 'film_inside_win' : 'film_inside', min: 11, vAt: 1.0, labels: [[0.1, name], winAt ? [winAt, 'Clear glass windows · switchable privacy film'] : null].filter(Boolean), inside: true, smart: winAt ? (lt, dur) => lt > dur * (winAt + 0.07) && lt < dur - 0.6 : null, door: lt => 1 - soft(seg(lt, 0.6, 3)), shadows: true,
         go: (lt, dur) => ({ ...P_in, yaw: P_in.yaw - Math.PI * 2 * ease(seg(lt, 0.3, dur - 0.3)) }) },
       F && { key: 'film_front', min: 7, vAt: 0.9, labels: [[0.15, 'Full-height glass · picture panel']], inside: true, go: (lt, dur) => lerpPose(P_in, P_front, ease(seg(lt, 0, Math.min(3.6, dur * 0.6)))) },
-      { key: 'film_walls', min: 10, vAt: 0.5, inside: true, labels: [[0.05, 'KLEENCLAD™ · RAL 7035 light grey, matte'], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
+      { key: riser ? 'film_walls' : 'film_walls_nr', min: 10, vAt: 0.5, inside: true, labels: [[0.05, 'KLEENCLAD™ · RAL 7035 light grey, matte'], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
         go: (lt, dur) => { const k = lt / dur; return k < 0.32 ? lerpPose(P_front, P_wallA, ease(seg(k, 0, 0.3))) : k < 0.66 ? lerpPose(P_wallA, P_riser, ease(seg(k, 0.32, 0.62))) : lerpPose(P_riser, P_ceil, ease(seg(k, 0.66, 0.95))); } },
       P_store && { key: 'film_storage', min: 6.5, vAt: 0.9, inside: true, labels: [[0.18, 'Built-in storage · 60% glass doors']], go: (lt, dur) => lerpPose(P_ceil, P_store, ease(seg(lt, 0, Math.min(3.4, dur * 0.6)))) },
-      P_surg && { key: 'film_surgeon', min: 8, vAt: 1.0, inside: true, labels: [[0.16, 'Control panel · X-ray viewer · Writing board']], go: (lt, dur) => lerpPose(P_store || P_ceil, P_surg, ease(seg(lt, 0, Math.min(3.6, dur * 0.55)))) },
+      P_surg && { key: 'film_surgeon' + (P_store ? '' : '_ns') + (Bd ? '' : '_nb'), min: 8, vAt: 1.0, inside: true, labels: [[0.16, Bd ? 'Control panel · X-ray viewer · Writing board' : 'Control panel · X-ray viewer']], go: (lt, dur) => lerpPose(P_store || P_ceil, P_surg, ease(seg(lt, 0, Math.min(3.6, dur * 0.55)))) },
       P_dig && { key: 'film_digital', min: 16, vAt: 1.0, inside: true, labels: [[0.04, 'WIESPL Digital OR · control at the surgeon’s panel'], [0.3, '4K multi-camera recording · live streaming'], [0.55, 'PACS · DICOM · HMS integration'], [0.78, 'Central OR server · surgery schedule display']],
         go: (lt, dur) => { const k = lt / dur; return k < 0.45 ? lerpPose(P_surg || P_store || P_front, P_dig, ease(seg(k, 0, 0.25))) : lerpPose(P_dig, P_dig2, ease(seg(k, 0.45, 0.75))); } },
-      { key: 'film_centre', min: 10, vAt: 0.9, inside: true, labels: [[0.12, 'Laminar airflow plenum'], [0.55, 'Surgeon’s and anaesthesia pendants']],
+      { key: S.pendants.length ? 'film_centre' : 'film_centre_np', min: 10, vAt: 0.9, inside: true, labels: [[0.12, 'Laminar airflow plenum'], S.pendants.length ? [0.55, 'Surgeon’s and anaesthesia pendants'] : null].filter(Boolean),
         go: (lt, dur) => { const k = lt / dur, from = P_dig2 || P_surg || P_store || P_front; return k < 0.4 ? lerpPose(from, P_centre, ease(seg(k, 0, 0.36))) : lerpPose(P_centre, P_plenum, ease(seg(k, 0.42, 0.9))); } },
       { key: 'film_floor', min: 6, vAt: 0.6, inside: true, labels: [[0.18, 'Antistatic vinyl floor · coved']], go: (lt, dur) => lerpPose(P_plenum, P_floor, ease(seg(lt, 0, Math.min(3.4, dur * 0.65)))) },
       { key: 'film_close', min: 11, vAt: 1.4, cut: true, outside: true, go: (lt, dur) => (lt < 0.5 ? P_floor : lerpPose(P_high, P_far, ease(seg(lt, 0.6, dur)))), roof: () => 0 },

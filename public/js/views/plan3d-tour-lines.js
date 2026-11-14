@@ -144,6 +144,11 @@ export const TOUR_LINES = {
     show: "Inside, every surface is smooth, joint free, and easy to clean.",
     say: "Inside, every surface is smooth, joint free, and easy to clean.",
   },
+  film_inside_win: {
+    title: "Inside",
+    show: "Inside, every surface is smooth, joint free, and easy to clean. The windows are clear glass with a switchable privacy film: at the touch of a button, the glass turns frosted.",
+    say: "Inside, every surface is smooth, joint free, and easy to clean. The windows are clear glass, with a switchable privacy film. At the touch of a button, the glass turns frosted.",
+  },
   film_front: {
     title: "Glass wall",
     show: "Facing us is a full height glass wall, with a calming picture at its centre, from floor to ceiling.",
@@ -154,6 +159,11 @@ export const TOUR_LINES = {
     show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
     say: "The other walls are matte Clean Clad in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
   },
+  film_walls_nr: {
+    title: "Walls and ceiling",
+    show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Overhead, the ceiling is seamless.",
+    say: "The other walls are matte Clean Clad in light grey, coved at every corner. Overhead, the ceiling is seamless.",
+  },
   film_storage: {
     title: "Storage",
     show: "On the right is built-in storage, with glass fronted doors.",
@@ -163,6 +173,26 @@ export const TOUR_LINES = {
     title: "Surgeon’s wall",
     show: "Opposite the storage is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
     say: "Opposite the storage is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
+  },
+  film_surgeon_nb: {
+    title: "Surgeon’s wall",
+    show: "Opposite the storage is the surgeon’s wall, with the control panel and an X-ray viewer.",
+    say: "Opposite the storage is the surgeon’s wall, with the control panel and an X-ray viewer.",
+  },
+  film_surgeon_ns: {
+    title: "Surgeon’s wall",
+    show: "Here is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
+    say: "Here is the surgeon’s wall, with the control panel, an X-ray viewer, and a writing board.",
+  },
+  film_surgeon_ns_nb: {
+    title: "Surgeon’s wall",
+    show: "Here is the surgeon’s wall, with the control panel and an X-ray viewer.",
+    say: "Here is the surgeon’s wall, with the control panel and an X-ray viewer.",
+  },
+  film_centre_np: {
+    title: "The centre",
+    show: "At the centre, the laminar air flow plenum sends clean, filtered air down over the operating table.",
+    say: "At the centre, the laminar air flow plenum sends clean, filtered air down over the operating table.",
   },
   film_centre: {
     title: "The centre",
