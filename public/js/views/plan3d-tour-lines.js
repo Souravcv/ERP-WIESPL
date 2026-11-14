@@ -159,6 +159,21 @@ export const TOUR_LINES = {
     show: "Facing us is a full height glass wall, with a calming picture from floor to ceiling, and built-in storage set into the glass.",
     say: "Facing us is a full height glass wall, with a calming picture from floor to ceiling, and built-in storage set into the glass.",
   },
+  film_front_storeonly: {
+    title: "Glass wall",
+    show: "Facing us is a full height glass wall, with built-in storage set into the glass.",
+    say: "Facing us is a full height glass wall, with built-in storage set into the glass.",
+  },
+  film_front_plain: {
+    title: "Glass wall",
+    show: "Facing us is a full height glass wall, smooth and seamless from floor to ceiling.",
+    say: "Facing us is a full height glass wall, smooth and seamless from floor to ceiling.",
+  },
+  film_picture_side: {
+    title: "Picture glass",
+    show: "A calming picture, printed on glass, fills this wall from floor to ceiling.",
+    say: "A calming picture, printed on glass, fills this wall from floor to ceiling.",
+  },
   film_walls: {
     title: "Walls and ceiling",
     show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
@@ -178,6 +193,16 @@ export const TOUR_LINES = {
     title: "Storage",
     show: "The storage is built into the glass wall, with glass fronted doors, so supplies are always in sight.",
     say: "The storage is built into the glass wall, with glass fronted doors, so supplies are always in sight.",
+  },
+  film_storage_left: {
+    title: "Storage",
+    show: "On the left is built-in storage, with glass fronted doors.",
+    say: "On the left is built-in storage, with glass fronted doors.",
+  },
+  film_storage_door: {
+    title: "Storage",
+    show: "Beside the door is built-in storage, with glass fronted doors.",
+    say: "Beside the door is built-in storage, with glass fronted doors.",
   },
   film_surgeon: {
     title: "Surgeon’s wall",

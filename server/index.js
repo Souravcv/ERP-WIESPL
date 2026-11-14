@@ -986,6 +986,15 @@ const cleanFinishes = body => {
     const r = {};
     for (const key of ['wall', 'wall_colour', 'floor_type', 'floor_main', 'floor_border', 'door']) if (typeof f[key] === 'string' && FINISH_WORD.test(f[key])) r[key] = f[key];
     if (f.adj && typeof f.adj === 'object') r.adj = { dx: Number(f.adj.dx) || 0, dz: Number(f.adj.dz) || 0, turn: !!f.adj.turn };
+    // the client film of this OT: what it has (false: left out) and on which wall the picture, storage and surgeon's wall go
+    if (f.film && typeof f.film === 'object') {
+      const film = {};
+      for (const key of ['picture', 'store', 'panel', 'xray', 'board', 'risers', 'pendants', 'winFilm', 'display']) if (typeof f.film[key] === 'boolean') film[key] = f.film[key];
+      const w = f.film.walls && typeof f.film.walls === 'object' ? f.film.walls : {}, walls = {};
+      for (const key of ['picture', 'store', 'surgeon']) if (['front', 'left', 'right', 'door'].includes(w[key])) walls[key] = w[key];
+      if (Object.keys(walls).length) film.walls = walls;
+      r.film = film;
+    }
     out[k] = r;
   }
   return out;

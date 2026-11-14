@@ -94,9 +94,12 @@ const TINT = name => (/NICOMAC|PANEL|HPL|CLEAN ROOM/i.test(name) ? 0xdde6ef : /P
 // the client film's finishes: matte KLEENCLAD walls, antistatic vinyl, the hermetic sliding door
 const FILM_FINISH = { wall: 'kleenclad', floor_type: 'conductive', floor_main: 'Light grey', floor_border: 'Navy blue', picture: 'lake' };
 // what the client film's OT has: each can be left out; the film shows and the voice tells only what is there
-const FILM_PARTS = [['picture', 'Picture on the glass wall'], ['frontStore', 'Storage in the glass wall'], ['store', 'Storage on the side wall'], ['panel', 'Surgeon’s control panel · Digital OR'],
+// (kept with the drawing, per OT, beside its finishes); the picture, the storage and the surgeon's wall each go on a wall
+// chosen for them
+const FILM_PARTS = [['picture', 'Picture glass', 'picture'], ['store', 'Built-in storage', 'store'], ['panel', 'Surgeon’s control panel · Digital OR', 'surgeon'],
   ['xray', 'X-ray viewer'], ['board', 'Writing board'], ['risers', 'Return-air risers (corners)'], ['pendants', 'Surgeon’s and anaesthesia pendants'], ['winFilm', 'Window privacy film shown'], ['display', 'Digital OR display at the entrance']];
-const loadFilmParts = () => { try { return JSON.parse(localStorage.getItem('p3-filmparts') || '{}') || {}; } catch { return {}; } };
+const FILM_WALLS = [['front', 'Facing the door (glass)'], ['left', 'Left wall'], ['right', 'Right wall'], ['door', 'Door wall']];
+const FILM_WALL_DEFAULT = { picture: 'front', store: 'front', surgeon: 'left' };
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
@@ -152,7 +155,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
   let corridors = []; // corridor / passage names in the drawing, for the explainer tour
   let fx = {}; // the drawing's doors, plenums and return-air grilles in scene x / z, so each OT is fitted as drawn
   let filmHero = null; // the OT the client film is about: fitted round its main door
-  const filmParts = loadFilmParts();
+  const filmPartsOf = o => finishes[o.key]?.film || {};
 
   // vertical faces for a list of plan segments (x1, y1, x2, y2 …), darker at the foot (reads as contact shadow)
   const faces = (s, X, Z, y0, y1, foot = 0.8) => {
@@ -501,7 +504,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     for (const o of ots) {
       if (filmHero && !o.walls && o !== filmHero) continue;
       const film = o === filmHero, f = film ? { ...finishOf(o), ...FILM_FINISH } : finishOf(o);
-      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null, otherDoors, parts: film ? filmParts : null });
+      const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null, otherDoors, parts: film ? filmPartsOf(o) : null });
       mergeStatic(T, g); mergeStatic(T, ceiling); // a few meshes per OT instead of hundreds
       fitLayer.add(g); ceilLayer.add(ceiling); o.fit = { spots, group: g, ceiling };
     }
@@ -620,9 +623,7 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
           h('label.p3-check', { title: 'Show the drawing’s other doors of each OT (e.g. into a lab). Off: only the main door, from the passage' }, h('input', { type: 'checkbox', ...(otherDoors ? { checked: true } : {}), onchange: e => { otherDoors = e.target.checked; rebuild(); } }), ' Other OT doors')),
         roomSel, current && !walk.on ? h('div.toolbar', { style: { marginTop: '6px' } }, h('button.btn.small.primary', { onclick: () => standIn(current) }, '👁 Stand inside'), h('button.btn.small', { onclick: () => goTo(current) }, 'Above the room')) : null,
         null),
-      ots.length ? h('div.p3-box', h('b', 'In the client film'), h('p.muted', 'Untick what this OT should not have: the film leaves it out and the voice does not mention it.'),
-        h('div.p3-filmparts', FILM_PARTS.map(([k, label]) => h('label.p3-check', h('input', { type: 'checkbox', ...(filmParts[k] !== false ? { checked: true } : {}), disabled: touring || tour.on,
-          onchange: e => { filmParts[k] = e.target.checked; try { localStorage.setItem('p3-filmparts', JSON.stringify(filmParts)); } catch { /* not kept */ } } }), ' ' + label)))) : null,
+      ots.length ? filmBox() : null,
       h('div.p3-box', h('b', 'Quantities'), h('p.muted', 'Floor, wall panels, ceiling and coving per OT, from the room sizes in the drawing.'), h('button.btn.small', { onclick: () => openQuantities().catch(fail) }, '📐 Quantities from the drawing')),
       h('div.p3-box', h('b', 'Heights'), h('div.p3-row', h('span', 'Walls'), num(wallH, 1, 10, 0.1, v => { wallH = v; }), h('span', 'm')),
         h('div.p3-row', h('span', 'Furniture'), num(furnH, 0, 2, 0.1, v => { furnH = v; }), h('span', 'm (0 = flat)'))),
@@ -630,6 +631,20 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
         plan.areas.map((a, i) => h('option', { value: i, ...(i === areaIdx ? { selected: true } : {}) }, `${a.title || (i === 0 ? 'Main drawing' : 'Other area ' + i)} · ${Math.round(a.x1 - a.x0)} × ${Math.round(a.y1 - a.y0)} m`)))) : null,
       h('div.p3-box', h('b', 'Layers'), h('p.muted', 'What each CAD layer is. Your choices are remembered for the next drawing.'),
         h('table.p3-layers', h('tbody', layerRows))));
+  }
+
+  // what the client film of the chosen OT shows, and on which wall: saved with the drawing, so every computer sees it
+  function filmBox() {
+    const o = selected;
+    if (!o) return h('div.p3-box', h('b', 'In the client film'), h('p.muted', 'Tap an OT to choose what its client film shows and on which walls.'));
+    const film = filmPartsOf(o), walls = film.walls || {}, busy = touring || tour.on, ro = !meta?.canWrite;
+    const set = patch => { const cur = filmPartsOf(o); finishes[o.key] = { ...finishes[o.key], film: { ...cur, ...patch, walls: { ...(cur.walls || {}), ...(patch.walls || {}) } } }; saveSoon(); drawSide(); };
+    return h('div.p3-box', h('b', 'In the client film'), h('p.muted', `${o.name}: untick what it should not have, and choose the wall for each. The film shows, and the voice tells, only what is there.`),
+      h('div.p3-filmparts', FILM_PARTS.map(([k, label, wk]) => h('div.p3-filmpart',
+        h('label.p3-check', h('input', { type: 'checkbox', ...(film[k] !== false ? { checked: true } : {}), disabled: busy || ro, onchange: e => set({ [k]: e.target.checked }) }), ' ' + label),
+        wk && film[k] !== false ? h('select', { disabled: busy || ro, title: 'The wall it goes on, as seen coming in at the door', onchange: e => set({ walls: { [wk]: e.target.value } }) },
+          FILM_WALLS.map(([v, l]) => h('option', { value: v, ...((walls[wk] || FILM_WALL_DEFAULT[wk]) === v ? { selected: true } : {}) }, l))) : null))),
+      ro ? h('p.muted', 'Only people who can edit this record can change these.') : null);
   }
 
   const resize = () => { if (tour.recording) return; const w = stage.clientWidth, hh = stage.clientHeight; renderer.setSize(w, hh, false); camera.aspect = w / Math.max(1, hh); camera.updateProjectionMatrix(); };
