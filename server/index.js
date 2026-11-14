@@ -990,6 +990,7 @@ const cleanFinishes = body => {
     if (f.film && typeof f.film === 'object') {
       const film = {};
       for (const key of ['picture', 'store', 'panel', 'xray', 'board', 'risers', 'pendants', 'winFilm', 'display']) if (typeof f.film[key] === 'boolean') film[key] = f.film[key];
+      for (const key of ['wall', 'wallColour', 'floorMain', 'floorBorder']) if (typeof f.film[key] === 'string' && FINISH_WORD.test(f.film[key])) film[key] = f.film[key]; // the film's finishes
       const w = f.film.walls && typeof f.film.walls === 'object' ? f.film.walls : {}, walls = {};
       for (const key of ['picture', 'store', 'surgeon']) if (['front', 'left', 'right', 'door'].includes(w[key])) walls[key] = w[key];
       if (Object.keys(walls).length) film.walls = walls;

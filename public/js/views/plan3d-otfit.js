@@ -18,6 +18,14 @@ const doorKind = f => (f.door === 'sliding' || !f.door ? 'sliding' : 'swing'); /
 // KLEENCLAD antimicrobial cladding in the client film: RAL 7035 light grey, matte (low glare under OT lights)
 export const KLEENCLAD = 0xcbd0cc;
 
+// the wall of the film's passage, in the film's wall finish (KLEENCLAD unless another is chosen)
+export function filmWallMaterial(T, f) {
+  if (!f?.wall || f.wall === 'kleenclad') return new T.MeshStandardMaterial({ color: KLEENCLAD, roughness: 0.88, metalness: 0, envMapIntensity: 0.05 });
+  const W = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0], C = W.colours.find(c => c[0] === f.wall_colour) || W.colours[0];
+  if (W.key === 'glass' || W.key === 'ssglass') return new T.MeshPhysicalMaterial({ color: WALL_VIVID[C[0]] ?? C[1], metalness: 0, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.4 });
+  return new T.MeshStandardMaterial({ color: C[1], metalness: W.metal, roughness: W.rough, envMapIntensity: W.metal > 0.5 ? 0.8 : 0.2 });
+}
+
 // materials and textures shared by all the OTs of one viewer
 export function makeFitKit(T) {
   const mats = new Map(), texs = new Map();
@@ -196,7 +204,7 @@ export function fitOtRoom(T, kit, room, finish, wallH, rayDist, opt = {}) {
   const rotLong = long ? 0 : Math.PI / 2;
   // faces: every stretch of panelled wall (runs, under and over windows, over doors, closed-off doorways) for the film's
   // shading; foot: false where there is no wall down to the floor (a doorway)
-  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, faces: [], tPanel: 0.04, parts };
+  const spots = { H, long, span, across, center: [cx, cz], at, doors: [], pendants: [], risers: [], kit: [], picture: null, panel: null, laf: null, runs: null, faces: [], tPanel: 0.04, parts, finish };
   const RX = (x0 + x1) / 2, RZ = (z0 + z1) / 2; // the room's own middle (floor and ceiling)
 
   // ---- floor: border colour all round, main colour in the field, dark inlay line between them

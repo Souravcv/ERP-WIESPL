@@ -184,6 +184,66 @@ export const TOUR_LINES = {
     show: "The other walls are matte KLEENCLAD™ in light grey, coved at every corner. Overhead, the ceiling is seamless.",
     say: "The other walls are matte Clean Clad in light grey, coved at every corner. Overhead, the ceiling is seamless.",
   },
+  film_walk_ppgi: {
+    title: "Passage finishes",
+    show: "The walls are PPGL: pre-painted galvalume steel PUF panels with an antibacterial coat, in off-white. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+    say: "The walls are P P G L: pre-painted galvalume steel, P U F panels, with an antibacterial coat, in off-white. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+  },
+  film_walls_ppgi: {
+    title: "Walls and ceiling",
+    show: "The other walls are PPGL panels in off-white, with an antibacterial coat, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+    say: "The other walls are P P G L panels in off-white, with an antibacterial coat, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+  },
+  film_walls_nr_ppgi: {
+    title: "Walls and ceiling",
+    show: "The other walls are PPGL panels in off-white, with an antibacterial coat, coved at every corner. Overhead, the ceiling is seamless.",
+    say: "The other walls are P P G L panels in off-white, with an antibacterial coat, coved at every corner. Overhead, the ceiling is seamless.",
+  },
+  film_walk_ss: {
+    title: "Passage finishes",
+    show: "The walls are stainless steel, SS 304, on PUF panels: strong, non-porous and easy to disinfect. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+    say: "The walls are stainless steel, S S 304, on P U F panels: strong, non-porous, and easy to disinfect. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+  },
+  film_walls_ss: {
+    title: "Walls and ceiling",
+    show: "The other walls are brushed stainless steel, SS 304, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+    say: "The other walls are brushed stainless steel, S S 304, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+  },
+  film_walls_nr_ss: {
+    title: "Walls and ceiling",
+    show: "The other walls are brushed stainless steel, SS 304, coved at every corner. Overhead, the ceiling is seamless.",
+    say: "The other walls are brushed stainless steel, S S 304, coved at every corner. Overhead, the ceiling is seamless.",
+  },
+  film_walk_glass: {
+    title: "Passage finishes",
+    show: "The walls are back-painted toughened glass, eight millimetres thick: seamless, glossy and easy to wipe. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+    say: "The walls are back-painted toughened glass, eight millimetres thick: seamless, glossy, and easy to wipe. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+  },
+  film_walls_glass: {
+    title: "Walls and ceiling",
+    show: "The other walls are back-painted toughened glass, seamless and easy to wipe, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+    say: "The other walls are back-painted toughened glass, seamless and easy to wipe, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+  },
+  film_walls_nr_glass: {
+    title: "Walls and ceiling",
+    show: "The other walls are back-painted toughened glass, seamless and easy to wipe, coved at every corner. Overhead, the ceiling is seamless.",
+    say: "The other walls are back-painted toughened glass, seamless and easy to wipe, coved at every corner. Overhead, the ceiling is seamless.",
+  },
+  film_walk_ssglass: {
+    title: "Passage finishes",
+    show: "The walls are stainless steel up to dado height, with back-painted toughened glass above. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+    say: "The walls are stainless steel up to dado height, with back-painted toughened glass above. Above, a seamless ceiling, with sky panels and air diffusers. Below, antistatic vinyl.",
+  },
+  film_walls_ssglass: {
+    title: "Walls and ceiling",
+    show: "The other walls are stainless steel up to dado height, with back-painted toughened glass above, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+    say: "The other walls are stainless steel up to dado height, with back-painted toughened glass above, coved at every corner. Used air leaves low down, through return air grilles. Overhead, the ceiling is seamless.",
+  },
+  film_walls_nr_ssglass: {
+    title: "Walls and ceiling",
+    show: "The other walls are stainless steel up to dado height, with back-painted toughened glass above, coved at every corner. Overhead, the ceiling is seamless.",
+    say: "The other walls are stainless steel up to dado height, with back-painted toughened glass above, coved at every corner. Overhead, the ceiling is seamless.",
+  },
   film_storage: {
     title: "Storage",
     show: "On the right is built-in storage, with glass fronted doors.",

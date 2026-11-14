@@ -6,6 +6,7 @@ import { guessRole } from '../plan-extract.js';
 import { roomSize, isOt, openOtStudio, finishText, quantitiesDialog } from './plan3d-extras.js';
 import { findRoom, highlightMeshes, otMark, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
 import { makeFitKit, fitOtRoom, restyle, mergeStatic } from './plan3d-otfit.js';
+import { OT_FINISHES, FLOOR_COLOURS } from '../ot3d.js';
 import { createTour, corridorWidth } from './plan3d-tour.js';
 import { createFilm } from './plan3d-film.js';
 
@@ -100,6 +101,8 @@ const FILM_PARTS = [['picture', 'Picture glass', 'picture'], ['store', 'Built-in
   ['xray', 'X-ray viewer'], ['board', 'Writing board'], ['risers', 'Return-air risers (corners)'], ['pendants', 'Surgeon’s and anaesthesia pendants'], ['winFilm', 'Window privacy film shown'], ['display', 'Digital OR display at the entrance']];
 const FILM_WALLS = [['front', 'Facing the door (glass)'], ['left', 'Left wall'], ['right', 'Right wall'], ['door', 'Door wall']];
 const FILM_WALL_DEFAULT = { picture: 'front', store: 'front', surgeon: 'left' };
+// the film's wall finish: KLEENCLAD unless another WIESPL finish is chosen (the voice tells the one shown)
+const FILM_WALL_FINISHES = [['kleenclad', 'KLEENCLAD™ (matte, RAL 7035)', ['RAL 7035 light grey']], ...OT_FINISHES.map(f => [f.key, f.name, f.colours.map(c => c[0])])];
 const KIND = t => (/THEAT|\bOT\b|OPERATION|CATH|PROCEDURE/i.test(t) ? 'ot' : /CORRIDOR|LOBBY|PASSAGE/i.test(t) ? 'cor' : /STORE|STORAGE|SUPPLY/i.test(t) ? 'store'
   : /SHAFT|LIFT|STAIR|ELEVATOR|AHU/i.test(t) ? 'shaft' : /TOILET|WC|WASH|SCRUB|SINK/i.test(t) ? 'wet' : 'room');
 
@@ -503,7 +506,8 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
     if (!showFitted) return;
     for (const o of ots) {
       if (filmHero && !o.walls && o !== filmHero) continue;
-      const film = o === filmHero, f = film ? { ...finishOf(o), ...FILM_FINISH } : finishOf(o);
+      const film = o === filmHero, fp = film ? filmPartsOf(o) : {};
+      const f = film ? { ...finishOf(o), ...FILM_FINISH, ...(fp.wall ? { wall: fp.wall, wall_colour: fp.wallColour } : {}), ...(fp.floorMain ? { floor_main: fp.floorMain } : {}), ...(fp.floorBorder ? { floor_border: fp.floorBorder } : {}) } : finishOf(o);
       const { group: g, ceiling, spots } = fitOtRoom(T, kit, o, f, wallH, rayDist, { fx, chosen: hasFinish(o) && !film, layout: film ? 'entry' : null, otherDoors, parts: film ? filmPartsOf(o) : null });
       mergeStatic(T, g); mergeStatic(T, ceiling); // a few meshes per OT instead of hundreds
       fitLayer.add(g); ceilLayer.add(ceiling); o.fit = { spots, group: g, ceiling };
@@ -644,6 +648,15 @@ function build(stage, side, plan, meta, finishes, fileId, title) {
         h('label.p3-check', h('input', { type: 'checkbox', ...(film[k] !== false ? { checked: true } : {}), disabled: busy || ro, onchange: e => set({ [k]: e.target.checked }) }), ' ' + label),
         wk && film[k] !== false ? h('select', { disabled: busy || ro, title: 'The wall it goes on, as seen coming in at the door', onchange: e => set({ walls: { [wk]: e.target.value } }) },
           FILM_WALLS.map(([v, l]) => h('option', { value: v, ...((walls[wk] || FILM_WALL_DEFAULT[wk]) === v ? { selected: true } : {}) }, l))) : null))),
+      (() => { // the finishes the film shows: walls (OT and passage) and the floor's two colours
+        const wk = film.wall || 'kleenclad', W = FILM_WALL_FINISHES.find(x => x[0] === wk) || FILM_WALL_FINISHES[0], dis = busy || ro;
+        const sel = (val, items, on, title) => h('select', { disabled: dis, title, onchange: e => on(e.target.value) }, items.map(([v, l]) => h('option', { value: v, ...(v === val ? { selected: true } : {}) }, l)));
+        return h('div.p3-filmfinish',
+          h('div.p3-filmpart', h('span', 'Walls'), sel(wk, FILM_WALL_FINISHES.map(([k, n]) => [k, n]), v => set({ wall: v, wallColour: (FILM_WALL_FINISHES.find(x => x[0] === v) || W)[2][0] }), 'The OT and passage walls in the film; the voice tells this finish')),
+          W[2].length > 1 ? h('div.p3-filmpart', h('span', 'Wall colour'), sel(film.wallColour || W[2][0], W[2].map(c => [c, c]), v => set({ wallColour: v }))) : null,
+          h('div.p3-filmpart', h('span', 'Floor (main)'), sel(film.floorMain || FILM_FINISH.floor_main, FLOOR_COLOURS.map(([n]) => [n, n]), v => set({ floorMain: v }))),
+          h('div.p3-filmpart', h('span', 'Floor (border)'), sel(film.floorBorder || FILM_FINISH.floor_border, FLOOR_COLOURS.map(([n]) => [n, n]), v => set({ floorBorder: v }))));
+      })(),
       ro ? h('p.muted', 'Only people who can edit this record can change these.') : null);
   }
 

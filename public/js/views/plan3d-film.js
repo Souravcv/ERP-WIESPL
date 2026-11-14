@@ -195,6 +195,15 @@ export function createFilm(ctx, parts) {
     const P_high = look(ox + span * 0.45, span * 1.25 + H + 2, oz + span * 0.95, ox, 0, oz);
     const P_far = look(B.w * 0.12, Math.max(B.w, B.h) * 0.62 + 10, B.h * 0.62 + 6, 0, 0, 0);
 
+    // the wall finish shown: its voice lines (film_walk / film_walls + _ppgi, _ss, _glass, _ssglass; KLEENCLAD has none) and labels
+    const wallKey = S.finish?.wall && S.finish.wall !== 'kleenclad' ? S.finish.wall : 'kleenclad', wsfx = wallKey === 'kleenclad' ? '' : '_' + wallKey, wcol = S.finish?.wall_colour || '';
+    const WL = {
+      kleenclad: [['KLEENCLAD™ walls · Silver-Ion antimicrobial', 'Matte cladding · 2–2.5 mm'], 'KLEENCLAD™ · RAL 7035 light grey, matte'],
+      ppgi: [['PPGL walls · antibacterial coat', 'Pre-painted galvalume · PUF panels'], 'PPGL · off-white, antibacterial'],
+      ss: [['SS 304 walls', 'Brushed stainless steel · PUF panels'], 'SS 304 · brushed steel'],
+      glass: [['Toughened glass walls · 8 mm', 'Back-painted glass' + (wcol ? ' · ' + wcol : '')], 'Toughened glass' + (wcol ? ' · ' + wcol : '')],
+      ssglass: [['SS 304 dado · toughened glass above', 'Back-painted glass' + (wcol ? ' · ' + wcol : '')], 'SS 304 dado + glass' + (wcol ? ' · ' + wcol : '')],
+    }[wallKey] || null;
     const project = String(ctx.title || '').replace(/\.(dwg|dxf)$/i, '').replace(/\s+(proposal|layout|drawing|plan)\b.*$/i, '').trim();
     const name = otTitle(o.name);
     // scenes: key (its voice line), the shortest it may be, when the voice starts, labels [fraction, text], and go()
@@ -216,8 +225,8 @@ export function createFilm(ctx, parts) {
         rise: lt => 0.03 + 0.97 * ease(seg(lt, 0.3, 5)), glow: lt => 1 - seg(lt, 2.5, 5.5), roof: (lt, dur) => ease(seg(lt, 5.2, Math.min(dur - 0.4, 7.8))) },
       { key: 'film_passage', min: 7, vAt: 3.2, labels: [[0.62, 'Clean passage']],
         go: (lt, dur, s) => run.path(s.start + lt), dip: true, roof: lt => 1 - ease(seg(lt, 0, 1.6)) },
-      { key: 'film_walk', min: 14, vAt: 1.2, lightsOn: true,
-        labels: [[0.06, 'KLEENCLAD™ walls · Silver-Ion antimicrobial'], [0.3, 'Matte cladding · 2–2.5 mm'], [0.52, 'Sky ceiling · air diffusers'], [0.76, 'Antistatic vinyl floor']],
+      { key: 'film_walk' + wsfx, min: 14, vAt: 1.2, lightsOn: true,
+        labels: [[0.06, WL[0][0]], [0.3, WL[0][1]], [0.52, 'Sky ceiling · air diffusers'], [0.76, 'Antistatic vinyl floor']],
         go: (lt, dur) => { const k = ease(seg(lt, 0.4, dur - 0.2)), p = lerpPose(P_eye, P_near, k); p.pitch += 0.34 * Math.sin(Math.PI * seg(k, 0.4, 0.72)) - 0.22 * Math.sin(Math.PI * seg(k, 0.8, 1)); return p; } },
       P_scrub && { key: 'film_scrub', min: 6, vAt: 0.6, labels: [[0.15, 'Scrub station']], go: (lt, dur) => lerpPose(P_near, P_scrub, ease(seg(lt, 0, Math.min(3.5, dur * 0.7)))) },
       P_disp && want.display !== false && { key: 'film_entrance', min: 9, vAt: 1.4, labels: [[0.1, 'WIESPL Digital OR · entrance display'], [0.5, 'Surgery · patient · surgeon · temperature · humidity · pressure']], go: (lt, dur) => lerpPose(P_scrub || P_near, P_disp, ease(seg(lt, 0, Math.min(3.4, dur * 0.4)))) },
@@ -228,7 +237,7 @@ export function createFilm(ctx, parts) {
         go: (lt, dur) => ({ ...P_in, yaw: P_in.yaw - Math.PI * 2 * ease(seg(lt, 0.3, dur - 0.3)) }) },
       F && { key: frontPic ? (C?.where === 'front' ? 'film_front_store' : 'film_front') : (C?.where === 'front' ? 'film_front_storeonly' : 'film_front_plain'), min: 7, vAt: 0.9,
         labels: [[0.15, ['Full-height glass', frontPic && 'picture panel', C?.where === 'front' && 'built-in storage'].filter(Boolean).join(' · ')]], inside: true, go: (lt, dur) => lerpPose(P_in, P_front, ease(seg(lt, 0, Math.min(3.6, dur * 0.6)))) },
-      { key: riser ? 'film_walls' : 'film_walls_nr', min: 10, vAt: 0.5, inside: true, labels: [[0.05, 'KLEENCLAD™ · RAL 7035 light grey, matte'], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
+      { key: (riser ? 'film_walls' : 'film_walls_nr') + wsfx, min: 10, vAt: 0.5, inside: true, labels: [[0.05, WL[1]], riser ? [0.4, 'Return-air risers'] : null, [0.72, 'Seamless ceiling']].filter(Boolean),
         go: (lt, dur) => { const k = lt / dur; return k < 0.32 ? lerpPose(P_front, P_wallA, ease(seg(k, 0, 0.3))) : k < 0.66 ? lerpPose(P_wallA, P_riser, ease(seg(k, 0.32, 0.62))) : lerpPose(P_riser, P_ceil, ease(seg(k, 0.66, 0.95))); } },
       P_pic && { key: 'film_picture_side', min: 6.5, vAt: 0.9, inside: true, labels: [[0.18, 'Printed picture glass · floor to ceiling']], go: (lt, dur) => lerpPose(P_ceil, P_pic, ease(seg(lt, 0, Math.min(3.4, dur * 0.6)))) },
       P_store && { key: { front: 'film_storage_front', left: 'film_storage_left', door: 'film_storage_door' }[C.where] || 'film_storage', min: 6.5, vAt: 0.9, inside: true, labels: [[0.18, 'Built-in storage · 60% glass doors']], go: (lt, dur) => lerpPose(P_pic || P_ceil, P_store, ease(seg(lt, 0, Math.min(3.4, dur * 0.6)))) },
