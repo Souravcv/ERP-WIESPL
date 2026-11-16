@@ -44,6 +44,7 @@ import * as qcp from './qcplans.js';
 import * as ai from './ai.js';
 import * as enq from './enquiries.js';
 import * as perf from './performance.js';
+import * as journey from './journey.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -59,6 +60,7 @@ ai.migrateAi();
 ai.startEngine(); // the built-in AI engine (data/ai-engine), when it is there
 seed();
 roles.seedRoles();
+journey.migrateJourneys();
 dispatch.migrateProjectBoqs();
 importer.fixPoNumbers();
 lots.setupLots();
@@ -687,6 +689,11 @@ api.post('/production_plans/:id/act/:action', need('production_plans'), wrap(req
 api.post('/production_reports/:id/submit', need('production_reports'), wrap(req => prod.submitReport(req.params.id, req.user)));
 api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.user.role)) throw new HttpError(403, 'No access to quality'); return qa.qualityReview(req.query); }));
 api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
+// the order journey: one per order, from the enquiry to the OT handover (server/journey.js)
+api.get('/journeys', wrap(req => journey.list(req.user)));
+api.get('/journeys/:id', wrap(req => journey.view(Number(req.params.id), req.user)));
+api.post('/journeys/:id/steps/:step', wrap(req => journey.setStep(Number(req.params.id), req.params.step, req.body, req.user)));
+api.put('/journeys/:id/links', wrap(req => journey.setLinks(Number(req.params.id), req.body, req.user)));
 api.get('/project-qc/:id', wrap(req => qcp.board(req.params.id, req.user)));
 api.get('/project-qc/:id/file', wrap(req => qcp.file(req.params.id, req.user)));
 api.post('/project-qc/:id/generate', need('project_qc'), wrap(req => qcp.generate(req.params.id, req.user)));

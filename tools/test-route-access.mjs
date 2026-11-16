@@ -25,7 +25,8 @@ const INSIDE = ['GET /project-qc/:id', 'GET /project-qc/:id/file', 'POST /purcha
   'POST /projects/:id/schedule/template', 'POST /projects/:id/schedule/baseline', 'POST /boms/:id/review', 'POST /boms/:id/final', 'POST /boms/:id/reopen', 'POST /material_requests/:id/process', 'POST /material_requests/:id/reject',
   'POST /production_entries/:id/post', 'POST /invoices/:id/cancel', 'POST /payments/:id/reverse', 'POST /payments/:id/form16a', 'POST /vendor_bills/:id/override', 'POST /separations/:id/act/:action', 'POST /attendance/:id/review',
   'POST /service_work_orders/:id/to-store', 'POST /amc_contracts/:id/proforma', 'POST /costing_sheets/:id/to-quotation', 'POST /costing_sheets/:id/proforma', 'POST /approvals/:id/decide', 'PUT /signatures/:id', 'DELETE /signatures/:id',
-  'DELETE /files/:id', 'DELETE /:entity/:id', 'POST /login', 'POST /logout']; // checked in the function the route calls or further down its handler (login: before the session)
+  'DELETE /files/:id', 'DELETE /:entity/:id', 'POST /login', 'POST /logout',
+  'GET /journeys', 'GET /journeys/:id', 'POST /journeys/:id/steps/:step', 'PUT /journeys/:id/links']; // checked in the function the route calls or further down its handler (login: before the session)
 const known = new Set([...SELF, ...ALL_OFFICE, ...INSIDE]);
 const src = fs.readFileSync(path.join(ROOT, 'server/index.js'), 'utf8').split(/\r?\n/);
 const SHOWN = /requireRole\(|need\(|canView\(|canWrite\(|hasFunction\(|viewable\(|pickable\(|\b(recoRight|payView|arView|lotView|prodView|planView|qaView|hrView|storeView|itemView)\(req\)/;
