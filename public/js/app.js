@@ -1,5 +1,6 @@
 import { h, api, state, toast, fail, modal } from './ui.js';
 import { startI18n, getLang, setLang } from './i18n.js';
+import { initAssistant } from './assistant.js';
 import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
@@ -240,6 +241,7 @@ async function start() {
   $('app').classList.remove('hidden');
   $('user-name').textContent = `${state.user.name} · ${state.user.role_label || state.user.role}`;
   buildNav();
+  initAssistant();
   refreshPending();
   startNotifications();
   if (state.user.must_change) await changePassword(true);

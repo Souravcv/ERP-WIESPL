@@ -41,6 +41,7 @@ import * as hrf from './hrfile.js';
 import * as prod from './production.js';
 import * as qa from './quality.js';
 import * as qcp from './qcplans.js';
+import * as ai from './ai.js';
 import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 const { draftRow } = sf;
@@ -54,6 +55,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 3000;
 
 migrate();
+ai.migrateAi();
+ai.startEngine(); // the built-in AI engine (data/ai-engine), when it is there
 seed();
 roles.seedRoles();
 dispatch.migrateProjectBoqs();
@@ -114,7 +117,7 @@ api.use(authenticate);
 
 // Least-access roles (shop floor, site): only what is listed here and the modules their role is given; every other route
 // is refused, also routes added later. /:entity/options: only for fields of the modules they see (their forms need the lists).
-const WORKER_ROUTES = new Set(['me', 'people', 'notifications', 'my-tasks', 'performance', 'hr', 'logout']);
+const WORKER_ROUTES = new Set(['me', 'people', 'notifications', 'my-tasks', 'performance', 'hr', 'logout', 'ai']);
 // The pick lists a role's forms need: the modules it sees and every module their fields point to (labels only).
 const pickable = (entity, role) => canView(entity, role) || Object.entries(ENTITIES).some(([k, e]) => canView(k, role)
   && e.fields.some(f => f.ref === entity || (f.itemRef && entity === 'items') || (f.columns || []).some(c => c.ref === entity)));
@@ -247,6 +250,15 @@ const mailFileName = n => { const name = String(n || '').trim().slice(0, 120); i
 api.get('/settings/mail-files', requireRole(), wrap(() => ({ files: mail.mailFiles(), missing: mail.mailProblems() })));
 api.post('/settings/mail-files', requireRole(), express.raw({ type: () => true, limit: '15mb' }), wrap(req => { const name = mailFileName(req.query.name); fs.mkdirSync(mail.MAIL_FILES, { recursive: true }); fs.writeFileSync(path.join(mail.MAIL_FILES, name), req.body); audit(req.user.name, 'settings', null, 'update', `email attachment added: ${name}`); return { files: mail.mailFiles() }; }));
 api.delete('/settings/mail-files/:name', requireRole(), wrap(req => { const name = mailFileName(req.params.name); fs.rmSync(path.join(mail.MAIL_FILES, name), { force: true }); audit(req.user.name, 'settings', null, 'update', `email attachment removed: ${name}`); return { files: mail.mailFiles() }; }));
+// ---------------------------------------------------------------- WIESPL Assistant (AI on a WIESPL machine, server/ai.js)
+// everyone may ask; it sees only the modules their role may see. Settings and the document library: admin only.
+api.post('/ai/chat', (req, res, next) => ai.chat(req, res).catch(next));
+api.post('/ai/voice', express.raw({ type: () => true, limit: '25mb' }), wrap(req => ai.transcribe(req.body)));
+api.get('/ai/status', wrap(async req => { const s = await ai.status(); return req.user.role === 'admin' ? { ...s, indexing: ai.indexingNow() } : { ok: s.ok, chatModel: s.chatModel, voice: s.voice, error: s.error }; }));
+api.put('/ai/settings', requireRole(), wrap(req => ai.saveAiConfig(req.body, req.user)));
+api.post('/ai/reindex', requireRole(), wrap(req => ai.reindex(req.user)));
+api.post('/ai/docs', requireRole(), express.raw({ type: () => true, limit: '60mb' }), wrap(req => ai.saveDoc(req.query.name, req.body, req.user)));
+api.delete('/ai/docs/:name', requireRole(), wrap(req => ai.deleteDoc(req.params.name, req.user)));
 api.post('/settings/mail-test', requireRole(), wrap(async req => { try { await mail.sendTestMail(req.body?.to); } catch (e) { throw new HttpError(400, `Email not sent: ${String(e.message).slice(0, 200)}`); } audit(req.user.name, 'settings', null, 'email', `test email to ${req.body.to}`); return { ok: true }; }));
 // Document numbering: continue any series from your own number (challan book, Smart Store GRN / issue numbers …).
 // fmt(n, fy) is the same format the numbering in hooks.js / stock.js uses; "used" is the highest number of this FY in the CRM.
