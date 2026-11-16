@@ -100,7 +100,7 @@ export function createTour(ctx) {
     box(len, 0.012, w, border, 0, 0.009, 0);
     box(len - band * 2, 0.013, w - band * 2, keep(new T.MeshStandardMaterial({ color: film ? 0xc3cad2 : 0x5b93ae, roughness: film ? 0.45 : 0.28, envMapIntensity: film ? 0.15 : 0.4, map: vinyl })), 0, 0.0095, 0);
     // panelled walls along both sides, with the vinyl coved up the foot of the wall (only where the drawing has a wall)
-    const seam = seamTexture(T), wallMat = keep(film ? filmWallMaterial(T, r.o?.fit?.spots?.finish) : new T.MeshPhysicalMaterial({ color: 0xa6d8cd, roughness: 0.14, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, map: seam, envMapIntensity: 0.6 }));
+    const seam = seamTexture(T), wallMat = keep(film ? filmWallMaterial(T, r.o?.fit?.spots?.finish) : new T.MeshPhysicalMaterial({ color: 0xa6d8cd, roughness: 0.14, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.6 })); // seamless: no panel joint lines
     const lineBlue = keep(new T.MeshStandardMaterial({ color: 0x1f6fb5, roughness: 0.35 })), lineGreen = keep(new T.MeshStandardMaterial({ color: 0x5cb85c, roughness: 0.35 }));
     const rail = keep(new T.MeshStandardMaterial({ color: 0xe3e6e8, roughness: 0.5, envMapIntensity: 0.15 })), railIn = keep(new T.MeshStandardMaterial({ color: 0x8d98a4, roughness: 0.6 }));
     const wallRuns = { 1: [], '-1': [] };

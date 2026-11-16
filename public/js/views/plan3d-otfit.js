@@ -31,8 +31,7 @@ export function makeFitKit(T) {
   const mats = new Map(), texs = new Map();
   const get = (key, make) => { if (!mats.has(key)) mats.set(key, make()); return mats.get(key); };
   const tex = (key, draw, w, h, rep) => { if (!texs.has(key)) { const t = artTexture(T, draw, w, h); if (rep) { t.wrapS = t.wrapT = T.RepeatWrapping; t.repeat.set(rep[0], rep[1]); } texs.set(key, t); } return texs.get(key); };
-  const seam = tex('seam', (g, w, h) => { g.fillStyle = '#ffffff'; g.fillRect(0, 0, w, h); g.fillStyle = 'rgba(40,52,68,.5)'; g.fillRect(0, 0, 3, h); g.fillStyle = 'rgba(255,255,255,.6)'; g.fillRect(3, 0, 1, h); }, 256, 8, [1, 1]);
-  const brushedSeam = tex('brushedSeam', brushed(true), 256, 256, [1, 3]), brushedPlain = tex('brushed', brushed(false), 256, 256, [1, 1]);
+  const brushedPlain = tex('brushed', brushed(false), 256, 256, [1, 1]);
   // studio reflections only on metal and glass: painted panels and vinyl keep their true colour
   const std = (color, metal = 0.1, rough = 0.5, extra = {}) => new T.MeshStandardMaterial({ color, metalness: metal, roughness: rough, envMapIntensity: metal > 0.5 ? 1 : 0.2, ...extra });
   const basic = extra => new T.MeshBasicMaterial({ toneMapped: false, ...extra });
@@ -41,10 +40,10 @@ export function makeFitKit(T) {
       if (f.wall === 'kleenclad') { const m = get('p-kleenclad', () => std(KLEENCLAD, 0, 0.88, { envMapIntensity: 0.04 })); return { low: m, high: m, combo: false }; }
       const F = OT_FINISHES.find(x => x.key === f.wall) || OT_FINISHES[0];
       const C = F.colours.find(c => c[0] === f.wall_colour) || F.colours[0], colour = (F.key === 'glass' || F.key === 'ssglass') ? WALL_VIVID[C[0]] ?? C[1] : C[1];
-      const ss = () => std(0xffffff, 0.85, 0.32, { map: brushedSeam });
+      const ss = () => std(0xffffff, 0.85, 0.32, { map: brushedPlain }); // walls are seamless: no panel joint lines
       const make = () => (F.metal > 0.5 ? ss() : F.key === 'glass' || F.key === 'ssglass'
-        ? new T.MeshPhysicalMaterial({ color: colour, metalness: 0, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.4, map: seam })
-        : std(colour, F.metal, F.rough, { map: seam }));
+        ? new T.MeshPhysicalMaterial({ color: colour, metalness: 0, roughness: 0.12, clearcoat: 1, clearcoatRoughness: 0.08, envMapIntensity: 0.4 })
+        : std(colour, F.metal, F.rough));
       return { low: get(`p-low-${F.key}-${colour}`, () => (F.combo ? ss() : make())), high: get(`p-high-${F.key}-${colour}`, make), combo: !!F.combo };
     },
     floor: name => get(`f-${name}`, () => std(floorHex(name), 0, 0.42, { map: tex('vinyl', drawVinyl, 256, 256, [6, 6]), envMapIntensity: 0.18 })),
