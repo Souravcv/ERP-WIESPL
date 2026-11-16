@@ -56,6 +56,33 @@ const peopleWithoutLogin = () => db.prepare(`SELECT e.id, e.emp_code, e.name, e.
 export const loginGaps = actor => ({ people: peopleWithoutLogin(),
   roles: db.prepare('SELECT name, label FROM roles ORDER BY label').all().filter(r => actor.role === 'admin' || !['admin', 'manager'].includes(r.name)) });
 
+// Everyone working here who has a login (HR → App logins, administrators only): for printing new temporary passwords.
+// Administrator logins are left out (they are reset one by one under Admin → Users), so no one locks the owner out.
+// Passwords are kept only as hashes, so an existing one can never be shown: a new temporary one is made instead.
+export const loginHolders = actor => (actor.role !== 'admin' ? [] : db.prepare(`SELECT u.id AS user_id, e.emp_code, e.name, e.department, u.username, u.role, COALESCE(r.label, u.role) AS role_label
+  FROM employees e JOIN users u ON lower(u.username) = lower(trim(e.login)) AND u.active = 1 LEFT JOIN roles r ON r.name = u.role
+  WHERE COALESCE(e.status, 'Active') = 'Active' AND u.id <> ? AND u.role <> 'admin' ORDER BY e.name`).all(actor.id));
+
+// New temporary passwords for the ticked people, all or none: each must set their own at the next sign-in. Shown once, to the
+// administrator who pressed the button. Their old passwords stop working.
+export function resetLogins(userIds, actor) {
+  if (actor.role !== 'admin') throw new HttpError(403, 'Only an administrator can give new passwords');
+  if (!Array.isArray(userIds) || !userIds.length) throw new HttpError(400, 'Tick at least one person');
+  const open = new Map(loginHolders(actor).map(p => [p.user_id, p]));
+  return tx(() => {
+    const created = [];
+    for (const id of userIds) {
+      const p = open.get(Number(id));
+      if (!p) continue; // left meanwhile, or the administrator's own login
+      const password = crypto.randomBytes(9).toString('base64url');
+      db.prepare('UPDATE users SET pass_hash = ?, must_change = 1 WHERE id = ?').run(hashPassword(password), p.user_id);
+      audit(actor.name, 'users', p.user_id, 'update', `${p.username}: new temporary password (printed login slips)`);
+      created.push({ emp_code: p.emp_code, name: p.name, department: p.department, username: p.username, password, role: p.role });
+    }
+    return { created };
+  });
+}
+
 // Logins for many people at once, all or none. The temporary passwords come back once, to the person who pressed the button.
 export function createLogins(list, actor) {
   if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Tick at least one employee');

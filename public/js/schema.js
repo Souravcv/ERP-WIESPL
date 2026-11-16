@@ -3,9 +3,9 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'design_engineer', 'production_manager'];
+export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer', 'design_engineer', 'production_manager'];
 // Least-access roles for the shop floor and site: own attendance and leave, own tasks, own performance.
-export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer'];
+export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer'];
 // Departments a work order line belongs to (the work order is one master copy; each department sees its part).
 export const WO_DEPARTMENTS = ['Design', 'Purchase', 'Production', 'Store', 'Logistics', 'Site / Installation', 'Electrical', 'Service'];
 // The department each built-in profile works for (its default view of a work order).
@@ -103,6 +103,7 @@ export const ROLE_INFO = {
   electrical_wiring: { label: 'Electrical Wiring', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
   software_engineer: { label: 'Software Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
   network_engineer: { label: 'Network Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
+  electronics_engineer: { label: 'Electronics Engineer', description: 'Least access: own attendance and leave, own tasks, own performance and the department\'s' },
   design_engineer: { label: 'Design Engineer', description: 'Projects, BOQs, BOMs, material lists, drawing approvals and QC plans. No PO or BOQ approvals' },
   production_manager: { label: 'Production Manager', description: 'Everything the Production Supervisor has, plus approval of the monthly production plan' },
   incharge: { label: 'Work In-charge', description: 'As a worker, plus: enters the daily work of the department\'s team, sees the whole department, requests material from the store' },
@@ -124,7 +125,7 @@ export const ROLE_SEES = {
   production: ['approvals', 'material_requests', 'production_entries', 'items', 'stock_drafts', 'boms', 'bom_items', 'material_lists'],
   service: ['customers', 'contacts', 'approvals', ...SERVICE_VIEW, 'material_requests', 'costing_sheets', 'items', 'invoices', 'work_locations', 'site_assignments'],
   hr: ['approvals', 'employees', 'work_locations', 'site_assignments', 'attendance', 'attendance_pings', 'leave_requests', 'holidays', 'projects', 'onboardings', 'probation_reviews', 'asset_issues', 'separations'],
-  worker: [], helper: [], technician: [], wiring_engineer: [], panel_maker: [], driver: [], site_installation: [], electrical_wiring: [], software_engineer: [], network_engineer: [],
+  worker: [], helper: [], technician: [], wiring_engineer: [], panel_maker: [], driver: [], site_installation: [], electrical_wiring: [], software_engineer: [], network_engineer: [], electronics_engineer: [],
   design_engineer: ['approvals', 'material_approvals', 'projects', ...BOQ_VIEW, 'products', 'items', 'material_requests', 'dispatch_plans', 'production_orders', 'qc_plans', 'project_qc', 'ncrs'],
   incharge: ['material_requests', 'items'],
   planning: ['approvals', 'projects', 'dispatch_plans', ...BOQ_VIEW, 'challans', 'requisitions', 'purchase_orders', 'items', 'stock_moves', 'material_requests', 'production_entries'],

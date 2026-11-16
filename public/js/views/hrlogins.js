@@ -5,8 +5,9 @@ import { h, api, toast, busy, modal, fail } from '../ui.js';
 const FULL_ACCESS = ['admin', 'manager'];
 
 export async function appLogins(box) {
-  const { people = [], roles = [] } = await api('/hr/login-gaps').catch(e => { fail(e); return {}; });
-  if (!people.length) return box.replaceChildren(h('p.muted', 'Every active employee has a login.'));
+  const [{ people = [], roles = [] }, holders] = await Promise.all([api('/hr/login-gaps').catch(e => { fail(e); return {}; }), api('/hr/login-holders').catch(() => ({ people: [], allowed: false }))]);
+  const reprint = holdersPart(box, holders);
+  if (!people.length) return box.replaceChildren(h('p.muted', 'Every active employee has a login.'), reprint);
   const labels = Object.fromEntries(roles.map(r => [r.name, r.label]));
   const roleLabel = r => labels[r] || r;
 
@@ -34,7 +35,34 @@ export async function appLogins(box) {
   box.replaceChildren(
     h('p', `${people.length} active employee${people.length === 1 ? ' has' : 's have'} no login yet. Worker is the least access: own attendance and leave, own tasks. Choose another role for anyone who needs more.`),
     h('div.toolbar', go),
-    h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Code'), h('th', 'Name'), h('th', 'Department'), h('th', 'Designation'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))));
+    h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Code'), h('th', 'Name'), h('th', 'Department'), h('th', 'Designation'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))),
+    reprint);
+}
+
+// People who already have a login (administrators only): passwords are kept locked and can never be shown, so the ticked
+// people get new temporary passwords, printed as a sheet (Print → Save as PDF). Each sets their own at the next sign-in.
+function holdersPart(box, { people = [], allowed = false } = {}) {
+  if (!allowed || !people.length) return null;
+  const rows = people.map(p => { const tick = h('input', { type: 'checkbox', onchange: () => count() }); return { p, tick, tr: h('tr', h('td', tick), h('td', p.emp_code || ''), h('td', p.name), h('td', p.department || ''), h('td', h('b', p.username)), h('td', p.role_label)) }; });
+  const all = h('input', { type: 'checkbox', 'aria-label': 'Tick everyone', onchange: () => { rows.forEach(r => { r.tick.checked = all.checked; }); count(); } });
+  const go = h('button.btn', { type: 'button', onclick: busy(() => reset()) });
+  const count = () => { const n = rows.filter(r => r.tick.checked).length; go.textContent = `🖨 New passwords and print for ${n}`; go.disabled = !n; };
+  count();
+  const reset = async () => {
+    const ticked = rows.filter(r => r.tick.checked);
+    const yes = await modal('Give new passwords?', h('div',
+      h('p', `${ticked.length} people get a new temporary password. Their current passwords stop working at once, so hand the sheet out straight away. Each person sets their own password at the next sign-in.`),
+      h('p', 'The passwords are shown once, on the next screen: print them (or Save as PDF) before you leave it.')),
+      [{ label: 'Cancel', value: false }, { label: 'Give new passwords', cls: 'primary', value: true }]);
+    if (!yes) return;
+    const labels = Object.fromEntries(people.map(p => [p.role, p.role_label]));
+    showCreated(box, (await api('/hr/login-reset', { method: 'POST', body: { user_ids: ticked.map(r => r.p.user_id) } })).created, r => labels[r] || r);
+  };
+  return h('div', { style: { marginTop: '24px' } },
+    h('h3', 'Print login slips for people who already have a login'),
+    h('p.muted', 'Passwords are kept locked and cannot be shown. Tick the people who need their login on paper: they get a new temporary password, printed on a sheet. Administrator logins and your own are not in the list.'),
+    h('div.toolbar', go),
+    h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Code'), h('th', 'Name'), h('th', 'Department'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))));
 }
 
 function showCreated(box, created, roleLabel) {
@@ -57,7 +85,7 @@ function showCreated(box, created, roleLabel) {
     setTimeout(() => window.print(), 50);
   };
   box.replaceChildren(
-    h('p', { style: { color: 'var(--warn)' } }, `${created.length} login${created.length === 1 ? '' : 's'} created. These passwords are shown only this once: print them now. Each person sets a new password at the first sign-in. An administrator can set a new one under Admin → Users.`),
+    h('p', { style: { color: 'var(--warn)' } }, `${created.length} login${created.length === 1 ? '' : 's'} ready. These passwords are shown only this once: print them now (Print → Save as PDF for a PDF). Each person sets a new password at the first sign-in. An administrator can set a new one under Admin → Users.`),
     h('div.toolbar', h('button.btn.primary', { type: 'button', onclick: print }, '🖨 Print'), h('button.btn', { type: 'button', onclick: copy }, '📋 Copy all'), h('button.btn', { type: 'button', onclick: done }, 'Done, I have them')),
     address ? h('p', `Address: ${address}`) : null,
     h('div.table-wrap', sheet()));
