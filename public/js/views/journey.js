@@ -2,14 +2,24 @@
 // six columns, as on the End-to-End Flow sheet. Steps tick by hand (done / not needed, with a note) or by themselves
 // when the CRM already records the fact.
 import { h, api, toast, fail, busy, modal, fmtDate } from '../ui.js';
-import { PHASES, STEPS } from '../journey.js';
+import { PHASES, STEPS, RACI } from '../journey.js';
 
 const KIND = { start: 'Start / milestone', gate: 'Approval or check', client: 'Client', vendor: 'Vendor', site: 'Site', end: 'Handover', step: 'Step' };
 
+// a role's name, and who has it (a role nobody has yet stands out)
+const roleTag = (roles, r) => { const x = roles?.[r]; const label = x?.label || r; if (!x || x.outside) return h('span.jr-role', label);
+  return h('span', { class: `jr-role${x.people.length ? '' : ' nobody'}`, title: x.people.length ? x.people.join(', ') : 'No one has this role yet' }, label); };
+const roleList = (roles, list) => (list?.length ? list.flatMap((r, i) => [i ? ' › ' : null, roleTag(roles, r)]) : h('span.muted', '—'));
+// who does it, who approves, by when, and what must be in the CRM
+const raciLines = (roles, key) => { const x = RACI[key]; if (!x) return null;
+  return h('div.jr-raci', h('div', h('span.jr-rk', 'Does'), roleList(roles, x.r)), x.a.length ? h('div', h('span.jr-rk', 'Approves'), roleList(roles, x.a)) : null,
+    h('div', h('span.jr-rk', 'By'), x.due), h('div', h('span.jr-rk', 'Needs'), x.doc)); };
+
 export async function journeyView(root, id) {
+  if (id === 'raci') return raciView(root);
   if (id) return detail(root, Number(id));
   const { journeys } = await api('/journeys');
-  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps')));
+  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'), h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
   const cols = PHASES.map(p => {
     const here = journeys.filter(j => !j.done && j.phase === p.no);
     return h('div.jr-col', { style: `--ph:${p.colour}` },
@@ -38,7 +48,7 @@ async function detail(root, id) {
   const draw = async () => {
     d = await api(`/journeys/${id}`);
     const pct = Math.round((d.finished / d.total) * 100);
-    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', h('a.btn', { href: '#/journey' }, '← All orders')));
+    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', h('a.btn', { href: '#/journey/raci' }, '📋 Who does what'), h('a.btn', { href: '#/journey' }, '← All orders')));
     root.replaceChildren(head,
       h('div.card.jr-summary',
         h('div.jr-links', linkBox('Enquiry', 'enquiry', 'enquiries', 'enquiry_id'), linkBox('Sales order', 'order', 'sales_orders', 'sales_order_id'), linkBox('Project', 'project', 'projects', 'project_id')),
@@ -99,9 +109,25 @@ async function detail(root, id) {
       h('div.jr-steph', h('span.jr-sno', n), h('b', s.title), s.subs ? null : state(x, s.key, s.title)[0]),
       h('div.jr-who', s.who, s.kind !== 'step' ? ` · ${KIND[s.kind]}` : ''),
       h('div.jr-hint', s.hint),
-      s.subs ? h('div.jr-subs', x.subs.map(p => h('div', { class: `jr-sub st-${p.status}` }, h('div.jr-steph', h('span', p.title), state(p, p.key, p.title)[0]), h('div.jr-who', p.who), ...state(p, p.key, p.title).slice(1))))
+      s.subs ? null : raciLines(d.roles, s.key),
+      s.subs ? h('div.jr-subs', x.subs.map(p => h('div', { class: `jr-sub st-${p.status}` }, h('div.jr-steph', h('span', p.title), state(p, p.key, p.title)[0]), h('div.jr-who', p.who), raciLines(d.roles, p.key), ...state(p, p.key, p.title).slice(1))))
         : s.derived ? h('div.jr-fact', x.status === 'open' ? 'Ticks itself when all five release items are done' : 'All five release items are done')
           : state(x, s.key, s.title).slice(1));
   };
   await draw();
+}
+
+// the RACI of every step: who does it, who approves (in order), who gives input, who is told, the deadline, the document
+async function raciView(root) {
+  const { roles } = await api('/journeys');
+  const rows = STEPS.flatMap(st => (st.subs ? st.subs.map(x => ({ ...x, no: `${st.key.slice(1)} · ${x.title}`, phase: st.phase, key: x.key })) : [{ ...st, no: `${st.key.slice(1)} · ${st.title}` }]));
+  const empty = Object.entries(roles).filter(([, x]) => !x.outside && !x.people.length);
+  const used = new Set(Object.values(RACI).flatMap(x => [...x.r, ...x.a, ...x.c, ...x.i]));
+  const missing = empty.filter(([k]) => used.has(k));
+  root.replaceChildren(h('div.page-head', h('h1', '📋 Who does what'), h('div.actions', h('a.btn', { href: '#/journey' }, '← Order Journey'))),
+    h('p.muted', 'For every step: who does it, who approves it (in this order), who gives input, who is told, the deadline and what must be in the CRM. A first draft from the Order-to-Execution guide: to be confirmed by the MD and GM. Higher authority = GM, MD or Chief Engineer.'),
+    missing.length ? h('div.card', h('b', '⚠️ Roles in this chart that nobody has yet: '), missing.map(([k, x], i) => [i ? ', ' : '', x.label]), h('div.muted', 'Give the role to the right person under Admin → Users.')) : null,
+    h('div.card.flush.table-wrap', h('table.data.jr-raci-table', h('thead', h('tr', ['Phase', 'Step', 'Does (R)', 'Approves (A)', 'Gives input (C)', 'Is told (I)', 'Deadline', 'Must be in the CRM'].map(t => h('th', t)))),
+      h('tbody', rows.map(rw => { const x = RACI[rw.key] || {}; const ph = PHASES[rw.phase - 1];
+        return h('tr', h('td', h('span.jr-dot', { style: `--ph:${ph.colour}` }), ph.no), h('td', h('b', rw.no)), h('td', roleList(roles, x.r)), h('td', roleList(roles, x.a)), h('td', roleList(roles, x.c)), h('td', roleList(roles, x.i)), h('td', x.due || ''), h('td', x.doc || '')); })))));
 }

@@ -3,7 +3,7 @@
 // Field types: text, textarea, number, money, date, select, yn, ref, person, email, tel, lines, json
 // `computed` fields are read-only SQL expressions evaluated by the server ({t} = the entity's table alias).
 
-export const ROLES = ['admin', 'manager', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer', 'design_engineer', 'production_manager', 'production_welder', 'production_fitter', 'puff_machine_operator', 'bending_machine_operator', 'production_helper', 'production_driver', 'store_helper', 'mot_technician', 'mot_installer', 'hvac_technician', 'electrical_technician', 'senior_electrical_technician', 'bgm_electrical', 'security_incharge', 'house_keeping', 'factory_guruji', 'project_documentation'];
+export const ROLES = ['admin', 'manager', 'md', 'chief_engineer', 'finance_head', 'design_head', 'qc_head', 'project_head', 'sales', 'accounts', 'store', 'engineer', 'purchase', 'purchase_head', 'technical', 'production', 'service', 'hr', 'planning', 'worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer', 'design_engineer', 'production_manager', 'production_welder', 'production_fitter', 'puff_machine_operator', 'bending_machine_operator', 'production_helper', 'production_driver', 'store_helper', 'mot_technician', 'mot_installer', 'hvac_technician', 'electrical_technician', 'senior_electrical_technician', 'bgm_electrical', 'security_incharge', 'house_keeping', 'factory_guruji', 'project_documentation'];
 // Least-access roles for the shop floor and site: own attendance and leave, own tasks, own performance.
 export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer', 'production_welder', 'production_fitter', 'puff_machine_operator', 'bending_machine_operator', 'production_helper', 'production_driver', 'store_helper', 'mot_technician', 'mot_installer', 'hvac_technician', 'electrical_technician', 'senior_electrical_technician', 'bgm_electrical', 'security_incharge', 'house_keeping', 'factory_guruji', 'project_documentation'];
 // Departments a work order line belongs to (the work order is one master copy; each department sees its part).
@@ -82,6 +82,13 @@ export const STOCK_SQL = `(CASE WHEN EXISTS (SELECT 1 FROM stock_moves o WHERE $
 export const ROLE_INFO = {
   admin: { label: 'Administrator', description: 'Everything, incl. users, roles, settings and backup' },
   manager: { label: 'General Manager', description: 'Everything + final (GM) approval of POs, quotation approval, deletes records' },
+  // the heads named in the Order-to-Execution guide (Nov 2026); each starts from the nearest role, an admin can change it
+  md: { label: 'Managing Director', description: 'Everything, as the GM: approves budgets, order acceptance and every TDS' },
+  chief_engineer: { label: 'Chief Engineer', description: 'As the Technical Manager; one of the higher authorities who sanction the technical work order' },
+  finance_head: { label: 'Finance Head', description: 'As Accounts, plus final payment approval: take-it-or-not, PO check, commercial clearance, budget, cash flow' },
+  design_head: { label: 'Design Head', description: 'As the Design Engineer, plus BOQ review and Final: execution drawings, TDS (first approval)' },
+  qc_head: { label: 'QC Head', description: 'QC inspections, NCRs and site QC: independent QC, reporting to the MD and GM' },
+  project_head: { label: 'Project Head', description: 'As the Site Engineer, plus giving tasks and fixing the Gantt baseline: site visit, site work, handover' },
   sales: { label: 'Sales', description: 'Customers, enquiries, follow-ups, quotations, catalog' },
   accounts: { label: 'Account Manager', description: 'Commercial step of POs (prices, payment terms & due dates), sales orders, invoices, payments, vendors' },
   store: { label: 'Store', description: 'Item master, stock inward / issue / transfer / return / scrap, opening stock' },
@@ -164,6 +171,8 @@ ROLE_SEES.production_manager = [...ROLE_SEES.production];
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
 // Whoever sees projects sees their schedule (Project Planner).
 for (const list of Object.values(ROLE_SEES)) if (list.includes('projects')) list.push('schedule_activities', 'schedule_baselines');
+Object.assign(ROLE_SEES, { finance_head: ROLE_SEES.accounts, chief_engineer: ROLE_SEES.technical, qc_head: ROLE_SEES.technical, design_head: ROLE_SEES.design_engineer,
+  project_head: [...new Set([...ROLE_SEES.engineer, ...ROLE_SEES.planning])] });
 export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].includes(entity);
 
 // Special actions a role may be allowed, beyond module access.
@@ -215,6 +224,12 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
   manager: Object.keys(FUNCTIONS),
+  md: Object.keys(FUNCTIONS),
+  chief_engineer: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
+  finance_head: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record', 'pay_final', 'task_assign'],
+  design_head: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'task_assign', 'schedule_baseline'],
+  qc_head: ['qc_inspect', 'qc_site', 'ncr_close', 'iqc_inspect', 'task_assign', 'notify_work_order'],
+  project_head: ['notify_work_order', 'boq_review', 'qc_site', 'task_assign', 'schedule_baseline', 'notify_po'],
   purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_grn_without_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
   accounts: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record'],
@@ -2548,13 +2563,14 @@ export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
 // New roles that are not named in each module's write list.
 const ROLE_EDITS = {
   design_engineer: ['approvals', 'material_approvals', 'schedule_activities', 'boqs', 'boq_items', 'boms', 'bom_items', 'material_lists', 'material_requests', 'qc_plans', 'work_tasks'],
+  design_head: ['approvals', 'material_approvals', 'schedule_activities', 'boqs', 'boq_items', 'boms', 'bom_items', 'material_lists', 'material_requests', 'qc_plans', 'work_tasks'],
 };
-const WRITES_LIKE = { production_manager: 'production' };
+const WRITES_LIKE = { production_manager: 'production', finance_head: 'accounts', chief_engineer: 'technical', qc_head: 'technical', project_head: 'engineer' };
 
 export function defaultPermissions(role) {
   const modules = {};
   for (const [name, ent] of Object.entries(ENTITIES)) {
-    modules[name] = role === 'manager' ? 'full' : !roleSees(role, name) ? 'none' : (ROLE_EDITS[role] ? ROLE_EDITS[role].includes(name) : (ent.write || []).includes(WRITES_LIKE[role] || role)) ? 'edit' : 'view';
+    modules[name] = role === 'manager' || role === 'md' ? 'full' : !roleSees(role, name) ? 'none' : (ROLE_EDITS[role] ? ROLE_EDITS[role].includes(name) : (ent.write || []).includes(WRITES_LIKE[role] || role)) ? 'edit' : 'view';
   }
   return { modules, functions: DEFAULT_FUNCTIONS[role] || [] };
 }

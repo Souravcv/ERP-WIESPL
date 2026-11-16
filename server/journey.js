@@ -99,6 +99,14 @@ function work(j) {
   return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => out[s.key].late) };
 }
 
+// every role with its label and the people who have it now, for the who-does-what of each step
+const roleMap = () => {
+  const out = Object.fromEntries(db.prepare('SELECT name, label FROM roles').all().map(r => [r.name, { label: r.label, people: [] }]));
+  for (const u of db.prepare('SELECT name, role FROM users WHERE active = 1 ORDER BY name').all()) out[u.role]?.people.push(u.name);
+  out.client = { label: 'Client', people: [], outside: true }; out.vendor = { label: 'Vendor', people: [], outside: true };
+  return out;
+};
+
 const summary = j => { const w = work(j); return { id: j.id, title: titleOf(j), refs: refsOf(j), enquiry_id: j.enquiry_id, sales_order_id: j.sales_order_id, project_id: j.project_id,
   finished: w.finished, total: w.total, phase: w.phase, next: w.next, gaps: w.gaps, next_title: w.next ? STEP[w.next].title : 'Handed over', late: w.late,
   done: w.finished === w.total, status: j.project?.status || j.order?.status || j.enquiry?.status || '' }; };
@@ -106,14 +114,14 @@ const summary = j => { const w = work(j); return { id: j.id, title: titleOf(j), 
 export function list(user) {
   if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
   ensureJourneys();
-  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), can_edit: canEdit(user.role) };
+  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), can_edit: canEdit(user.role), roles: roleMap() };
 }
 
 export function view(id, user) {
   if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
   const j = load(id), w = work(j);
   const lab = (e, row, f) => (row ? { id: row.id, label: f(row) } : null);
-  return { ...summary(j), ...w, can_edit: canEdit(user.role),
+  return { ...summary(j), ...w, can_edit: canEdit(user.role), roles: roleMap(),
     links: { enquiry: lab('enquiries', j.enquiry, e => `${e.enquiry_no || e.id} · ${e.hospital_name || e.client_name || ''}`), order: lab('sales_orders', j.order, o => `${o.so_no || o.id}${o.client_po_no ? ` · PO ${o.client_po_no}` : ''}`),
       project: lab('projects', j.project, p => `${p.project_no || p.code || p.id} · ${p.name || ''}`) } };
 }

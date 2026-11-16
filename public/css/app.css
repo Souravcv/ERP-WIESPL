@@ -824,3 +824,9 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-gapnote { font-size: 11.5px; color: var(--warn); margin-top: 3px; }
 .jr-chip.gap { color: var(--warn); background: var(--warn-bg); }
 .jr-step.is-gap { opacity: .7; border-style: dotted; }
+.jr-raci { font-size: 11.5px; border-top: 1px dashed var(--border); padding-top: 4px; margin-top: 2px; display: flex; flex-direction: column; gap: 1px; color: var(--text-2); }
+.jr-rk { display: inline-block; min-width: 58px; color: var(--muted); font-weight: 600; }
+.jr-role { font-weight: 600; color: var(--text); }
+.jr-role.nobody { color: var(--warn); text-decoration: underline dotted; }
+.jr-raci-table td { vertical-align: top; font-size: 12.5px; }
+.jr-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--ph); margin-right: 6px; }

@@ -90,3 +90,63 @@ export const STEP = Object.fromEntries(STEPS.map(s => [s.key, s]));
 // every part that can be ticked: steps without parts, and the parts of the others
 export const TICKABLE = new Set(STEPS.flatMap(s => (s.subs ? s.subs.map(x => x.key) : s.derived ? [] : [s.key])));
 export const STATUS = { done: 'Done', na: 'Not needed', open: 'To do' };
+
+// ---------------------------------------------------------------- who does what (RACI), per step and part of a step
+// r: Responsible (does it) · a: Accountable (approves / signs off; for a gate, in this order) · c: Consulted · i: Informed
+// due: the deadline rule · doc: what must be in the CRM before the step counts as done
+// Roles are CRM roles; 'client' and 'vendor' are outside parties. Higher authority = GM, MD or Chief Engineer.
+// A first draft from the Order-to-Execution guide and the End-to-End Flow: to be corrected by the MD and GM.
+const R = (r, a, c, i, due, doc) => ({ r, a, c, i, due, doc });
+export const RACI = {
+  s1: R(['sales_service'], ['sales'], [], ['manager'], 'Same day the enquiry comes in', 'Enquiry form with its source (beneficiary, digital, consultant, reference, dealer, other)'),
+  s2: R(['sales'], ['manager'], ['sales_service'], [], '1 day after the enquiry', 'Sales owner named on the enquiry'),
+  s3: R(['design_engineer'], ['sales'], ['client'], ['technical'], '7 days after the enquiry', 'Sales design: layout / 3D / client film shown to the doctor'),
+  s4: R(['technical'], ['chief_engineer'], ['design_engineer'], ['sales'], '5 days after the sales design', 'Costing sheet: engineering, HVAC, electrical, plumbing'),
+  s5: R(['sales'], ['sales_service', 'technical', 'sales'], [], ['finance_head'], '2 days after the costing', 'Review notes: price (Marketing), completeness (Estimation), matches the request (Sales)'),
+  s6: R(['accounts'], ['finance_head'], ['manager', 'production_manager', 'project_head'], ['sales'], '2 days after the review', "Go / no-go note: profit, factory and site capacity, the client's date"),
+  s7: R(['sales'], ['manager'], ['technical'], ['finance_head'], '2 days after Finance says go', 'Final quotation (approved in the CRM)'),
+  s8: R(['sales'], [], ['client'], ['accounts', 'manager'], 'From the client', 'Client PO copy; sales order made from the quotation'),
+  s9: R(['accounts'], ['finance_head'], ['sales'], ['manager'], '1 day after the PO', 'PO checked against the quotation: price, terms, payment schedule'),
+  s10: R(['finance_head'], ['manager'], ['project_head', 'design_head', 'purchase_head', 'production_manager', 'qc_head'], ['md'], '2 days after the PO', "Minutes of the heads' meeting: risks to the deadline"),
+  s11: R(['manager'], ['md'], ['finance_head', 'project_head'], ['sales', 'design_head'], '4 days after the PO (at most)', 'Acceptance letter: drawing date, client approval date, delay clause'),
+  s12: R(['engineer'], ['project_head'], ['design_engineer'], ['design_head'], '3 days after acceptance', 'Site visit report with photos: ducting route, AHU, doors, windows, scrub area'),
+  s13: R(['design_engineer'], ['design_head'], ['engineer'], ['project_head'], 'The drawing date in the acceptance letter', 'Technical execution drawings (DWG / PDF) uploaded'),
+  s14: R(['project_head'], ['client'], ['design_head'], ['sales', 'finance_head'], "The approval date in the acceptance letter (late = the client's delay)", 'Drawings signed / approved by the client, with the date'),
+  s15: R(['accounts'], ['finance_head'], ['sales'], ['manager'], '2 days after the drawings are approved', 'Advance received and terms in order'),
+  r1: R(['accounts'], ['finance_head', 'md'], ['project_head'], ['manager'], '3 days after commercial clearance', 'Project budget: cost heads, amount, margin'),
+  r2: R(['project_head'], ['manager'], ['design_head', 'purchase_head', 'production_manager'], ['md'], '3 days after commercial clearance', 'Gantt in the planner with the end date (baseline)'),
+  r3: R(['design_head'], ['chief_engineer', 'manager', 'md'], ['project_head'], [], '3 days after commercial clearance', 'Technical work order: scope, drawing list, specifications (sanctioned by a higher authority: GM, MD or Chief Engineer)'),
+  r4: R(['purchase_head', 'production_manager'], ['manager'], ['design_head', 'store'], ['project_head'], '3 days after commercial clearance', 'Pipeline plan (item, vendor, order and arrival dates) + production schedule'),
+  r5: R(['accounts'], ['finance_head'], ['manager'], ['md'], '3 days after commercial clearance', 'Workflow and cash-flow chart: month-wise money in and out'),
+  s17: R(['manager'], ['manager'], [], ['md'], 'When the five are done', 'All five release items approved'),
+  s18: R(['manager'], ['md'], [], ['project_head', 'design_head', 'purchase_head', 'production_manager', 'qc_head', 'finance_head'], '1 day after the five are done', 'Master work order'),
+  s19: R(['manager'], [], [], ['project_head'], 'Same day as the master work order', 'Project / work order in the CRM'),
+  d1: R(['project_head'], ['manager'], ['engineer'], [], '2 days after the master work order', 'Project team work order: 12 scope drawings, site Gantt, suggestions'),
+  d2: R(['purchase_head'], ['manager'], ['store'], [], '2 days after the master work order', 'Supply chain work order: pipeline, vendor orders, arrival dates'),
+  d3: R(['design_head'], ['chief_engineer'], ['design_engineer'], ['purchase_head'], '2 days after the master work order', 'Execution and manufacturing drawings, BOQ in the CRM'),
+  d4: R(['production_manager'], ['manager'], ['purchase_head'], ['qc_head'], '2 days after the master work order', 'Production orders and schedule'),
+  d5: R(['project_head'], ['chief_engineer'], ['electronics_engineer', 'bgm_electrical'], [], '2 days after the master work order', 'Electrical & electronics work order: power, panels, lighting'),
+  s21: R(['design_engineer'], ['design_head', 'manager', 'md'], ['qc_head'], ['purchase_head'], 'Before the vendor PO of that product', 'TDS for every product, approved in order'),
+  s22: R(['purchase_head'], ['purchase_head', 'technical', 'accounts', 'manager'], ['store'], ['project_head'], 'By the order dates of the pipeline plan', 'Vendor POs (4 approvals), only for products with an approved TDS'),
+  s23: R(['production_manager', 'purchase_head'], ['qc_head'], ['store'], ['project_head'], 'By the production schedule and pipeline arrival dates', 'QC inspection reports, GRNs'),
+  s24: R(['design_head', 'store'], ['project_head'], ['purchase_head'], ['engineer'], '2 days before dispatch', 'Frozen panel drawings + dispatch checklist from the BOQ'),
+  s25: R(['store', 'purchase_head'], ['project_head'], [], ['engineer', 'sales'], 'The planned dispatch date (site day 1)', 'Delivery challans for all material'),
+  s26: R(['engineer'], ['project_head'], [], [], 'Site day 1', 'Daily site progress with photos'),
+  s27a: R(['engineer'], ['project_head'], [], ['manager'], 'Site days 2–11 (critical path)', 'Daily ducting progress (sq ft)'),
+  s27b: R(['engineer'], ['project_head'], [], [], 'Site days 2–11', 'Daily site progress'),
+  s27c: R(['client'], ['project_head'], ['engineer'], ['sales'], "Site days 2–3 (client's scope; late = client's delay)", "Client's electrical work done"),
+  s28: R(['engineer'], ['project_head'], [], [], 'Site days 12–13', 'Daily site progress'),
+  s29: R(['engineer'], ['project_head'], [], [], 'Site day 14', 'Daily site progress'),
+  s30: R(['engineer'], ['project_head'], [], [], 'Site days 15–16', 'Daily site progress'),
+  s31: R(['engineer'], ['project_head'], [], [], 'Site day 17', 'Daily site progress'),
+  s32: R(['engineer'], ['project_head'], [], [], 'Site day 18', 'Daily site progress'),
+  s33: R(['engineer'], ['project_head'], ['electronics_engineer'], [], 'Site day 19', 'Daily site progress'),
+  s34: R(['engineer'], ['project_head'], [], [], 'Site day 20', 'System run record'),
+  s35: R(['vendor'], ['project_head'], ['engineer'], [], 'Site days 21–23', 'Vendor work done'),
+  s36: R(['vendor', 'engineer'], ['project_head'], [], [], 'Site day 24', 'Flooring done, HEPA fitted'),
+  s37: R(['engineer'], ['project_head'], [], [], 'Site day 25', 'Air balancing record'),
+  s38: R(['qc_head'], ['project_head'], ['engineer'], ['manager'], 'Site days 27–28', 'Particle count report'),
+  s39: R(['qc_head'], ['qc_head'], [], ['md', 'manager'], 'Site day 28', 'Test certificate (pass); a fail goes back to fix and retest'),
+  s40: R(['project_head'], ['client'], ['sales'], ['md', 'manager', 'finance_head'], 'Site day 29', 'Handover certificate signed by the client'),
+  s41: R(['accounts', 'sales_service'], ['finance_head'], [], ['manager'], 'Invoice within 2 days of handover; then warranty / AMC', 'Final invoice, payment follow-up, warranty / AMC record'),
+};
