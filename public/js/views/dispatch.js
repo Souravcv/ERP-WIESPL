@@ -255,6 +255,16 @@ export async function boqView(root, boqId) {
       h('h1', `📑 ${boq.boq_no} · ${boq.title}`), badge(boq.status),
       h('div.actions',
         canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
+        canEdit && rows.length ? h('button.btn', { title: 'Read the attached work order Excel again: specification, make and remark columns, headings, sizes', onclick: async () => {
+          try {
+            const ok = await modal('Read the work order file again', h('p', 'The lines of this work order are replaced by the ones read from its Excel file again (with the Specification, Make and Remark columns). BOQs made earlier stay as they are: generate a new BOQ afterwards and delete the old Draft one.'),
+              [{ label: 'Cancel', value: false }, { label: '↻ Read again', cls: 'primary', value: true }]);
+            if (!ok) return;
+            const r = await api(`/boqs/${boqId}/reimport`, { method: 'POST' });
+            toast(`Read again: ${r.sections.map(s => `${s.section} ${s.items}`).join(', ')}`);
+            boqView(root, boqId);
+          } catch (e) { fail(e); }
+        } }, '↻ Read file again') : null,
         canEdit ? h('a.btn', { href: `#/edit/boq_items/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '+ Line') : null,
         canEdit ? h('a.btn', { href: `#/edit/boqs/${boqId}?details=1` }, '✏️ Details') : null,
         canWrite('dispatch_plans', state.user.role) ? h('a.btn', { href: `#/edit/dispatch_plans/new?boq_id=${boqId}${boq.project_id ? '&project_id=' + boq.project_id : ''}` }, '🚛 + Dispatch plan') : null,

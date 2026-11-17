@@ -9,6 +9,7 @@ import { insertRow, updateRow, getRow, listRows, HttpError } from './crud.js';
 import { hasFunction, DEPARTMENTS } from '../public/js/schema.js';
 import { notify, notifyNew } from './notify.js';
 import { stockOf } from './stock.js';
+import { matchItem, storeItems } from './itemmatch.js';
 import { readBomWorkbook } from './dispatch.js';
 import { quoteTotals, lineQty } from '../public/js/calc.js';
 
@@ -153,6 +154,10 @@ export function generateBom(boqId, body = {}, user) {
         if (sub && sub.id !== list.id && qty > 0) { built++; explode(sub, qty, `BUILD › ${sub.boq_section || sub.name}`, ref, lineId, depth + 1); }
       });
     };
+    // the full text of each heading (e.g. "AIR HANDLING UNIT : Make WIESPL, double skin …") for the items numbered under it
+    const heads = new Map(db.prepare("SELECT section, sr_no, description FROM boq_items WHERE boq_id = ? AND kind = 'Heading' AND sr_no IS NOT NULL").all(wo.id).map(x => [`${x.section}|${x.sr_no}`, x.description]));
+    const items = storeItems();
+    let linked = 0;
     for (const line of lines) {
       const picked = line.id in choice ? choice[line.id] : (suggest(line, all).list?.id || null);
       const list = picked ? byId.get(Number(picked)) : null;
@@ -164,9 +169,16 @@ export function generateBom(boqId, body = {}, user) {
       } else {
         unmatched++;
         const desc = String(line.description || '');
+        const parent = line.sr_no && String(line.sr_no).includes('.') ? heads.get(`${line.section}|${String(line.sr_no).replace(/\.[^.]*$/, '')}`) : null;
+        const spec = [line.spec, desc.includes('\n') ? desc.slice(desc.indexOf('\n') + 1).trim() : null, parent && parent.includes('\n') ? parent.slice(parent.indexOf('\n') + 1).trim() : null]
+          .filter(Boolean).join('\n').slice(0, 2000) || null;
+        const component = firstLine(desc).slice(0, 160) || '(work-order line)';
+        // the store item: the one linked on the work order, else a clear match by name and size
+        let itemId = line.item_id || null;
+        if (!itemId) { const m = matchItem(component, [line.spec, line.make].filter(Boolean).join(' '), items); if (m.confident) { itemId = m.best.id; linked++; db.prepare('UPDATE boq_items SET item_id = ? WHERE id = ?').run(itemId, line.id); } }
         add(`wo:${line.id}`, {
-          section: line.section || 'General', component: firstLine(desc).slice(0, 160) || '(work-order line)', spec: desc.includes('\n') ? desc.slice(desc.indexOf('\n') + 1).trim().slice(0, 2000) : null,
-          qty: line.qty ?? null, uom: line.uom || null, item_id: line.item_id || null, department: 'Design', note: 'no standard list – design to detail',
+          section: line.section || 'General', component, spec, make: line.make || null,
+          qty: line.qty ?? null, uom: line.uom || null, item_id: itemId, department: 'Design', note: 'no standard list – design to detail',
         }, ref, line.id);
       }
     }
@@ -183,10 +195,10 @@ export function generateBom(boqId, body = {}, user) {
     }
     const components = rows.length;
     const departments = [...new Set(db.prepare('SELECT department FROM bom_items WHERE bom_id = ?').all(bom.id).map(deptOf))];
-    audit(user.name, 'boms', bom.id, 'generate', `from ${wo.boq_no}: ${components} components, ${matched} lines matched, ${unmatched} without list, ${built} sub-assembly build(s)`);
+    audit(user.name, 'boms', bom.id, 'generate', `from ${wo.boq_no}: ${components} components, ${matched} lines matched, ${unmatched} without list, ${built} sub-assembly build(s), ${linked} linked to store items`);
     const out = getRow('boms', bom.id);
     notifyNew('boms', out, user);
-    return { bom: out, components, matched, unmatched, built, departments };
+    return { bom: out, components, matched, unmatched, built, departments, linked };
   });
 }
 
@@ -555,4 +567,35 @@ export function importLists(body = {}, user) {
     audit(user.name, 'material_lists', null, 'import', `${made.length} list(s) from ${body.file || 'BOQ Excel'}`);
     return { lists: made };
   });
+}
+
+// ---------------------------------------------------------------- BOQ components ↔ store items
+// For each component (or the ones asked for): its store item, or the items that look like it (best first; "confident"
+// = a clear match by name and size). Purchase and design pick or confirm them before a PO / requisition.
+export function itemMatches(bomId, ids = null) {
+  const bom = getRow('boms', bomId);
+  const items = storeItems();
+  const label = new Map(items.map(i => [i.id, `${i.code ? i.code + ' · ' : ''}${i.name}`]));
+  let comp = '';
+  const rows = db.prepare('SELECT * FROM bom_items WHERE bom_id = ? ORDER BY COALESCE(sort, id), id').all(bom.id).map(r => { if (r.component) comp = r.component; return { ...r, component_name: r.component || comp }; })
+    .filter(r => (!ids || ids.includes(r.id)) && Number(r.qty) > 0);
+  return { bom: { id: bom.id, bom_no: bom.bom_no, locked: isLocked(bom) }, rows: rows.map(r => {
+    const m = r.item_id ? null : matchItem(r.component_name, [r.dimensions, r.spec, r.make].filter(Boolean).join(' '), items);
+    return { id: r.id, section: r.section, sr_no: r.sr_no, component: r.component_name, dimensions: r.dimensions, spec: r.spec, make: r.make, uom: r.uom, qty: r.qty,
+      item_id: r.item_id || null, item_label: r.item_id ? label.get(r.item_id) || null : null, candidates: m?.candidates || [], confident: !!m?.confident };
+  }) };
+}
+export function linkItems(bomId, links, user) {
+  const bom = getRow('boms', bomId);
+  const up = db.prepare('UPDATE bom_items SET item_id = ? WHERE id = ? AND bom_id = ?');
+  const ok = db.prepare('SELECT 1 FROM items WHERE id = ?');
+  let n = 0;
+  tx(() => {
+    for (const [id, itemId] of Object.entries(links || {})) {
+      if (itemId && !ok.get(Number(itemId))) throw new HttpError(400, 'Store item not found');
+      n += up.run(itemId ? Number(itemId) : null, Number(id), bom.id).changes;
+    }
+  });
+  audit(user.name, 'boms', bom.id, 'update', `${n} component(s) linked to store items`);
+  return { linked: n };
 }

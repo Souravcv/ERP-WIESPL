@@ -793,6 +793,8 @@ export const ENTITIES = {
       { key: 'kind', label: 'Line Type', type: 'select', options: ['Item', 'Heading'], default: 'Item' },
       { key: 'heading', label: 'Under heading', type: 'text', span: 2 },
       { key: 'description', label: 'Description', type: 'textarea', span: 2, required: true },
+      { key: 'spec', label: 'Specification', type: 'textarea', span: 2, hint: 'From the Specification column of the work order (size, gauge, model …)' },
+      { key: 'make', label: 'Make', type: 'text' },
       { key: 'uom', label: 'UOM', type: 'text' },
       { key: 'qty', label: 'WO Qty', type: 'number', hint: 'Blank = quantity not fixed (UR)' },
       { key: 'area_qty', label: 'Qty per area', type: 'text', hint: 'e.g. Mj OT 1: 1, Mj OT 2: 1' },

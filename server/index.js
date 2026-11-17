@@ -614,6 +614,11 @@ api.get('/projects/:id/analysis', wrap(req => {
 api.post('/sales_orders/:id/work-order', need('boqs'), wrap(req => flow.workOrderFromSalesOrder(req.params.id, req.user)));
 api.get('/boqs/:id/bom-preview', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.matchPreview(req.params.id); }));
 api.post('/boqs/:id/generate-bom', need('boms'), wrap(req => flow.generateBom(req.params.id, req.body, req.user)));
+api.post('/boqs/:id/reimport', need('boqs'), wrap(req => dispatch.reimportBoq(req.params.id, req.user)));
+// BOQ components ↔ store items: what each looks like in the store, and linking them (design, purchase, store)
+const mayLinkItems = user => ['boms', 'purchase_orders', 'requisitions'].some(e => canWrite(e, user.role));
+api.get('/boms/:id/item-matches', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access to BOQs'); return flow.itemMatches(req.params.id, req.query.ids ? String(req.query.ids).split(',').map(Number) : null); }));
+api.post('/boms/:id/link-items', wrap(req => { if (!mayLinkItems(req.user)) throw new HttpError(403, 'You cannot link BOQ components to store items'); return flow.linkItems(req.params.id, req.body?.links, req.user); }));
 api.post('/boms/:id/copy-from', need('boms'), wrap(req => { bomEditable(req.params.id, req.user); return flow.copyFromBom(req.params.id, req.body, req.user); }));
 api.post('/boms/:id/submit-review', need('boms'), wrap(req => flow.submitReview(req.params.id, req.user)));
 api.post('/boms/:id/review', wrap(req => flow.reviewSection(req.params.id, req.body, req.user)));

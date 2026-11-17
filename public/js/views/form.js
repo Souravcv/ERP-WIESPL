@@ -250,12 +250,21 @@ async function fillFromBom(bomId, inputs, entity, onlyIds) {
     if (!choice) return;
     if (choice === 'add') keep = current;
   }
+  // which materials, how many, and their store item (item code): chosen by the user, links saved on the BOQ
+  const { pickBomComponents } = await import('./bompick.js');
+  const picked = await pickBomComponents(bomId, { ids: need.map(b => b.id), qtys: Object.fromEntries(need.map(b => [b.id, toProcure(b)])), forOrder: true,
+    title: `${entity === 'purchase_orders' ? 'PO' : 'Requisition'} from ${bom.bom_no}: materials to order` });
+  if (!picked) return;
+  if (!picked.length) { toast('Nothing ticked'); return; }
+  const chosen = new Map(picked.map(p => [p.id, p]));
+  for (const b of need) if (chosen.has(b.id)) Object.assign(b, { item_id: chosen.get(b.id).item_id, pick_qty: chosen.get(b.id).qty });
+  const order = need.filter(b => chosen.has(b.id));
   const items = new Map();
-  for (const id of new Set(need.map(b => b.item_id).filter(Boolean))) items.set(id, await api(`/items/${id}`).catch(() => null));
-  const lines = need.map(b => {
+  for (const id of new Set(order.map(b => b.item_id).filter(Boolean))) items.set(id, await api(`/items/${id}`).catch(() => null));
+  const lines = order.map(b => {
     const it = items.get(b.item_id);
     const spec = [b.spec, b.moc && `MOC: ${b.moc}`, b.make && `Make: ${b.make}`, b.drawing_no && `Drg: ${b.drawing_no}`].filter(Boolean).join('\n');
-    const base = { item_id: b.item_id || null, bom_item_id: b.id, description: [b.component_name, b.dimensions].filter(Boolean).join(' '), spec, qty: toProcure(b), uom: b.uom || it?.uom || 'Nos' };
+    const base = { item_id: b.item_id || null, bom_item_id: b.id, description: it?.name || [b.component_name, b.dimensions].filter(Boolean).join(' '), spec, qty: b.pick_qty ?? toProcure(b), uom: b.uom || it?.uom || 'Nos' };
     return entity === 'purchase_orders' ? { ...base, hsn: it?.hsn || '', rate: it?.rate || 0, gst: it?.gst_rate ?? 18 } : { ...base, remark: [b.section, b.sr_no].filter(Boolean).join(' ') };
   });
   inputs.lines.set([...keep, ...lines]);

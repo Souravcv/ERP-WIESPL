@@ -317,6 +317,10 @@ export async function bomView(root, bomId) {
         h('a.btn', { href: `#/print/bom/${bomId}`, target: '_blank' }, '🖨 Print BOQ'),
         canEdit ? h('button.btn', { onclick: busy(addFile) }, '📥 Import Excel') : null,
         canEdit ? h('a.btn', { href: `#/edit/bom_items/new?bom_id=${bomId}` }, '+ Component') : null,
+        ['boms', 'purchase_orders', 'requisitions'].some(e => canWrite(e, role)) && rows.length ? h('button.btn', { title: 'Give each component its store item (item code): matched by name and size, or a new item', onclick: busy(async () => {
+          const { pickBomComponents } = await import('./bompick.js');
+          if (await pickBomComponents(bomId, { title: `${bom.bom_no}: store items` })) bomView(root, bomId);
+        }) }, '🔗 Store items (', rows.filter(r => r.qty > 0 && r.item_id).length, '/', rows.filter(r => r.qty > 0).length, ')') : null,
         canWrite('boms', role) ? h('a.btn', { href: `#/edit/boms/${bomId}?details=1`, title: locked ? 'A Final BOQ: only status (In Progress / Completed / On Hold), remarks and required-by date can change' : '' }, '✏️ Details') : null,
         canWrite('requisitions', state.user.role) ? h('button.btn', { onclick: procureLink('requisitions'), title: 'Ticked components, or everything still to procure' }, '📝 Requisition') : null,
         canWrite('purchase_orders', state.user.role) ? h('button.btn', { onclick: procureLink('purchase_orders'), title: 'Ticked components, or everything still to procure' }, '🛒 PO') : null,

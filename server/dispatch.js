@@ -37,9 +37,20 @@ function parseSheet(ws) {
   if (!hdr) return null;
   const { vals } = hdr;
   const uomCol = vals.findIndex(v => ['uom', 'unit', 'units'].includes(v));
-  const qtyCol = vals.findIndex(v => ['qty', 'quantity'].includes(v));
-  // Per-area quantity columns (e.g. Mj OT 1 … Mj OT 5) when there is no single Qty column.
-  const areaCols = qtyCol > 0 ? [] : vals.map((v, i) => [v, i]).filter(([v, i]) => v && i > hdr.desc && i !== uomCol).map(([, i]) => [i, str(ws.getRow(hdr.row).getCell(i).value)]);
+  const qtyCol = vals.findIndex(v => ['qty', 'quantity', 'qtys', 'qnty'].includes(v));
+  // Specification, make and remark columns (e.g. "Item Description | Specification | Qty. | UOM | Make | Remark")
+  const col = names => vals.findIndex((v, i) => i !== hdr.desc && names.includes(v));
+  const specCol = col(['specification', 'specifications', 'spec', 'specs', 'technicalspecification', 'size']);
+  const makeCol = col(['make', 'brand', 'makebrand', 'makes']);
+  const remCol = col(['remark', 'remarks']);
+  const used = new Set([hdr.sr, hdr.desc, uomCol, qtyCol, specCol, makeCol, remCol].filter(i => i > 0));
+  // Per-area quantity columns (e.g. Mj OT 1 … Mj OT 5) when there is no single Qty column. Headers that repeat ("Basic Total")
+  // take the area name from the row under the header (Mj OT 1, Mj OT 2).
+  const below = ws.getRow(hdr.row + 1);
+  const areaCols = qtyCol > 0 ? [] : vals.map((v, i) => [v, i]).filter(([v, i]) => v && i > hdr.desc && !used.has(i)).map(([v, i]) => {
+    const head = str(ws.getRow(hdr.row).getCell(i).value), sub = str(below.getCell(i).value);
+    return [i, vals.filter(x => x === v).length > 1 && sub ? sub : head];
+  });
   let woNo = null;
   for (let r = 1; r <= hdr.row && !woNo; r++) ws.getRow(r).eachCell(c => { const m = str(c.value).match(WO_RE); if (m && !woNo) woNo = m[0].replace(/\s+/g, ' ').replace(/\s*\/\s*/g, ' / '); });
 
@@ -62,23 +73,42 @@ function parseSheet(ws) {
     } else {
       for (const [i, name] of areaCols) { const q = num(row.getCell(i).value); if (q) { area.push(`${name}: ${q}`); qty = (qty || 0) + q; } }
     }
-    if (!desc && qty == null) continue;
+    const spec = specCol > 0 ? str(row.getCell(specCol).value) : '';
+    const make = makeCol > 0 ? str(row.getCell(makeCol).value) : '';
+    const remark = remCol > 0 ? str(row.getCell(remCol).value) : '';
+    // A title merged across the row ("SHRM BOQ" in Sr, Description, UOM …): a heading, not a material.
+    const merged = [sr, desc, uomText].filter(Boolean);
+    if (qty == null && ((merged.length > 1 && merged.every(x => x === merged[0])) || (desc && uomText === desc))) {
+      const title = desc || merged[0];
+      heading = { sr: '', text: firstLine(title).slice(0, 120) };
+      lines.push({ kind: 'Heading', sr_no: sr && sr !== title ? sr : null, description: title, uom: null, qty: null, heading: null });
+      continue;
+    }
+    if (!desc && !spec && qty == null) continue;
     const hasQty = qty != null || ur;
     const prev = lines[lines.length - 1];
+    // Another size of the material above (its description left blank or merged): same material, its own spec and qty.
+    if (!desc && spec && prev?.kind === 'Item') {
+      lines.push({ ...prev, sr_no: sr || prev.sr_no, spec, make: make || prev.make, uom: uomText || prev.uom, qty, area_qty: area.join(', ') || null, remarks: remark || null });
+      continue;
+    }
     // Continuation text: no number (e.g. "Incomer 1 No. 25A DP ELCB"), or a numbered paragraph like
     // "6.1 Indications & Metering" under an item that already has a quantity. It belongs to the line above.
-    if (!uomText && !hasQty && prev && (!sr || (sr.includes('.') && prev.kind === 'Item'))) {
+    if (!uomText && !hasQty && !spec && prev && (!sr || (sr.includes('.') && prev.kind === 'Item'))) {
       prev.description += '\n' + desc;
       continue;
     }
-    if (!uomText && !hasQty) {
+    if (!uomText && !hasQty && !spec) {
       heading = { sr, text: firstLine(desc).slice(0, 120) };
       lines.push({ kind: 'Heading', sr_no: sr, description: desc, uom: null, qty: null, heading: null });
       continue;
     }
     // A heading only applies to lines numbered under it (1 → 1.1, 1.2).
     const under = heading && sr && heading.sr && sr.startsWith(heading.sr + '.') ? heading.text : null;
-    lines.push({ kind: 'Item', sr_no: sr, description: desc, uom: uomText || null, qty, area_qty: area.join(', ') || null, heading: under, remarks: ur ? 'Qty UR (to be decided)' : null });
+    // the UOM left blank on the next size of the same material is the one above
+    const uom = uomText || (hasQty && prev?.kind === 'Item' ? prev.uom : null);
+    lines.push({ kind: 'Item', sr_no: sr, description: desc, spec: spec || null, make: make || null, uom: uom || null, qty, area_qty: area.join(', ') || null, heading: under,
+      remarks: [ur ? 'Qty UR (to be decided)' : null, remark || null].filter(Boolean).join(' · ') || null });
   }
   return { section: ws.name.trim(), wo_no: woNo, lines };
 }
@@ -99,13 +129,13 @@ export async function importBoq(boqId, buffer, mode, user) {
       db.prepare('DELETE FROM boq_items WHERE boq_id = ?').run(boq.id);
     }
     let sort = db.prepare('SELECT COALESCE(MAX(sort), 0) m FROM boq_items WHERE boq_id = ?').get(boq.id).m;
-    const ins = db.prepare(`INSERT INTO boq_items (boq_id, project_id, section, wo_no, sr_no, kind, heading, description, uom, qty, area_qty, remarks, sort, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))`);
+    const ins = db.prepare(`INSERT INTO boq_items (boq_id, project_id, section, wo_no, sr_no, kind, heading, description, spec, make, uom, qty, area_qty, remarks, sort, created_by, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))`);
     const summary = [];
     for (const s of sections) {
       let items = 0;
       for (const l of s.lines) {
-        ins.run(boq.id, boq.project_id || null, s.section, s.wo_no, l.sr_no || null, l.kind, l.heading || null, l.description, l.uom, l.qty, l.area_qty || null, l.remarks || null, ++sort, user.name);
+        ins.run(boq.id, boq.project_id || null, s.section, s.wo_no, l.sr_no || null, l.kind, l.heading || null, l.description, l.spec || null, l.make || null, l.uom, l.qty, l.area_qty || null, l.remarks || null, ++sort, user.name);
         if (l.kind === 'Item') items++;
       }
       summary.push({ section: s.section, wo_no: s.wo_no, items, headings: s.lines.length - items });
@@ -523,4 +553,13 @@ export function closeChallanGap(row, user) {
   const left = db.prepare('SELECT challan_no FROM challans WHERE challan_no LIKE ?').all(`${pre}-%/20${fy}`).map(r => Number(r.challan_no.match(re)?.[1]) || 0);
   db.prepare('UPDATE counters SET seq = ? WHERE name = ? AND fy = ?').run(Math.max(0, ...left), pre === 'RE' ? 'challan_ret' : 'challan', fy);
   return later.length;
+}
+
+// Read the work order file again (after a fix to the reading): its lines are replaced, unless some are on challans.
+export async function reimportBoq(boqId, user) {
+  const a = db.prepare("SELECT id FROM attachments WHERE entity = 'boqs' AND record_id = ? AND lower(filename) LIKE '%.xlsx' ORDER BY id DESC LIMIT 1").get(Number(boqId));
+  if (!a) throw new HttpError(404, 'This work order has no Excel file attached');
+  const { attachmentFile } = await import('./roles.js');
+  const fs = await import('node:fs');
+  return importBoq(boqId, fs.readFileSync(attachmentFile(a.id).full), 'replace', user);
 }

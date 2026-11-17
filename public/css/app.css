@@ -908,3 +908,12 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .tds-warn { flex-basis: 100%; font-size: 13px; padding: 6px 10px; border-radius: 8px; background: #fef3c7; color: #92400e; }
 .tds-warn .btn { margin-left: 4px; }
 .mt-follow { font-size: 11px; color: var(--muted, #64748b); }
+
+/* BOQ components → store items */
+.bp-pick { display: flex; gap: 6px; align-items: center; }
+.bp-chips { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; align-items: center; font-size: 12px; }
+.bp-chip { border: 1px solid var(--line, #e5e7eb); background: var(--chip, #f1f5f9); border-radius: 10px; padding: 1px 8px; font-size: 12px; cursor: pointer; }
+.bp-chip:hover { border-color: #2563eb; }
+.bp-auto { font-size: 11px; color: #15803d; }
+.bp-spec { font-size: 12px; max-width: 360px; }
+.bp-table td { vertical-align: top; }
