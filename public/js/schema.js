@@ -1758,6 +1758,24 @@ export const ENTITIES = {
     ],
   },
   // Half-yearly vendor scorecard (manual 4B): eight parameters 0–100 with their weights; delivery and quality come from data.
+  // Follow-up of a PO with the vendor (expediting): what they said, the date they give now, when to call again.
+  po_followups: {
+    label: 'PO Follow-ups', singular: 'PO Follow-up', group: 'Purchase', icon: '📞', write: ['admin', 'manager', 'purchase', 'purchase_head', 'store', 'accounts'],
+    display: "{t}.date || ' ' || COALESCE({t}.vendor_status, '')",
+    search: ['note', 'contact_person'],
+    list: ['date', 'po_id', 'kind', 'vendor_status', 'promised', 'next_on', 'note', 'by_name'],
+    fields: [
+      { key: 'po_id', label: 'Purchase Order', type: 'ref', ref: 'purchase_orders', required: true },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'How', type: 'select', options: ['Call', 'WhatsApp', 'Email', 'Visit', 'Vendor called us'], default: 'Call' },
+      { key: 'contact_person', label: 'Spoke To', type: 'text' },
+      { key: 'vendor_status', label: 'Vendor Says', type: 'select', options: ['On schedule', 'Dispatched', 'Partly dispatched', 'Delayed', 'Problem / on hold', 'No answer'], default: 'On schedule' },
+      { key: 'promised', label: "Vendor's Delivery Date Now", type: 'date', hint: 'Becomes the PO delivery date; the first date the vendor gave is kept' },
+      { key: 'next_on', label: 'Follow Up Again On', type: 'date', hint: 'A reminder comes on this day' },
+      { key: 'note', label: 'What They Said', type: 'textarea', span: 2, required: true },
+      { key: 'by_name', label: 'By', type: 'text', readonly: true },
+    ],
+  },
   // Technical Data Sheet of a product: size, material, performance … approved Design Head → GM → MD before it is bought.
   tds_sheets: {
     label: 'Technical Data Sheets (TDS)', singular: 'TDS', group: 'Purchase', icon: '📄',
@@ -1897,7 +1915,7 @@ export const ENTITIES = {
     search: ['po_no', 'project_note', 'quotation_ref', 'remarks'],
     list: ['po_no', 'date', 'vendor_id', 'project_id', 'total', 'paid', 'balance', 'approval_stage', 'status'],
     statusField: 'status', print: 'po',
-    related: [['vendor_bills', 'po_id'], ['vendor_payments', 'po_id'], ['debit_notes', 'po_id']],
+    related: [['po_followups', 'po_id'], ['vendor_bills', 'po_id'], ['vendor_payments', 'po_id'], ['debit_notes', 'po_id']],
     fields: [
       { key: 'po_no', label: 'PO No', type: 'text', readonly: true, hint: 'Auto: 008/2026-27, restarts every April' },
       { key: 'revision', label: 'Revision', type: 'number', readonly: true, hint: 'Rev. 1, 2 … each time an approved PO is revised' },
@@ -1911,6 +1929,7 @@ export const ENTITIES = {
       { key: 'vendor_contact', label: 'Vendor Contact Person', type: 'text', hint: 'Filled from the vendor if blank' },
       { key: 'vendor_phone', label: 'Vendor Contact No', type: 'text' },
       { key: 'delivery_date', label: 'Delivery Date', type: 'date' },
+      { key: 'first_promised', label: 'First Date Given by the Vendor', type: 'date', readonly: true, hint: 'Kept when the vendor moves the date (follow-ups): the vendor is measured against it' },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Sent', 'Partially Received', 'Closed', 'Received', 'Cancelled', 'Archived (old)'], default: 'Draft', readonly: true },
       { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
       { key: 'delivery_address', label: 'Delivery & Billing Address', type: 'textarea', default: 'setting:po_delivery_address' },

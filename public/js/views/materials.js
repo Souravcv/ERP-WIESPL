@@ -56,6 +56,6 @@ export async function materialsView(root, projectId) {
     d.rows.length ? h('div.card.flush.table-wrap', h('table.data.mt-table', h('thead', h('tr', ['Status', 'Material', 'Qty', 'Received', 'Order / PO', 'Vendor', 'Needed by', 'Promised', 'Late'].map(x => h('th', x)))),
       h('tbody', d.rows.map(r => h('tr', { class: CLS[r.state] === 'bad' ? 'mt-bad' : '' },
         h('td', h('span', { class: `mt-state ${CLS[r.state]}`, title: HELP[r.state] }, r.state), r.order_by && r.kind === 'boq' ? h('div', { class: r.late_days ? 'jr-late' : 'muted' }, `order by ${fmtDate(r.order_by)}`) : null),
-        h('td', r.item), h('td.num', `${r.qty} ${r.uom || ''}`), h('td.num', r.kind === 'po' ? r.received : ''), h('td', ref(r), r.po_date ? h('div.muted', fmtDate(r.po_date)) : null),
+        h('td', r.item), h('td.num', `${r.qty} ${r.uom || ''}`), h('td.num', r.kind === 'po' ? r.received : ''), h('td', ref(r), r.po_date ? h('div.muted', fmtDate(r.po_date)) : null, r.follow ? h('div.mt-follow', { title: r.follow.note || '' }, `📞 ${fmtDate(r.follow.date)} ${r.follow.vendor_status || ''}${r.follow.next_on ? ` · next ${fmtDate(r.follow.next_on)}` : ''}`) : null),
         h('td', r.vendor || ''), h('td', dateCell(r, 'need_by')), h('td', dateCell(r, 'promised')), h('td.num', r.late_days ? h('b.jr-late', `${r.late_days} d`) : '')))))) : null);
 }

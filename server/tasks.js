@@ -7,6 +7,7 @@ import { canWrite, canView, hasFunction } from '../public/js/schema.js';
 import { canApprove } from './workflows.js';
 import { reviewsOf, storeOverview } from './boqflow.js';
 import { myJourneyItems } from './journey.js';
+import { myFollowItems } from './pofollow.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
@@ -108,6 +109,9 @@ export function myTasks(user) {
     group('att', '🕘', 'Attendance to review', db.prepare("SELECT a.id, a.date, a.flags, a.mode, e.name FROM attendance a JOIN employees e ON e.id = a.employee_id WHERE a.review = 'To review' ORDER BY a.date DESC LIMIT 40").all()
       .map(a => ({ title: `${a.name} – ${fmt(a.date)}${a.mode === 'Travel / outstation' ? ' (travel)' : ''}`, sub: String(a.flags || '').split('\n').slice(0, 2).join(' · '), link: `#/view/attendance/${a.id}` })));
   }
+
+  // Purchase: POs to chase today (follow-up due, overdue, due in 3 days, no date from the vendor)
+  try { group('pofollow', '📞', 'POs to follow up with the vendor', myFollowItems(user)); } catch (e) { console.error('PO follow-ups', e.message); }
 
   // Approvals this person may give
   const aps = db.prepare("SELECT id, doc_type, doc_ref, stage, title, requested_by, requested_at, also_by, approver_role FROM approvals WHERE status = 'Pending' ORDER BY id").all()

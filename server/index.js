@@ -47,6 +47,7 @@ import * as perf from './performance.js';
 import * as journey from './journey.js';
 import * as materials from './materials.js';
 import * as tds from './tds.js';
+import * as pofollow from './pofollow.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -1263,6 +1264,7 @@ setInterval(() => {
   try { if (new Date().getHours() >= 9) hrf.dailyHr(); } catch (e) { console.error('hr reminders', e.message); }
   try { if (new Date().getHours() >= 10) prod.dailyProduction(); } catch (e) { console.error('production reminders', e.message); }
   try { if (new Date().getHours() >= 9) journey.dailyJourney(); } catch (e) { console.error('order journey reminders', e.message); }
+  try { if (new Date().getHours() >= 9) pofollow.dailyPoFollowups(); } catch (e) { console.error('PO follow-up reminders', e.message); }
 }, 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {

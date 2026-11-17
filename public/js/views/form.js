@@ -1026,6 +1026,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
         }).catch(() => box.remove());
       }
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
+      if (can('po_followups') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('button.btn', { title: 'Log a call to the vendor: what they said, their date, when to call again', onclick: () => newRecord('po_followups', { po_id: id, contact_person: row.vendor_contact || '' }) }, '📞 Follow-up'));
       if (can('stock_moves') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('a.btn.good', { href: `#/stock-entry?type=INWARD&po=${id}` }, '📦 Receive Goods (GRN)'));
       if (can(entity) && st === 'Partially Received') A.push(h('button.btn', { onclick: status('Closed', 'Close this PO even though some quantity is still pending?') }, 'Short-close'));
       if (can(entity) && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('button.btn', { title: 'Change quantities, rates, terms or add items: back to Draft as the next revision, then the approvals again', onclick: go(async () => {

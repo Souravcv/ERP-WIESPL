@@ -1,5 +1,6 @@
 // Per-module business rules applied on every save: document numbering, totals, derived fields.
 import { taskSaved as journeyTaskSaved } from './journey.js';
+import { afterFollowup } from './pofollow.js';
 import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
@@ -132,6 +133,9 @@ const parse = (v, dflt) => {
 export function beforeSave(name, row, existing, user) {
   const date = row.date || existing?.date || today();
   switch (name) {
+    case 'po_followups':
+      if (!existing) row.by_name = user?.name || null;
+      break;
     case 'tds_sheets':
       if (!existing && !row.tds_no) row.tds_no = docNo('tds', date, (n, fy) => `TDS-${n}/20${fy}`);
       break;
@@ -802,6 +806,7 @@ export function afterSave(name, id, user, deleted) {
   if (name === 'onboardings' && !deleted) afterOnboarding(id, user);
   if (name === 'probation_reviews' && !deleted) afterReview(id, user);
   if (name === 'work_tasks' && !deleted) { afterSaveTask(id, user); journeyTaskSaved(id, user); }
+  if (name === 'po_followups' && !deleted) afterFollowup(id, user);
   if (name === 'schedule_baselines' && !deleted) applyBaseline(id, user);
   if (name === 'dispatch_plans' && !deleted) afterDispatchPlan(id, user);
   if (name === 'production_reports') afterReport(id, deleted);

@@ -5,6 +5,7 @@ import { db, audit } from './db.js';
 import { getRow, HttpError } from './crud.js';
 import { canView, canWrite, hasFunction } from '../public/js/schema.js';
 import { stockCheck, isLocked } from './boqflow.js';
+import { lastFollowups } from './pofollow.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(String(d).slice(0, 10) + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
@@ -32,7 +33,7 @@ export function projectMaterials(projectId, user) {
   if (!mayView(user)) throw new HttpError(403, 'No access to material tracking');
   const p = getRow('projects', projectId), pid = Number(projectId), t = today();
   const ros = neededBy(pid);
-  const rows = [];
+  const rows = [], follow = lastFollowups();
   // 1. purchase order lines for this project
   const pos = db.prepare(`SELECT p.*, v.name vendor FROM purchase_orders p LEFT JOIN vendors v ON v.id = p.vendor_id
     WHERE p.status NOT IN ('Cancelled', 'Archived (old)') AND (p.project_id = ? OR p.lines LIKE '%"project_id"%') ORDER BY p.date, p.id`).all(pid);
@@ -50,7 +51,7 @@ export function projectMaterials(projectId, user) {
         : !promised ? 'No date from vendor' : promised < t ? 'Overdue' : need && promised > need ? 'Promised late' : received > 0 ? 'Part received' : 'On track';
       rows.push({ kind: 'po', po_id: po.id, line: i, po_no: po.po_no, po_date: po.date, po_status: po.status, vendor: po.vendor,
         item: [l.description || heading, l.spec && !l.description ? String(l.spec).split('\n')[0] : ''].filter(Boolean).join(' – '), uom: l.uom, qty, received,
-        need_by: need, need_set: !!l.need_by, promised, promised_set: !!l.promised, state,
+        need_by: need, need_set: !!l.need_by, promised, promised_set: !!l.promised, state, follow: follow.get(po.id) || null,
         late_days: state === 'Received' ? 0 : need && promised && promised > need ? days(need, promised) : promised && promised < t ? days(promised, t) : 0 });
     });
   }
@@ -92,7 +93,11 @@ export function setLineDates(poId, line, body, user) {
   for (const k of ['need_by', 'promised']) if (k in (body || {})) {
     if (!ok(body[k])) throw new HttpError(400, 'Dates are YYYY-MM-DD');
     const v = body[k] || null;
-    if ((l[k] || null) !== v) { changes.push(`${k === 'need_by' ? 'needed by' : 'promised'} ${v || '—'}`); if (v) l[k] = v; else delete l[k]; }
+    if ((l[k] || null) !== v) {
+      changes.push(`${k === 'need_by' ? 'needed by' : 'promised'} ${v || '—'}`);
+      if (v) l[k] = v; else delete l[k];
+      if (k === 'promised' && v && !l.promised_first) l.promised_first = v; // the first date the vendor gave: the vendor is measured against it
+    }
   }
   if (!changes.length) return { ok: true };
   db.prepare('UPDATE purchase_orders SET lines = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(lines), new Date().toLocaleString('sv-SE').slice(0, 19), po.id);
