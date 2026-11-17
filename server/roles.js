@@ -326,13 +326,15 @@ export function listAttachments(entity, recordId) {
 }
 
 export function saveAttachment(entity, recordId, { filename, mime, note }, buf, user) {
-  if (!ENTITIES[entity]) throw new HttpError(404, 'Unknown module');
-  if (!db.prepare(`SELECT 1 FROM ${entity} WHERE id = ?`).get(Number(recordId))) throw new HttpError(404, 'Record not found');
+  const journey = /^journey:[a-z0-9]+$/.test(entity); // a step of an order journey (checked in server/journey.js)
+  if (!journey && !ENTITIES[entity]) throw new HttpError(404, 'Unknown module');
+  if (!db.prepare(`SELECT 1 FROM ${journey ? 'journeys' : entity} WHERE id = ?`).get(Number(recordId))) throw new HttpError(404, 'Record not found');
   if (!buf?.length) throw new HttpError(400, 'The file is empty');
   const name = safeName(filename);
-  const dir = path.join(UPLOAD_DIR, entity);
+  const folder = journey ? 'journey' : entity;
+  const dir = path.join(UPLOAD_DIR, folder);
   fs.mkdirSync(dir, { recursive: true });
-  const stored = path.join(entity, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${name}`);
+  const stored = path.join(folder, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}-${name}`);
   fs.writeFileSync(path.join(UPLOAD_DIR, stored), buf);
   const id = Number(db.prepare('INSERT INTO attachments (entity, record_id, filename, mime, size, stored, note, uploaded_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(entity, Number(recordId), name, mime || 'application/octet-stream', buf.length, stored, note || null, user.name).lastInsertRowid);

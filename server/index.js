@@ -693,6 +693,7 @@ api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.comp
 api.get('/journeys', wrap(req => journey.list(req.user)));
 api.get('/journeys/team', wrap(req => journey.team(req.user)));
 api.get('/journeys/:id', wrap(req => journey.view(Number(req.params.id), req.user)));
+api.post('/journeys/:id/steps/:step/files', express.raw({ type: () => true, limit: '200mb' }), wrap(req => journey.addFile(Number(req.params.id), req.params.step, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user)));
 api.post('/journeys/:id/steps/:step/approval', wrap(req => journey.submitStep(Number(req.params.id), req.params.step, req.body, req.user)));
 api.post('/journeys/:id/steps/:step/give', wrap(req => journey.giveStep(Number(req.params.id), req.params.step, req.body, req.user)));
 api.post('/journeys/:id/steps/:step', wrap(req => journey.setStep(Number(req.params.id), req.params.step, req.body, req.user)));
@@ -972,9 +973,10 @@ api.post('/attachments/:entity/:id', express.raw({ type: () => true, limit: '200
   if (isCad(saved.filename)) preparePlan(roles.attachmentFile(saved.id)); // ready before anyone opens it in 3D
   return saved;
 }));
+const fileVisible = (a, role) => (a.entity.startsWith('journey:') ? journey.canSeeRole(role) : canView(a.entity, role));
 api.get('/files/:id', wrap((req, res) => {
   const a = roles.attachmentFile(req.params.id);
-  if (!canView(a.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
+  if (!fileVisible(a, req.user.role)) throw new HttpError(403, 'You do not have access to this file');
   const inline = req.query.inline && /^(image\/|application\/pdf|text\/plain)/.test(a.mime || '');
   res.setHeader('Content-Type', inline ? a.mime : 'application/octet-stream');
   res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(a.filename)}`);
@@ -1079,6 +1081,7 @@ api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: 
 }));
 api.delete('/files/:id', wrap(req => {
   const a = roles.attachmentFile(req.params.id);
+  if (a.entity.startsWith('journey:')) { journey.removeFile(a, req.user); return { ok: true }; }
   roles.deleteAttachment(req.params.id, req.user, canDelete(a.entity, req.user.role));
   return { ok: true };
 }));

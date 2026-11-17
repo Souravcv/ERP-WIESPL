@@ -111,8 +111,27 @@ async function detail(root, id) {
     toast('Saved'); await draw();
   };
 
+  const flat = () => { const f = {}; for (const [k, v] of Object.entries(d.steps)) { f[k] = v; for (const p of v.subs || []) f[p.key] = p; } return f; };
+  // attach the step's document(s): PDF, drawing, photo, Excel …
+  const addFiles = key => {
+    const input = h('input', { type: 'file', multiple: true, style: { display: 'none' } });
+    input.onchange = busy(async () => {
+      for (const f of input.files) {
+        const res = await fetch(`/api/journeys/${id}/steps/${key}/files?name=${encodeURIComponent(f.name)}`, { method: 'POST', headers: { 'x-file-type': f.type || 'application/octet-stream' }, body: f });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || `${f.name} could not be uploaded`); }
+      }
+      toast(`${input.files.length} file${input.files.length === 1 ? '' : 's'} attached`); await draw();
+    });
+    document.body.append(input); input.click(); setTimeout(() => input.remove(), 60000);
+  };
+  const removeFile = async (f, title) => {
+    const ok = await modal(`Remove ${f.filename}?`, h('p.muted', title), [{ label: 'Cancel', value: false }, { label: 'Remove', cls: 'danger solid', value: true }]);
+    if (!ok) return;
+    await api(`/files/${f.id}`, { method: 'DELETE' }); toast('Removed'); await draw();
+  };
   const sendForApproval = async (key, title) => {
-    const box = h('textarea', { rows: 3, placeholder: 'What is ready, document no., anything the approver should know (optional)' });
+    const needNote = flat()[key]?.need === 'note';
+    const box = h('textarea', { rows: 3, placeholder: needNote ? `Required: ${RACI[key]?.doc || 'the result'}` : 'What is ready, document no., anything the approver should know (optional)' });
     const ok = await modal(`Send for approval: ${title}`, h('div', h('p.muted', `Approved in this order: ${(d.steps[key] || Object.values(d.steps).flatMap(v => v.subs || []).find(p => p.key === key))?.approval?.chain.map(c => c.label).join(' › ')}`), box),
       [{ label: 'Cancel', value: false }, { label: '📨 Send', cls: 'primary', value: true }]);
     if (!ok) return;
@@ -133,7 +152,8 @@ async function detail(root, id) {
   const tick = async (key, status, title) => {
     let note = '';
     if (status !== 'open') {
-      const box = h('textarea', { rows: 3, placeholder: status === 'na' ? 'Why it is not needed (optional)' : 'A note: date, document no., remarks (optional)' });
+      const x = flat()[key], needNote = status === 'done' && x?.need === 'note';
+      const box = h('textarea', { rows: 3, placeholder: status === 'na' ? 'Why it is not needed (optional)' : needNote ? `Required: ${RACI[key]?.doc || 'the result'}` : 'A note: date, document no., remarks (optional)' });
       const ok = await modal(status === 'na' ? `Not needed: ${title}` : `Done: ${title}`, h('div', box), [{ label: 'Cancel', value: false }, { label: status === 'na' ? 'Not needed' : '✓ Done', cls: 'primary', value: true }]);
       if (!ok) return;
       note = box.value;
@@ -167,7 +187,15 @@ async function detail(root, id) {
     const btns = x.auto ? null : x.status === 'open'
       ? h('div.jr-btns', ...decideBtns, d.can_edit ? [canDecide ? null : doneBtn, h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'na', title)) }, 'Not needed'), giveBtn] : null)
       : d.can_edit ? h('div.jr-btns', h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'open', title)) }, 'Undo')) : null;
-    return [chip, info, task, due, apLine, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
+    const files = x.files || [];
+    const missing = x.status === 'open' && x.need === 'file' && !files.length;
+    const docs = x.need === 'file' || files.length ? h('div', { class: `jr-docs${missing ? ' missing' : ''}` },
+      h('span.jr-rk', '📎'), files.length ? files.map(f => h('span.jr-file', h('a', { href: `/api/files/${f.id}?inline=1`, target: '_blank', title: `${f.by || ''} · ${f.at || ''}` }, f.filename),
+        d.can_edit && x.status === 'open' ? h('button.jr-x', { type: 'button', title: 'Remove', onclick: () => removeFile(f, title).catch(fail) }, '×') : null))
+        : h('span', x.auto ? 'In the CRM' : 'Document not attached yet'),
+      d.can_edit && !x.auto ? h('button.btn.small', { type: 'button', onclick: () => addFiles(key) }, '+ Attach') : null)
+      : x.need === 'note' && x.status === 'open' ? h('div.jr-docs', h('span.jr-rk', '✍'), 'A written note when done') : null;
+    return [chip, info, task, due, docs, apLine, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
   };
   const stepCard = s => {
     const x = d.steps[s.key];

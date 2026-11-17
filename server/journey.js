@@ -4,7 +4,8 @@
 import { db, tx, audit } from './db.js';
 import { HttpError, insertRow, updateRow, getRow } from './crud.js';
 import { canView, canWrite, hasFunction } from '../public/js/schema.js';
-import { STEPS, STEP, TICKABLE, PHASES, RACI, JOURNEY_DOC, approvalChain } from '../public/js/journey.js';
+import { STEPS, STEP, TICKABLE, PHASES, RACI, JOURNEY_DOC, approvalChain, docNeed } from '../public/js/journey.js';
+import { saveAttachment, deleteAttachment } from './roles.js';
 import { notify, notifyDecision } from './notify.js';
 
 export function migrateJourneys() {
@@ -18,6 +19,7 @@ export function migrateJourneys() {
 
 const LINKS = ['enquiries', 'sales_orders', 'projects'];
 const canSee = role => LINKS.some(e => canView(e, role));
+export const canSeeRole = canSee;
 const canEdit = role => role === 'admin' || LINKS.some(e => canWrite(e, role));
 const one = (sql, ...a) => db.prepare(sql).get(...a);
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
@@ -73,14 +75,14 @@ const refsOf = j => [j.enquiry && (j.enquiry.enquiry_no || `Enquiry ${j.enquiry.
 // every step with its state: done / na / open, by hand or by itself, with its date and due date
 function work(j) {
   const stored = Object.fromEntries(db.prepare('SELECT * FROM journey_steps WHERE journey_id = ?').all(j.id).map(r => [r.step, r]));
-  const tasks = stepTasks(j.id), aps = stepApprovals(j.id);
+  const tasks = stepTasks(j.id), aps = stepApprovals(j.id), files = stepFiles(j.id);
   const part = (key, auto) => {
-    const s = stored[key], task = tasks[key] || null, approval = approvalState(key, aps[key]);
-    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), task, approval };
+    const s = stored[key], task = tasks[key] || null, approval = approvalState(key, aps[key]), more = { task, approval, files: files[key] || [], need: docNeed(key) };
+    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), ...more };
     const fact = auto && AUTO[auto]?.(j);
-    if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, task, approval };
+    if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, ...more };
     // an open step given to someone: its deadline is the task's
-    return task ? { status: 'open', task, due: task.due_date, late: !!task.due_date && task.due_date < today(), approval } : { status: 'open', approval };
+    return task ? { status: 'open', due: task.due_date, late: !!task.due_date && task.due_date < today(), ...more } : { status: 'open', ...more };
   };
   const out = {};
   for (const st of STEPS) {
@@ -143,6 +145,7 @@ export function setStep(id, key, body, user) {
   if (!['done', 'na', 'open'].includes(status)) throw new HttpError(400, 'Choose done, not needed or open');
   if (status === 'done' && approvalChain(key).length && user.role !== 'admin') throw new HttpError(409, 'This step is approved in the CRM: send it for approval');
   load(id);
+  if (status === 'done' && user.role !== 'admin') needDoc(id, key, note);
   cancelPending(id, key, status === 'na' ? 'Step marked not needed' : status === 'open' ? 'Step reopened' : 'Ticked by hand', user);
   tx(() => {
     if (status === 'open') db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(id, key);
@@ -208,6 +211,7 @@ export function taskSaved(taskId, user) {
   const t = db.prepare('SELECT id, task_no, journey_id, journey_step, status, progress_note, completed_by, assigned_to FROM work_tasks WHERE id = ?').get(taskId);
   if (!t?.journey_id || !t.journey_step || !one('SELECT 1 FROM journeys WHERE id = ?', t.journey_id)) return;
   const s = one('SELECT * FROM journey_steps WHERE journey_id = ? AND step = ?', t.journey_id, t.journey_step);
+  if (t.status === 'Done' && !s && user?.name !== 'system' && user?.role !== 'admin') needDoc(t.journey_id, t.journey_step, t.progress_note, true);
   if (t.status === 'Done' && !s && approvalChain(t.journey_step).length) {
     if (!one("SELECT 1 FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Pending'", JOURNEY_DOC, t.journey_id, t.journey_step))
       openApproval(load(t.journey_id), t.journey_step, 0, user, t.completed_by || t.assigned_to, [`Task ${t.task_no}`, t.progress_note].filter(Boolean).join(': '));
@@ -338,6 +342,7 @@ export function submitStep(id, key, body, user) {
   const j = load(id);
   if (flatSteps(work(j).steps)[key]?.status !== 'open') throw new HttpError(409, 'This step is already finished');
   if (one("SELECT 1 FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Pending'", JOURNEY_DOC, id, key)) throw new HttpError(409, 'Already waiting for approval');
+  needDoc(id, key, body?.note);
   tx(() => openApproval(j, key, 0, user, user.name, String(body?.note || '').trim().slice(0, 500)));
   return view(id, user);
 }
@@ -360,4 +365,34 @@ export function approvalDecided(ap, decision, comments, user) {
   if (task && task.status !== 'Done') updateRow('work_tasks', task.id, { status: 'Done', progress_note: `Approved by ${by.join(', ')}` }, user, { system: true });
   notifyDecision({ ...ap, comments }, decision, true, user);
   audit(user.name, 'journeys', j.id, 'update', `${key}: approved`);
+}
+
+// ---------------------------------------------------------------- the document of each step (stage 4)
+const stepFiles = jid => {
+  const out = {};
+  for (const a of db.prepare("SELECT id, entity, filename, mime, size, note, uploaded_by, at FROM attachments WHERE entity LIKE 'journey:%' AND record_id = ? ORDER BY id").all(jid)) {
+    const k = a.entity.slice(8); (out[k] ||= []).push({ id: a.id, filename: a.filename, mime: a.mime, size: a.size, note: a.note, by: a.uploaded_by, at: a.at });
+  }
+  return out;
+};
+function needDoc(jid, key, note, fromTask = false) {
+  const need = docNeed(key), what = RACI[key]?.doc || 'the document';
+  const where = fromTask ? ' on the order journey' : '';
+  if (need === 'note' && !String(note || '').trim()) throw new HttpError(409, fromTask ? `Write the result in the task's update first: ${what}` : `Write the note first: ${what}`);
+  if (need === 'file' && !one("SELECT 1 FROM attachments WHERE entity = ? AND record_id = ?", `journey:${key}`, jid)) throw new HttpError(409, `Attach the document${where} first: ${what}`);
+}
+export function addFile(id, key, meta, buf, user) {
+  if (!canEdit(user.role)) throw new HttpError(403, 'You cannot change the order journey');
+  if (!TICKABLE.has(key)) throw new HttpError(400, 'Unknown step');
+  load(id);
+  const saved = saveAttachment(`journey:${key}`, id, meta, buf, user);
+  audit(user.name, 'journeys', id, 'update', `${key}: file ${saved.filename}`);
+  return saved;
+}
+export function removeFile(a, user) {
+  if (!canEdit(user.role)) throw new HttpError(403, 'You cannot change the order journey');
+  // once the step is done its documents stay (an admin may still remove one)
+  const s = one('SELECT status FROM journey_steps WHERE journey_id = ? AND step = ?', a.record_id, a.entity.slice(8));
+  if (s?.status === 'done' && user.role !== 'admin') throw new HttpError(409, 'The step is done: its documents stay. Undo the step first.');
+  deleteAttachment(a.id, user, ['admin', 'manager', 'md'].includes(user.role));
 }

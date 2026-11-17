@@ -163,3 +163,10 @@ const GATES = new Set(STEPS.flatMap(s => (s.derived || !isGate(s) ? [] : s.subs 
 export const approvalChain = key => { if (!GATES.has(key)) return []; const a = (RACI[key]?.a || []).filter(r => !OUTSIDE.has(r));
   return ANY_OF.has(key) && a.length ? [a.join(',')] : a; };
 export const mayDecide = (role, approverRole) => role === 'admin' || String(approverRole || '').split(',').includes(role);
+
+// ---------------------------------------------------------------- the document of each step (stage 4)
+// Before a step is done by hand or sent for approval, its document is in the CRM: a file attached to the step (PDF,
+// drawing, photo, Excel …), or for a check or decision a written note. A step the CRM ticks from its own records
+// needs nothing more.
+const NOTE_STEPS = new Set(['s2', 's5', 's6', 's9', 's15']);
+export const docNeed = key => (TICKABLE.has(key) ? (NOTE_STEPS.has(key) ? 'note' : 'file') : null);
