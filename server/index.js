@@ -48,6 +48,7 @@ import * as journey from './journey.js';
 import * as materials from './materials.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
+import * as news from './news.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -707,6 +708,11 @@ api.get('/materials/projects', wrap(req => materials.trackedProjects(req.user)))
 api.get('/materials/:projectId', wrap(req => materials.projectMaterials(Number(req.params.projectId), req.user)));
 api.put('/materials/po/:id/project', wrap(req => materials.linkPo(Number(req.params.id), req.body, req.user)));
 api.put('/materials/po/:id/line/:line', wrap(req => materials.setLineDates(Number(req.params.id), req.params.line, req.body, req.user)));
+// News: new hospitals all over India (leads), OT / hospital technology, rules — public feeds read by the server
+api.get('/news', wrap(req => news.list(req.user, req.query)));
+api.post('/news/refresh', wrap(async req => { if (req.user.role !== 'admin' && !canWrite('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return news.refresh(req.user); }));
+api.post('/news/:id/status', wrap(req => news.setStatus(req.params.id, req.body?.status, req.user)));
+api.post('/news/:id/enquiry', wrap(req => news.makeEnquiry(req.params.id, req.user)));
 api.get('/journeys', wrap(req => journey.list(req.user)));
 api.get('/journeys/team', wrap(req => journey.team(req.user)));
 api.get('/journeys/dashboard', wrap(req => journey.dashboard(req.user)));
@@ -1270,7 +1276,12 @@ setInterval(() => {
   try { if (new Date().getHours() >= 10) prod.dailyProduction(); } catch (e) { console.error('production reminders', e.message); }
   try { if (new Date().getHours() >= 9) journey.dailyJourney(); } catch (e) { console.error('order journey reminders', e.message); }
   try { if (new Date().getHours() >= 9) pofollow.dailyPoFollowups(); } catch (e) { console.error('PO follow-up reminders', e.message); }
+  try { if (new Date().getHours() >= 10) news.dailyNews(); } catch (e) { console.error('news pop-up', e.message); }
 }, 60 * 60 * 1000);
+
+news.migrateNews();
+setTimeout(() => news.refresh().catch(e => console.error('news', e.message)), 3 * 60 * 1000);
+setInterval(() => news.refresh().catch(e => console.error('news', e.message)), 6 * 60 * 60 * 1000);
 
 app.listen(PORT, '0.0.0.0', () => {
   setTimeout(prepareMissingPlans, 5000);

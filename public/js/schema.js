@@ -450,7 +450,7 @@ export const ENTITIES = {
       { key: 'financial_status', label: 'MIS – Financial Strength', type: 'textarea', span: 2, rows: 2, hint: 'For example: self-funded, or a loan is necessary.' },
       { key: 'profile_answers', label: 'Questionnaire Answers', type: 'textarea', span: 2, rows: 6, hint: 'The questionnaire fills this. You can add notes.' },
       { key: 'sec_source', label: 'Source and Referral Details', type: 'section', computed: "''", collapsed: true, hint: 'Who gave us this lead. Keep all the referral data in this section.', summary: ['source', 'ref_name', 'ref_firm', 'ref_phone', 'kickback'] },
-      { key: 'source', label: 'Lead Source', type: 'select', options: ['', 'Direct', 'Consultant / Architect', 'Reference', 'Website', 'Exhibition', 'Tender', 'Existing Customer', 'Dealer', 'Other'] },
+      { key: 'source', label: 'Lead Source', type: 'select', options: ['', 'Direct', 'Consultant / Architect', 'Reference', 'Website', 'Exhibition', 'Tender', 'Existing Customer', 'Dealer', 'News', 'Other'] },
       { key: 'ref_name', label: 'Referred By (Name)', type: 'text' },
       { key: 'ref_firm', label: 'Firm / Company', type: 'text' },
       { key: 'ref_phone', label: 'Referrer Phone', type: 'tel' },

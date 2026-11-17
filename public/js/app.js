@@ -48,7 +48,7 @@ function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
   $('btn-signature').style.display = WORKER_ROLES.includes(role) ? 'none' : ''; // no documents to sign
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/news' }, '📰 News'));
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
@@ -147,6 +147,7 @@ async function route() {
       case 'tasks': await tasksView(view); refreshPending(); break;
       case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
+      case 'news': { const { newsView } = await import('./views/news.js'); await newsView(view); break; }
       case 'journey': { const { journeyView } = await import('./views/journey.js'); await journeyView(view, a); break; }
       case 'planner': { const { plannerView } = await import('./views/planner.js'); await plannerView(view, a); break; }
       case 'planner-print': { $('app').classList.add('hidden'); const { plannerPrint } = await import('./views/planner.js'); await plannerPrint($('print-root'), a); break; }

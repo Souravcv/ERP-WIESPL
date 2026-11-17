@@ -917,3 +917,17 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .bp-auto { font-size: 11px; color: #15803d; }
 .bp-spec { font-size: 12px; max-width: 360px; }
 .bp-table td { vertical-align: top; }
+
+/* news */
+.nw-list { display: grid; gap: 10px; }
+.nw-item { background: var(--card, #fff); border: 1px solid var(--line, #e5e7eb); border-radius: 10px; padding: 10px 12px; }
+.nw-item.lead { border-left: 4px solid #15803d; }
+.nw-meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; }
+.nw-tag { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; background: #dbeafe; color: #1e40af; }
+.nw-tag.lead { background: #dcfce7; color: #166534; }
+.nw-tag.rule { background: #fef3c7; color: #92400e; }
+.nw-place { font-weight: 600; }
+.nw-title { display: block; font-weight: 600; font-size: 15px; margin: 4px 0; color: inherit; text-decoration: none; }
+.nw-title:hover { text-decoration: underline; }
+.nw-snip { font-size: 13px; color: var(--muted, #64748b); }
+.nw-btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
