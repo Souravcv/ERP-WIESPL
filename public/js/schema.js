@@ -573,9 +573,12 @@ export const ENTITIES = {
     statusField: 'status',
     fields: [
       { key: 'also_by', label: 'Can Also Approve', type: 'text', readonly: true, hint: 'The reporting manager (leave)' },
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Order Journey', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
+      { key: 'journey_step', label: 'Journey step', type: 'text', hidden: true, readonly: true },
+      { key: 'approver_role', label: 'Approver role', type: 'text', hidden: true, readonly: true },
+      { key: 'approval_seq', label: 'Approval order', type: 'number', hidden: true, readonly: true },
       { key: 'doc_ref', label: 'Document Ref', type: 'text', readonly: true },
       { key: 'title', label: 'Title', type: 'text', readonly: true, span: 2 },
       { key: 'amount', label: 'Amount', type: 'money', readonly: true },

@@ -48,7 +48,7 @@ export async function quickItem(preset = {}) {
   return it;
 }
 const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
-export const canApprove = (docType, stage, ap = null) => !!stepOf(docType, stage) && (hasFunction(state.user.role, stepOf(docType, stage).fn) || (!!ap?.also_by && ap.also_by === state.user.name));
+export const canApprove = (docType, stage, ap = null) => docType === 'Order Journey' ? !!ap && (state.user.role === 'admin' || String(ap.approver_role || '').split(',').includes(state.user.role)) : !!stepOf(docType, stage) && (hasFunction(state.user.role, stepOf(docType, stage).fn) || (!!ap?.also_by && ap.also_by === state.user.name));
 export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
   : typeof d === 'string' && d.startsWith('setting:') ? state.settings[d.slice(8)] ?? '' : d;
 
@@ -485,6 +485,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       const docEnt = APPROVAL_DOCS[row.doc_type] && canView(APPROVAL_DOCS[row.doc_type], state.user.role) ? APPROVAL_DOCS[row.doc_type] : null; // print / open only if the role may see the document
       if (docEnt && ENTITIES[docEnt].print) A.push(h('a.btn', { href: `#/print/${ENTITIES[docEnt].print}/${row.doc_id}${docEnt === 'purchase_orders' ? '?internal=1' : ''}`, target: '_blank' }, `🖨 Print ${row.doc_type}`));
       if (docEnt) A.push(h('a.btn', { href: recordHref(docEnt, row.doc_id), title: 'Open the document itself (to edit it)' }, `Open ${row.doc_type} ›`));
+      if (row.doc_type === 'Order Journey') A.push(h('a.btn', { href: `#/journey/${row.doc_id}` }, '🧭 Open the order journey'));
       if (row.status === 'Pending' && canApprove(row.doc_type, row.stage, row)) {
         const decide = decision => go(async () => {
           const c = h('textarea', { placeholder: 'Comments (optional)' });
@@ -498,7 +499,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
         });
         A.push(h('button.btn.good', { onclick: decide('Approved') }, '✔ Approve'), h('button.btn.danger.solid', { onclick: decide('Rejected') }, '✖ Reject'));
       } else if (row.status === 'Pending') {
-        A.push(h('span.muted', `Waiting for someone allowed to: ${FUNCTIONS[stepOf(row.doc_type, row.stage)?.fn] || 'approve'}`));
+        A.push(h('span.muted', row.doc_type === 'Order Journey' ? `Waiting for: ${row.stage}` : `Waiting for someone allowed to: ${FUNCTIONS[stepOf(row.doc_type, row.stage)?.fn] || 'approve'}`));
       }
       break;
     }

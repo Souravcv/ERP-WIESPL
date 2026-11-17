@@ -840,3 +840,11 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-counts { margin-left: auto; font-size: 12px; }
 .jr-ttask { font-size: 13px; padding: 4px 0; border-top: 1px solid var(--line, #e5e7eb); }
 .jr-ttask.late a { color: var(--bad); }
+
+/* order journey: approvals of gates */
+.jr-approvals { font-size: 12px; margin-top: 4px; }
+.jr-ap { padding: 1px 6px; border-radius: 10px; background: var(--chip, #f1f5f9); }
+.jr-ap.ok { background: #dcfce7; color: #166534; }
+.jr-ap.wait { background: #fef3c7; color: #92400e; }
+.jr-ap.no { background: #fee2e2; color: #991b1b; }
+.jr-apnote { font-size: 12px; color: #92400e; margin-top: 2px; }

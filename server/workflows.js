@@ -3,6 +3,8 @@ import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
 import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
 import { notify, notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
+import { JOURNEY_DOC, mayDecide } from '../public/js/journey.js';
+import { approvalDecided as journeyDecided } from './journey.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
@@ -34,6 +36,7 @@ const gmNeeded = (docType, row) => {
 const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews', 'production_plans'];
 
 export function canApprove(docType, stage, user, ap = null) {
+  if (docType === JOURNEY_DOC) return !!ap && mayDecide(user.role, ap.approver_role);
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
   return !!step && (hasFunction(user.role, step.fn) || (!!ap?.also_by && ap.also_by === user.name));
 }
@@ -96,6 +99,7 @@ export function decide(approvalId, decision, comments, user) {
   }
   return tx(() => {
     updateRow('approvals', approvalId, { status: decision, decided_by: user.name, decided_at: stamp(), comments: comments || ap.comments }, user, { system: true });
+    if (ap.doc_type === JOURNEY_DOC) { journeyDecided(ap, decision, comments, user); return getRow('approvals', approvalId); }
     if (!d) return getRow('approvals', approvalId);
     const flow = APPROVAL_FLOWS[ap.doc_type];
     const idx = Math.max(0, flow.findIndex(s => s.stage === ap.stage));

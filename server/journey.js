@@ -4,7 +4,8 @@
 import { db, tx, audit } from './db.js';
 import { HttpError, insertRow, updateRow, getRow } from './crud.js';
 import { canView, canWrite, hasFunction } from '../public/js/schema.js';
-import { STEPS, STEP, TICKABLE, PHASES, RACI } from '../public/js/journey.js';
+import { STEPS, STEP, TICKABLE, PHASES, RACI, JOURNEY_DOC, approvalChain } from '../public/js/journey.js';
+import { notify, notifyDecision } from './notify.js';
 
 export function migrateJourneys() {
   db.exec(`CREATE TABLE IF NOT EXISTS journeys (id INTEGER PRIMARY KEY, enquiry_id INTEGER, sales_order_id INTEGER, project_id INTEGER,
@@ -72,14 +73,14 @@ const refsOf = j => [j.enquiry && (j.enquiry.enquiry_no || `Enquiry ${j.enquiry.
 // every step with its state: done / na / open, by hand or by itself, with its date and due date
 function work(j) {
   const stored = Object.fromEntries(db.prepare('SELECT * FROM journey_steps WHERE journey_id = ?').all(j.id).map(r => [r.step, r]));
-  const tasks = stepTasks(j.id);
+  const tasks = stepTasks(j.id), aps = stepApprovals(j.id);
   const part = (key, auto) => {
-    const s = stored[key], task = tasks[key] || null;
-    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), task };
+    const s = stored[key], task = tasks[key] || null, approval = approvalState(key, aps[key]);
+    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), task, approval };
     const fact = auto && AUTO[auto]?.(j);
-    if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, task };
+    if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, task, approval };
     // an open step given to someone: its deadline is the task's
-    return task ? { status: 'open', task, due: task.due_date, late: !!task.due_date && task.due_date < today() } : { status: 'open' };
+    return task ? { status: 'open', task, due: task.due_date, late: !!task.due_date && task.due_date < today(), approval } : { status: 'open', approval };
   };
   const out = {};
   for (const st of STEPS) {
@@ -102,7 +103,8 @@ function work(j) {
   const gaps = STEPS.filter((s, i) => i < last && out[s.key].status === 'open').map(s => s.key);
   for (const k of gaps) out[k].gap = true;
   const isLate = x => x.late || x.subs?.some(p => p.late);
-  return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => isLate(out[s.key])) };
+  const waiting = Object.values(aps).filter(r => r.some(a => a.status === 'Pending')).length;
+  return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => isLate(out[s.key])), waiting };
 }
 
 // every role with its label and the people who have it now, for the who-does-what of each step
@@ -114,7 +116,7 @@ const roleMap = () => {
 };
 
 const summary = j => { const w = work(j); return { id: j.id, title: titleOf(j), refs: refsOf(j), enquiry_id: j.enquiry_id, sales_order_id: j.sales_order_id, project_id: j.project_id,
-  finished: w.finished, total: w.total, phase: w.phase, next: w.next, gaps: w.gaps, next_title: w.next ? STEP[w.next].title : 'Handed over', late: w.late,
+  finished: w.finished, total: w.total, phase: w.phase, next: w.next, gaps: w.gaps, next_title: w.next ? STEP[w.next].title : 'Handed over', late: w.late, waiting: w.waiting,
   done: w.finished === w.total, status: j.project?.status || j.order?.status || j.enquiry?.status || '' }; };
 
 export function list(user) {
@@ -128,7 +130,7 @@ export function view(id, user) {
   const j = load(id); closeAutoTasks(j, user);
   const w = work(j);
   const lab = (e, row, f) => (row ? { id: row.id, label: f(row) } : null);
-  return { ...summary(j), ...w, can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, people: canAssign(user) ? people() : [], roles: roleMap(),
+  return { ...summary(j), ...w, can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, my_role: user.role, people: canAssign(user) ? people() : [], roles: roleMap(),
     links: { enquiry: lab('enquiries', j.enquiry, e => `${e.enquiry_no || e.id} · ${e.hospital_name || e.client_name || ''}`), order: lab('sales_orders', j.order, o => `${o.so_no || o.id}${o.client_po_no ? ` · PO ${o.client_po_no}` : ''}`),
       project: lab('projects', j.project, p => `${p.project_no || p.code || p.id} · ${p.name || ''}`) } };
 }
@@ -139,7 +141,9 @@ export function setStep(id, key, body, user) {
   if (!TICKABLE.has(key)) throw new HttpError(400, 'Unknown step');
   const status = String(body?.status || ''), note = String(body?.note || '').trim().slice(0, 500) || null;
   if (!['done', 'na', 'open'].includes(status)) throw new HttpError(400, 'Choose done, not needed or open');
+  if (status === 'done' && approvalChain(key).length && user.role !== 'admin') throw new HttpError(409, 'This step is approved in the CRM: send it for approval');
   load(id);
+  cancelPending(id, key, status === 'na' ? 'Step marked not needed' : status === 'open' ? 'Step reopened' : 'Ticked by hand', user);
   tx(() => {
     if (status === 'open') db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(id, key);
     else db.prepare(`INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, ?, ?, ?, datetime('now','localtime'), NULL)
@@ -204,6 +208,11 @@ export function taskSaved(taskId, user) {
   const t = db.prepare('SELECT id, task_no, journey_id, journey_step, status, progress_note, completed_by, assigned_to FROM work_tasks WHERE id = ?').get(taskId);
   if (!t?.journey_id || !t.journey_step || !one('SELECT 1 FROM journeys WHERE id = ?', t.journey_id)) return;
   const s = one('SELECT * FROM journey_steps WHERE journey_id = ? AND step = ?', t.journey_id, t.journey_step);
+  if (t.status === 'Done' && !s && approvalChain(t.journey_step).length) {
+    if (!one("SELECT 1 FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Pending'", JOURNEY_DOC, t.journey_id, t.journey_step))
+      openApproval(load(t.journey_id), t.journey_step, 0, user, t.completed_by || t.assigned_to, [`Task ${t.task_no}`, t.progress_note].filter(Boolean).join(': '));
+    return;
+  }
   if (t.status === 'Done' && !s) {
     db.prepare("INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, 'done', ?, ?, datetime('now','localtime'), ?)")
       .run(t.journey_id, t.journey_step, [`Task ${t.task_no}`, t.progress_note].filter(Boolean).join(': ').slice(0, 500), t.completed_by || user?.name || t.assigned_to, t.id);
@@ -280,4 +289,75 @@ export function setLinks(id, body, user) {
     ensureJourneys();
     return view(id, user);
   });
+}
+
+// ---------------------------------------------------------------- approvals of gates (stage 3)
+// A gate is sent for approval (by hand, or when its task is marked Done); its approvers decide one after the other in
+// the Approvals list (or on the journey); the last approval ticks the step. A rejection sends it back to the doer.
+const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
+const holders = roles => db.prepare(`SELECT name FROM users WHERE active = 1 AND role IN (${roles.map(() => '?').join(',')})`).all(...roles).map(u => u.name);
+const labels = csv => String(csv).split(',').map(roleLabel).join(' / ');
+// the latest round of approvals of each step (a round starts with the first approver)
+const stepApprovals = jid => {
+  const out = {};
+  for (const a of db.prepare('SELECT id, journey_step, approver_role, approval_seq, stage, status, decided_by, decided_at, requested_by, requested_at, comments FROM approvals WHERE doc_type = ? AND doc_id = ? ORDER BY id').all(JOURNEY_DOC, jid)) {
+    if (!a.journey_step) continue;
+    if (!a.approval_seq || !out[a.journey_step]) out[a.journey_step] = [];
+    out[a.journey_step].push(a);
+  }
+  return out;
+};
+const approvalState = (key, rows) => {
+  const chain = approvalChain(key); if (!chain.length) return null;
+  const r = rows || [];
+  return { chain: chain.map((roles, i) => ({ roles, label: labels(roles), row: r.find(a => a.approval_seq === i) || null })),
+    pending: r.find(a => a.status === 'Pending') || null, rejected: r.find(a => a.status === 'Rejected' && !String(a.comments || '').startsWith('Withdrawn')) || null,
+    approved: r.length > 0 && chain.every((_, i) => r.some(a => a.approval_seq === i && a.status === 'Approved')), requested_by: r[0]?.requested_by || null };
+};
+
+function openApproval(j, key, seq, user, requestedBy, note = '') {
+  const roles = approvalChain(key)[seq];
+  const ap = insertRow('approvals', { doc_type: JOURNEY_DOC, doc_id: j.id, doc_ref: `${titleOf(j)} · step ${stepNo(key)}`.slice(0, 200), stage: labels(roles),
+    title: `${stepNo(key)}. ${stepTitle(key)}`, requested_by: requestedBy || user.name, requested_at: stamp(), status: 'Pending',
+    journey_step: key, approver_role: roles, approval_seq: seq, comments: note || null }, user, { system: true });
+  notify({ userNames: holders(roles.split(',')), kind: 'approval', title: `Approval needed: ${titleOf(j)}: ${stepTitle(key)}`,
+    body: [`${labels(roles)}${approvalChain(key).length > 1 ? ` (${seq + 1} of ${approvalChain(key).length})` : ''}`, `requested by ${ap.requested_by}`, note].filter(Boolean).join(' · '), link: `#/view/approvals/${ap.id}` }, user);
+  audit(user.name, 'journeys', j.id, 'update', `${key}: sent for approval (${labels(roles)})`);
+  return ap;
+}
+
+// a pending approval of a step that was reopened or marked not needed is withdrawn
+function cancelPending(jid, key, why, user) {
+  for (const a of db.prepare("SELECT id FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Pending'").all(JOURNEY_DOC, jid, key))
+    updateRow('approvals', a.id, { status: 'Rejected', decided_by: user.name, decided_at: stamp(), comments: `Withdrawn: ${why}` }, user, { system: true });
+}
+
+export function submitStep(id, key, body, user) {
+  if (!canEdit(user.role)) throw new HttpError(403, 'You cannot change the order journey');
+  if (!TICKABLE.has(key) || !approvalChain(key).length) throw new HttpError(400, 'This step has no approval in the CRM');
+  const j = load(id);
+  if (flatSteps(work(j).steps)[key]?.status !== 'open') throw new HttpError(409, 'This step is already finished');
+  if (one("SELECT 1 FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Pending'", JOURNEY_DOC, id, key)) throw new HttpError(409, 'Already waiting for approval');
+  tx(() => openApproval(j, key, 0, user, user.name, String(body?.note || '').trim().slice(0, 500)));
+  return view(id, user);
+}
+
+// called by the approval engine (workflows.decide) after the approval row is saved
+export function approvalDecided(ap, decision, comments, user) {
+  const j = load(ap.doc_id), key = ap.journey_step, chain = approvalChain(key), seq = Number(ap.approval_seq) || 0;
+  const task = one("SELECT id, status FROM work_tasks WHERE journey_id = ? AND journey_step = ? AND status <> 'Cancelled' ORDER BY id DESC LIMIT 1", j.id, key);
+  if (decision === 'Rejected') {
+    if (task?.status === 'Done') updateRow('work_tasks', task.id, { status: 'In progress', progress_note: `Rejected by ${user.name}${comments ? `: ${comments}` : ''}` }, user, { system: true });
+    notifyDecision({ ...ap, comments }, decision, true, user);
+    audit(user.name, 'journeys', j.id, 'update', `${key}: rejected by ${user.name}`);
+    return;
+  }
+  if (seq + 1 < chain.length) { openApproval(j, key, seq + 1, user, ap.requested_by); notifyDecision({ ...ap, comments }, decision, false, user); return; }
+  const by = db.prepare("SELECT decided_by, stage FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND status = 'Approved' AND id >= (SELECT MAX(id) FROM approvals WHERE doc_type = ? AND doc_id = ? AND journey_step = ? AND approval_seq = 0) ORDER BY id")
+    .all(JOURNEY_DOC, j.id, key, JOURNEY_DOC, j.id, key).map(a => `${a.decided_by} (${a.stage})`);
+  db.prepare(`INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, 'done', ?, ?, datetime('now','localtime'), NULL)
+    ON CONFLICT (journey_id, step) DO UPDATE SET status = 'done', note = excluded.note, by_name = excluded.by_name, at = excluded.at, task_id = NULL`).run(j.id, key, `Approved by ${by.join(', ')}`.slice(0, 500), ap.requested_by || user.name);
+  if (task && task.status !== 'Done') updateRow('work_tasks', task.id, { status: 'Done', progress_note: `Approved by ${by.join(', ')}` }, user, { system: true });
+  notifyDecision({ ...ap, comments }, decision, true, user);
+  audit(user.name, 'journeys', j.id, 'update', `${key}: approved`);
 }

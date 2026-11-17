@@ -69,6 +69,7 @@ function card(j) {
     j.refs.length ? h('div.muted.jr-refs', j.refs.join(' · ')) : null,
     h('div.jr-bar', h('span', { style: { width: `${pct}%` } })),
     h('div.jr-next', h('span.muted', `${j.finished}/${j.total} · next: `), j.next_title),
+    j.waiting ? h('div.jr-apnote', `⏳ ${j.waiting} waiting for approval`) : null,
     j.gaps ? h('div.jr-gapnote', `${j.gaps} earlier step${j.gaps === 1 ? '' : 's'} not recorded`) : null);
 }
 
@@ -110,6 +111,25 @@ async function detail(root, id) {
     toast('Saved'); await draw();
   };
 
+  const sendForApproval = async (key, title) => {
+    const box = h('textarea', { rows: 3, placeholder: 'What is ready, document no., anything the approver should know (optional)' });
+    const ok = await modal(`Send for approval: ${title}`, h('div', h('p.muted', `Approved in this order: ${(d.steps[key] || Object.values(d.steps).flatMap(v => v.subs || []).find(p => p.key === key))?.approval?.chain.map(c => c.label).join(' › ')}`), box),
+      [{ label: 'Cancel', value: false }, { label: '📨 Send', cls: 'primary', value: true }]);
+    if (!ok) return;
+    await api(`/journeys/${id}/steps/${key}/approval`, { method: 'POST', body: { note: box.value } });
+    toast('Sent for approval'); window.dispatchEvent(new Event('approvals-changed'));
+    await draw();
+  };
+  const decide = async (row, decision, title) => {
+    const c = h('textarea', { rows: 3, placeholder: decision === 'Rejected' ? 'What has to change' : 'Comments (optional)' });
+    const ok = await modal(`${decision === 'Approved' ? 'Approve' : 'Reject'}: ${title} (${row.stage})`, h('div', c),
+      [{ label: 'Cancel', value: false }, { label: decision === 'Approved' ? '✔ Approve' : '✖ Reject', cls: decision === 'Approved' ? 'good' : 'danger solid', value: true }]);
+    if (!ok) return;
+    if (decision === 'Rejected' && !c.value.trim()) { toast('Write what has to change', true); return; }
+    await api(`/approvals/${row.id}/decide`, { method: 'POST', body: { decision, comments: c.value } });
+    toast(decision); window.dispatchEvent(new Event('approvals-changed'));
+    await draw();
+  };
   const tick = async (key, status, title) => {
     let note = '';
     if (status !== 'open') {
@@ -133,10 +153,21 @@ async function detail(root, id) {
     const mine = t && t.assigned_to?.toLowerCase() === String(d.me).toLowerCase();
     const giveBtn = !d.can_edit || x.status !== 'open' ? null : d.can_assign ? h('button.btn.small', { type: 'button', onclick: give }, t ? 'Change' : '📌 Give')
       : !t ? h('button.btn.small', { type: 'button', onclick: give }, "🙋 I'll do it") : null;
-    const btns = !d.can_edit || x.auto ? null : x.status === 'open'
-      ? h('div.jr-btns', h('button.btn.small.primary', { type: 'button', onclick: busy(() => tick(key, 'done', title)) }, '✓ Done'), h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'na', title)) }, 'Not needed'), giveBtn)
-      : h('div.jr-btns', h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'open', title)) }, 'Undo'));
-    return [chip, info, task, due, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
+    // a gate: its approvers in order, and who decides now
+    const ap = x.approval;
+    const apCls = c => (c.row?.status === 'Approved' ? 'ok' : c.row?.status === 'Pending' ? 'wait' : c.row?.status === 'Rejected' && c.row === ap.rejected ? 'no' : '');
+    const apLine = ap ? h('div.jr-approvals', h('span.jr-rk', 'Approval'), ap.chain.map((c, i) => [i ? ' › ' : null,
+      h('span', { class: `jr-ap ${apCls(c)}`, title: c.row?.decided_by ? `${c.row.status} by ${c.row.decided_by}, ${c.row.decided_at || ''}` : '' }, `${c.row?.status === 'Approved' ? '✓ ' : c.row?.status === 'Pending' ? '⏳ ' : ''}${c.label}`)]),
+      ap.rejected && x.status === 'open' && !ap.pending ? h('div.jr-late', `Rejected by ${ap.rejected.decided_by}${ap.rejected.comments ? `: “${ap.rejected.comments}”` : ''}`) : null) : null;
+    const canDecide = !!ap?.pending && (d.my_role === 'admin' || String(ap.pending.approver_role || '').split(',').includes(d.my_role));
+    const decideBtns = canDecide ? [h('button.btn.small.good', { type: 'button', onclick: busy(() => decide(ap.pending, 'Approved', title)) }, '✔ Approve'),
+      h('button.btn.small.danger', { type: 'button', onclick: busy(() => decide(ap.pending, 'Rejected', title)) }, '✖ Reject')] : [];
+    const doneBtn = ap ? (ap.pending ? h('a.btn.small', { href: `#/view/approvals/${ap.pending.id}` }, `⏳ With ${ap.pending.stage}`) : h('button.btn.small.primary', { type: 'button', onclick: busy(() => sendForApproval(key, title)) }, '📨 Send for approval'))
+      : h('button.btn.small.primary', { type: 'button', onclick: busy(() => tick(key, 'done', title)) }, '✓ Done');
+    const btns = x.auto ? null : x.status === 'open'
+      ? h('div.jr-btns', ...decideBtns, d.can_edit ? [canDecide ? null : doneBtn, h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'na', title)) }, 'Not needed'), giveBtn] : null)
+      : d.can_edit ? h('div.jr-btns', h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'open', title)) }, 'Undo')) : null;
+    return [chip, info, task, due, apLine, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
   };
   const stepCard = s => {
     const x = d.steps[s.key];

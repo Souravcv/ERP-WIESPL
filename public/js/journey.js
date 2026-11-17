@@ -150,3 +150,16 @@ export const RACI = {
   s40: R(['project_head'], ['client'], ['sales'], ['md', 'manager', 'finance_head'], 'Site day 29', 'Handover certificate signed by the client'),
   s41: R(['accounts', 'sales_service'], ['finance_head'], [], ['manager'], 'Invoice within 2 days of handover; then warranty / AMC', 'Final invoice, payment follow-up, warranty / AMC record'),
 };
+
+// ---------------------------------------------------------------- approvals (stage 3)
+// A gate (and each part of a gate) is approved in the CRM by its approvers, in order; client and vendor approve outside
+// the CRM. The technical work order needs one higher authority: GM, MD or Chief Engineer, any one of them.
+export const JOURNEY_DOC = 'Order Journey';
+const OUTSIDE = new Set(['client', 'vendor']);
+const ANY_OF = new Set(['r3']);
+const isGate = s => s.kind === 'gate' || !!s.gate;
+const GATES = new Set(STEPS.flatMap(s => (s.derived || !isGate(s) ? [] : s.subs ? s.subs.map(x => x.key) : [s.key])));
+// the approval steps of a step: each is one role, or several roles of which any one decides
+export const approvalChain = key => { if (!GATES.has(key)) return []; const a = (RACI[key]?.a || []).filter(r => !OUTSIDE.has(r));
+  return ANY_OF.has(key) && a.length ? [a.join(',')] : a; };
+export const mayDecide = (role, approverRole) => role === 'admin' || String(approverRole || '').split(',').includes(role);
