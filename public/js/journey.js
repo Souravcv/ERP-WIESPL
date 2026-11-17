@@ -20,7 +20,7 @@ const S = (key, phase, title, who, kind, hint, more = {}) => ({ key, phase, titl
 export const STEPS = [
   // 1 · Enquiry and estimation
   S('s1', 1, 'Enter the enquiry', 'Marketing', 'start', 'Client, hospital, place, source, requirement.', { auto: 'enquiry' }),
-  S('s2', 1, 'Check the enquiry, call the client, hand over to Sales Head', 'Marketing › Sales Head', 'step', 'Type of enquiry · genuine or not · requirement confirmed on call · call notes on the enquiry.'),
+  S('s2', 1, 'Sales handover', 'Marketing › Sales Head', 'step', 'Marketing checks the type of enquiry, talks to the client, then hands it to the Sales Head. Call notes on the enquiry.'),
   S('s3', 1, 'Show the sales design to the doctor', 'Sales design team', 'step', 'Layout / 3D / client film. Requirements agreed.'),
   S('s4', 1, 'Prepare the costing', 'Technical Estimation', 'step', 'Engineering, HVAC, electrical, plumbing.', { auto: 'costing' }),
   S('s5', 1, 'Review price, scope and request', 'Marketing · Estimation · Sales Head', 'gate', 'Marketing: price · Estimation: complete · Sales Head: matches the request.'),
