@@ -49,7 +49,8 @@ export async function dashboardView(root) {
   const role = state.user.role;
   const views = [canView('enquiries', role) && ['crm', '📈 Sales & CRM'], canView('items', role) && ['store', '🏬 Store'],
     (canView('invoices', role) || hasFunction(role, 'po_commercial')) && ['accounts', '💼 Accounts'],
-    canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service']].filter(Boolean);
+    canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service'],
+    ['enquiries', 'sales_orders', 'projects'].some(e => canView(e, role)) && ['journey', '🧭 Order Journey']].filter(Boolean);
   // Shop floor and site people land on their own performance.
   if (WORKER_ROLES.includes(role)) { location.hash = window.Capacitor?.isNativePlatform?.() ? '#/attend' : '#/performance'; return; } // the Android app is for attendance
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
@@ -59,6 +60,13 @@ export async function dashboardView(root) {
     tab = views.some(v => v[0] === pref) ? pref : views[0][0];
   }
   if (tab === 'crm') return crmDashboard(root, views);
+  if (tab === 'journey') {
+    const jbox = h('div', h('div.muted', 'Loading…'));
+    root.replaceChildren(h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('a.btn', { href: '#/journey' }, 'All orders'), h('a.btn', { href: '#/journey/team' }, '👥 Team'))), tabsOf(views, 'journey', root), jbox);
+    const { journeyDashboard } = await import('./journey.js');
+    await journeyDashboard(jbox, { embedded: true });
+    return;
+  }
   if (tab === 'service') {
     const sbox = h('div');
     root.replaceChildren(tabsOf(views, 'service', root), sbox);

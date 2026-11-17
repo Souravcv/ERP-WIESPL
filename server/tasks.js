@@ -6,6 +6,7 @@ import { taskGroups } from './worktasks.js';
 import { canWrite, canView, hasFunction } from '../public/js/schema.js';
 import { canApprove } from './workflows.js';
 import { reviewsOf, storeOverview } from './boqflow.js';
+import { myJourneyItems } from './journey.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
@@ -17,6 +18,8 @@ export function myTasks(user) {
   const group = (key, icon, title, items) => { if (items.length) groups.push({ key, icon, title, items }); };
   // Task scheduler first: what is given to me, and what I gave that is late.
   for (const [k, icon, title, items] of taskGroups(user, t, soon)) group(k, icon, title, items);
+  // Order journey: steps of my role that are late, due or next and not given as a task yet
+  try { group('journey', '🧭', 'Order journey: steps for you', myJourneyItems(user)); } catch (e) { console.error('journey tasks', e.message); }
 
   // BOQ design review / Final / changes asked
   if (canView('boms', role)) {

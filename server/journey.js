@@ -9,6 +9,7 @@ import { saveAttachment, deleteAttachment } from './roles.js';
 import { compute as computeSchedule, calendar } from './schedule.js';
 import { templateRows } from './scheduletemplates.js';
 import { notify, notifyDecision } from './notify.js';
+import { getSettings } from './db.js';
 
 export function migrateJourneys() {
   db.exec(`CREATE TABLE IF NOT EXISTS journeys (id INTEGER PRIMARY KEY, enquiry_id INTEGER, sales_order_id INTEGER, project_id INTEGER,
@@ -110,7 +111,7 @@ function work(j) {
   const next = STEPS.find((s, i) => i > last && out[s.key].status === 'open');
   const gaps = STEPS.filter((s, i) => i < last && out[s.key].status === 'open').map(s => s.key);
   for (const k of gaps) out[k].gap = true;
-  const isLate = x => x.late || x.subs?.some(p => p.late);
+  const isLate = x => (x.late && !x.gap) || x.subs?.some(p => p.late && !(x.gap && !p.task)); // an old step nobody recorded is not "late"
   const waiting = Object.values(aps).filter(r => r.some(a => a.status === 'Pending')).length;
   return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => isLate(out[s.key])), waiting };
 }
@@ -445,6 +446,8 @@ export function makeSitePlan(id, body, user) {
   const off = Number(top.sr) || 0, soff = Number(top.so) || 0;
   const shift = after => String(after || '').replace(/\d+/g, (n, i, s) => (s[i - 1] === '+' || s[i - 1] === '-' ? n : String(Number(n) + off)));
   tx(() => {
+    // a project without a schedule or a start date starts on the dispatch day (else the plan could not begin before today)
+    if (!off && !j.project.start_date) updateRow('projects', pid, { start_date: start }, user, { system: true });
     const rows = templateRows('ot_site');
     rows.forEach((r, i) => insertRow('schedule_activities', { ...r, project_id: pid, sr: r.sr + off, sort: r.sort + soff, after: shift(r.after),
       ...(i === 1 ? { fixed_start: start } : {}) }, user, { system: true }));
@@ -460,4 +463,90 @@ function siteDone(j, key, user) {
   if (!r) return;
   updateRow('schedule_activities', r.id, { status: 'Done', progress: 100, actual_finish: today() }, user, { system: true });
   try { computeSchedule(j.project_id); } catch { /* the planner shows its own problems */ }
+}
+
+// ---------------------------------------------------------------- alerts and dashboard (stage 6)
+// Every open step that has a deadline (its task's, the site plan's, or the rule's), the next step of every order, and
+// every approval waiting: who has it (the task's person, else the people in the step's "does" role), and whether it is
+// late or due soon. The daily alert, My tasks and the dashboard all read this.
+const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+export function openWork() {
+  ensureJourneys();
+  const t = today(), soon = addDays(t, 2), people = roleMap();
+  const steps = [], approvals = [], orders = [];
+  for (const { id } of db.prepare('SELECT id FROM journeys ORDER BY id').all()) {
+    const j = load(id), w = work(j), flat = flatSteps(w.steps), title = titleOf(j);
+    orders.push({ id, title, phase: w.phase, finished: w.finished, total: w.total, late: w.late, done: w.finished === w.total, next: w.next, waiting: w.waiting });
+    const nextKeys = new Set();
+    if (w.next) { const st = STEP[w.next]; for (const k of st.subs ? st.subs.map(p => p.key) : st.derived ? [] : [st.key]) if (flat[k]?.status === 'open') nextKeys.add(k); }
+    for (const [key, x] of Object.entries(flat)) {
+      if (!TICKABLE.has(key) || x.status !== 'open') continue;
+      if (x.approval?.pending) { const p = x.approval.pending;
+        approvals.push({ journey_id: id, order: title, key, no: stepNo(key), title: stepTitle(key), id: p.id, with: p.stage, since: p.requested_at, days: daysBetween(String(p.requested_at).slice(0, 10), t),
+          who: holders(String(p.approver_role).split(',')) }); }
+      // a step not recorded on an older order counts only once someone has it as a task
+      if (x.gap && !x.task) continue;
+      if (!x.due && !nextKeys.has(key)) continue;
+      const roles = (RACI[key]?.r || []).filter(r => !['client', 'vendor'].includes(r));
+      const who = x.task ? [x.task.assigned_to] : roles.flatMap(r => people[r]?.people || []);
+      steps.push({ journey_id: id, order: title, key, no: stepNo(key), title: stepTitle(key), due: x.due || null, late: !!x.due && x.due < t, soon: !!x.due && x.due >= t && x.due <= soon,
+        days_late: x.due && x.due < t ? daysBetween(x.due, t) : 0, next: nextKeys.has(key), task: x.task ? { id: x.task.id, no: x.task.task_no } : null,
+        who, roles: roles.map(roleLabel), outside: !roles.length, waiting: !!x.approval?.pending });
+    }
+  }
+  // an order is late when one of its steps that counts is late (not an old step nobody recorded)
+  const lateIds = new Set(steps.filter(x => x.late).map(x => x.journey_id));
+  for (const o of orders) o.late = lateIds.has(o.id);
+  return { steps, approvals, orders, today: t };
+}
+
+// once a day (after 9): each person hears about their late and due steps, approvers about approvals waiting over two
+// days, and the people who give tasks about late orders and next steps nobody has
+export function dailyJourney() {
+  const t = today(), s = getSettings();
+  if (s.journey_alerts === t) return;
+  const { steps, approvals, orders } = openWork();
+  const per = new Map();
+  const add = (name, line) => { if (!name) return; const k = String(name).trim(); (per.get(k) || per.set(k, []).get(k)).push(line); };
+  for (const x of steps) {
+    if (x.late) for (const n of x.who) add(n, `LATE ${x.days_late}d: ${x.order}: ${x.no}. ${x.title}`);
+    else if (x.soon) for (const n of x.who) add(n, `Due ${x.due.split('-').reverse().join('-')}: ${x.order}: ${x.no}. ${x.title}`);
+  }
+  for (const a of approvals.filter(a => a.days >= 2)) for (const n of a.who) add(n, `Approve (waiting ${a.days} days): ${a.order}: ${a.no}. ${a.title}`);
+  let sent = 0;
+  for (const [name, lines] of per) {
+    const late = lines.filter(l => l.startsWith('LATE')).length;
+    sent += notify({ userNames: [name], kind: 'journey', title: late ? `Order journey: ${late} late step${late === 1 ? '' : 's'}${lines.length > late ? ` + ${lines.length - late} more` : ''}` : `Order journey: ${lines.length} thing${lines.length === 1 ? '' : 's'} due`,
+      body: lines.slice(0, 12).join('\n') + (lines.length > 12 ? `\n+ ${lines.length - 12} more` : ''), link: '#/tasks' }, { name: 'system' });
+  }
+  const lateOrders = orders.filter(o => !o.done && o.late), nobody = steps.filter(x => x.next && !x.task && !x.outside);
+  if (lateOrders.length || nobody.length) notify({ fn: 'task_assign', kind: 'journey', title: `Orders: ${lateOrders.length} late, ${nobody.length} next step${nobody.length === 1 ? '' : 's'} not given to anyone`,
+    body: [...lateOrders.slice(0, 8).map(o => `Late: ${o.title}`), nobody.length ? `Give them out on the Team page.` : null].filter(Boolean).join('\n'), link: '#/journey/dashboard' }, { name: 'system' });
+  db.prepare("INSERT INTO settings (key, value) VALUES ('journey_alerts', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(t));
+  return sent;
+}
+
+// My tasks: the journey steps waiting for this person that are not a task yet (tasks are in "Your tasks" already)
+export function myJourneyItems(user) {
+  if (!canSee(user.role)) return [];
+  const me = String(user.name).toLowerCase();
+  return openWork().steps.filter(x => !x.task && !x.waiting && x.who.some(n => String(n).toLowerCase() === me) && (x.late || x.soon || x.next))
+    .sort((a, b) => b.days_late - a.days_late || String(a.due || '9').localeCompare(String(b.due || '9')))
+    .map(x => ({ title: `${x.late ? '🔴 ' : ''}${x.order}: ${x.no}. ${x.title}`, sub: x.due ? `${x.late ? `late ${x.days_late} day${x.days_late === 1 ? '' : 's'}, ` : ''}due ${x.due.split('-').reverse().join('-')}` : 'next step of the order',
+      link: `#/journey/${x.journey_id}`, due: x.due, late: x.late }));
+}
+
+export function dashboard(user) {
+  if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
+  const w = openWork(), live = w.orders.filter(o => !o.done);
+  const byPerson = new Map();
+  for (const x of w.steps.filter(x => x.late)) for (const n of x.who.length ? x.who : ['(nobody has the role)']) byPerson.set(n, (byPerson.get(n) || 0) + 1);
+  return { today: w.today,
+    kpi: { orders: live.length, late_orders: live.filter(o => o.late).length, late_steps: w.steps.filter(x => x.late).length, due_soon: w.steps.filter(x => x.soon).length,
+      approvals: w.approvals.length, slow_approvals: w.approvals.filter(a => a.days >= 2).length, unassigned: w.steps.filter(x => x.next && !x.task && !x.outside).length, handed_over: w.orders.length - live.length },
+    phases: PHASES.map(p => ({ no: p.no, title: p.title, colour: p.colour, orders: live.filter(o => o.phase === p.no).length })),
+    late: w.steps.filter(x => x.late).sort((a, b) => b.days_late - a.days_late),
+    week: w.steps.filter(x => !x.late && x.due && x.due <= addDays(w.today, 7)).sort((a, b) => a.due.localeCompare(b.due)),
+    approvals: w.approvals.sort((a, b) => b.days - a.days),
+    people: [...byPerson].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n) };
 }

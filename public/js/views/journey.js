@@ -45,10 +45,11 @@ async function giveStep(jid, key, title, { task, due, people, roles, me, canAssi
 export async function journeyView(root, id) {
   if (id === 'raci') return raciView(root);
   if (id === 'team') return teamView(root);
+  if (id === 'dashboard') return journeyDashboard(root);
   if (id) return detail(root, Number(id));
   const { journeys, can_assign } = await api('/journeys');
   const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'),
-    can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
+    h('a.btn', { href: '#/journey/dashboard' }, '📊 Dashboard'), can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
   const cols = PHASES.map(p => {
     const here = journeys.filter(j => !j.done && j.phase === p.no);
     return h('div.jr-col', { style: `--ph:${p.colour}` },
@@ -268,4 +269,32 @@ async function teamView(root) {
         h('tbody', d.waiting.map(w => h('tr', h('td', h('a', { href: `#/journey/${w.journey_id}` }, w.order)), h('td', `${w.no}. ${w.title}`), h('td', w.does.join(', ')),
           h('td', d.can_edit ? h('button.btn.small', { type: 'button', onclick: () => giveStep(w.journey_id, w.step, w.title, { people: d.people, roles: d.roles, canAssign: true }).then(ok => ok && draw()).catch(fail) }, '📌 Give') : null))))))
         : h('p.muted', 'Every order has its next step given to someone.')));
+}
+
+// the dashboard: how the orders stand, what is late, what is due this week, approvals waiting, late steps per person
+export async function journeyDashboard(root, { embedded = false } = {}) {
+  const d = await api('/journeys/dashboard');
+  const k = d.kpi;
+  const tile = (n, label, cls = '', href = null) => h(href ? 'a' : 'div', { class: `jr-kpi ${cls}`, ...(href ? { href } : {}) }, h('b', n), h('span', label));
+  const stepRow = x => h('tr', h('td', h('a', { href: `#/journey/${x.journey_id}` }, x.order)), h('td', `${x.no}. ${x.title}`),
+    h('td', x.who.length ? x.who.join(', ') : h('span.muted', x.roles.join(', ') || 'client / vendor')), h('td.nowrap', x.due ? fmtDate(x.due) : ''),
+    h('td.num', x.days_late ? h('b.jr-late', x.days_late) : ''));
+  const max = Math.max(1, ...d.phases.map(p => p.orders));
+  root.replaceChildren(
+    embedded ? null : h('div.page-head', h('h1', '📊 Order Journey dashboard'), h('div.actions', h('a.btn', { href: '#/journey' }, '🧭 All orders'), h('a.btn', { href: '#/journey/team' }, '👥 Team'))),
+    h('div.jr-kpis', tile(k.orders, 'orders in progress', '', '#/journey'), tile(k.late_orders, 'orders late', k.late_orders ? 'bad' : ''), tile(k.late_steps, 'steps late', k.late_steps ? 'bad' : ''),
+      tile(k.due_soon, 'due in 2 days', k.due_soon ? 'warn' : ''), tile(k.approvals, `approvals waiting${k.slow_approvals ? ` (${k.slow_approvals} over 2 days)` : ''}`, k.slow_approvals ? 'warn' : '', '#/list/approvals'),
+      tile(k.unassigned, 'next steps not given out', k.unassigned ? 'warn' : '', '#/journey/team'), tile(k.handed_over, 'handed over', 'ok')),
+    h('div.card', h('h2', 'Orders by phase'), h('div.jr-phasebars', d.phases.map(p => h('div.jr-pb', h('span.jr-pbname', `${p.no}. ${p.title}`),
+      h('span.jr-pbtrack', h('span', { style: `width:${(p.orders / max) * 100}%;background:${p.colour}` })), h('b', p.orders))))),
+    h('div.card', h('h2', `🔴 Late steps (${d.late.length})`), d.late.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Order', 'Step', 'Who', 'Due', 'Days late'].map(t => h('th', t)))), h('tbody', d.late.map(stepRow))))
+      : h('p.muted', 'Nothing late.')),
+    d.people.length ? h('div.card', h('h2', 'Late steps per person'), h('div.jr-phasebars', d.people.map(p => h('div.jr-pb', h('span.jr-pbname', p.name),
+      h('span.jr-pbtrack', h('span', { style: `width:${(p.n / Math.max(...d.people.map(x => x.n))) * 100}%;background:var(--bad,#dc2626)` })), h('b', p.n))))) : null,
+    h('div.card', h('h2', `📅 Due in the next 7 days (${d.week.length})`), d.week.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Order', 'Step', 'Who', 'Due', ''].map(t => h('th', t)))), h('tbody', d.week.map(stepRow))))
+      : h('p.muted', 'Nothing with a deadline this week. Steps get deadlines when they are given as tasks or from the site plan.')),
+    h('div.card', h('h2', `⏳ Approvals waiting (${d.approvals.length})`), d.approvals.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Order', 'Step', 'With', 'Waiting'].map(t => h('th', t)))),
+      h('tbody', d.approvals.map(a => h('tr', h('td', h('a', { href: `#/journey/${a.journey_id}` }, a.order)), h('td', h('a', { href: `#/view/approvals/${a.id}` }, `${a.no}. ${a.title}`)),
+        h('td', a.with, a.who.length ? h('div.muted', a.who.join(', ')) : h('div.jr-late', 'nobody has this role')), h('td.nowrap', { class: a.days >= 2 ? 'jr-late' : '' }, `${a.days} day${a.days === 1 ? '' : 's'}`))))))
+      : h('p.muted', 'No approvals waiting.')));
 }
