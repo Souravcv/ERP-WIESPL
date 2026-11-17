@@ -87,6 +87,7 @@ async function detail(root, id) {
           h('div', h('b', `${d.finished} of ${d.total} steps`), ' · ', d.next ? h('span', 'Next: ', h('b', STEPS.find(s => s.key === d.next).title)) : h('b', 'Handed over'),
             d.late ? h('span.jr-late', 'Late') : null),
           d.gaps ? h('div.jr-gapnote', `${d.gaps} earlier step${d.gaps === 1 ? '' : 's'} not recorded: tick them, or mark them not needed`) : null)),
+      siteCard(),
       h('div.jr-legend', Object.entries({ gate: 'Approval or check (work stops until it passes)', client: 'Client', vendor: 'Vendor', site: 'Site work', auto: 'Ticked by the CRM from its records' })
         .map(([k, l]) => h('span', h('i', { class: `jr-key k-${k}` }), l))),
       h('div.jr-phases', PHASES.map(p => h('section.jr-phase', { style: `--ph:${p.colour}` },
@@ -94,6 +95,27 @@ async function detail(root, id) {
         STEPS.filter(s => s.phase === p.no).map(stepCard)))));
   };
 
+  // the site plan of the order: make it from the dispatch day, or show it with the crew of every working day
+  const siteCard = () => {
+    const sp = d.site;
+    if (!sp) {
+      if (!d.project_id) return null;
+      const date = h('input', { type: 'date', value: d.dispatch || today() });
+      return h('div.card.jr-site', h('h2', '📅 Site plan'),
+        h('p.muted', 'One modular OT from the one-time dispatch to handover: 15 activities in working days (Sundays and holidays off), with the crew of each. It goes into the Project Planner and gives the site steps their dates.'),
+        d.can_plan ? h('div.jr-btns', h('label', 'Dispatch day (site day 1) ', date),
+          h('button.btn.primary', { type: 'button', onclick: busy(async () => { await api(`/journeys/${id}/site-plan`, { method: 'POST', body: { start: date.value } }); toast('Site plan made'); await draw(); }) }, '📅 Make the site plan'))
+          : h('p.muted', 'Someone who plans projects makes it.'));
+    }
+    const max = Math.max(1, sp.peak);
+    return h('div.card.jr-site', h('div.jr-sitehead', h('h2', '📅 Site plan'),
+      h('span', `${fmtDate(sp.start)} → ${fmtDate(sp.end)} · ${sp.working_days} working days · ${sp.man_days} man-days in-house${sp.unknown_days ? ` (+ ${sp.unknown_days} day${sp.unknown_days === 1 ? '' : 's'} with crew not known yet)` : ''} · peak ${sp.peak} people`),
+      h('a.btn.small', { href: `#/planner/${sp.project_id}` }, 'Open in the Project Planner')),
+      h('div.jr-crew', sp.days.map(x => h('div', { class: `jr-day${x.unknown ? ' unknown' : ''}`, title: `${fmtDate(x.date)}: ${x.people} in-house${x.unknown ? ' + ?' : ''}${x.vendor ? ' · vendor' : ''}${x.client ? ' · client' : ''}\n${x.work.join('\n')}` },
+        h('span.jr-bar2', { style: `height:${Math.round((x.people / max) * 48) + 2}px` }), h('b', `${x.people}${x.unknown ? '?' : ''}`), h('i', x.date.slice(8)),
+        x.vendor || x.client ? h('em', x.vendor ? 'V' : 'C') : null))),
+      h('div.muted', 'People on site per working day (hover a day for the work). ? = a job whose crew the site notes do not give yet: set it in the planner. V = vendor on site, C = client\'s work.'));
+  };
   const linkBox = (label, key, entity, col) => {
     const l = d.links[key];
     const change = d.can_edit ? h('button.btn.small', { type: 'button', onclick: () => pickLink(label, entity, col).catch(fail) }, l ? 'Change' : 'Link') : null;
@@ -195,7 +217,9 @@ async function detail(root, id) {
         : h('span', x.auto ? 'In the CRM' : 'Document not attached yet'),
       d.can_edit && !x.auto ? h('button.btn.small', { type: 'button', onclick: () => addFiles(key) }, '+ Attach') : null)
       : x.need === 'note' && x.status === 'open' ? h('div.jr-docs', h('span.jr-rk', '✍'), 'A written note when done') : null;
-    return [chip, info, task, due, docs, apLine, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
+    const plan = x.plan ? h('div.jr-plan', '📅 ', x.plan.start === x.plan.finish ? fmtDate(x.plan.start) : `${fmtDate(x.plan.start)} → ${fmtDate(x.plan.finish)}`,
+      x.plan.crew != null ? ` · crew ${x.plan.crew}` : '', x.plan.crew_note ? h('span.muted', ` (${x.plan.crew_note})`) : null, x.plan.critical ? h('b.jr-crit', ' critical') : null, x.late ? h('span.jr-late', 'Late') : null) : null;
+    return [chip, info, task, plan, x.plan ? null : due, docs, apLine, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
   };
   const stepCard = s => {
     const x = d.steps[s.key];

@@ -701,6 +701,8 @@ export const ENTITIES = {
       { key: 'party', label: 'Scope', type: 'select', options: SCHEDULE_PARTIES, default: 'WIESPL' },
       { key: 'dept', label: 'Department', type: 'text', suggest: ['Sales', 'Engg', 'Purchase', 'Production', 'Store', 'Site', 'Accounts', 'Client', 'PMC'] },
       { key: 'responsible', label: 'Responsible', type: 'person' },
+      { key: 'crew', label: 'Crew (people)', type: 'number', hint: 'In-house people on site for this activity, per day' },
+      { key: 'crew_note', label: 'Crew note', type: 'text', hint: 'e.g. 4 ducting · panel 4 + HVAC 2 · vendor' },
       { key: 'duration', label: 'Duration (working days)', type: 'number', default: 1 },
       { key: 'after', label: 'After (Sr. No.)', type: 'text', hint: 'e.g. "3" or "3, 5+2" (5 finished + 2 days); "4ss" = starts with 4' },
       { key: 'fixed_start', label: 'Not Before', type: 'date', hint: 'Earliest start (e.g. a date agreed with the client)' },
@@ -720,6 +722,7 @@ export const ENTITIES = {
       { key: 'total_float', label: 'Float (days)', type: 'number', readonly: true },
       { key: 'critical', label: 'Critical', type: 'yn', readonly: true },
       { key: 'sort', label: 'Order', type: 'number', hidden: true },
+      { key: 'journey_step', label: 'Journey step', type: 'text', hidden: true, readonly: true },
     ],
   },
   // A frozen copy of a project's planned dates (R0, R1 …), approved by the Projects head. The approved one is what

@@ -854,3 +854,15 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-docs.missing { color: #b45309; }
 .jr-file { background: var(--chip, #f1f5f9); border-radius: 6px; padding: 1px 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .jr-x { border: 0; background: none; cursor: pointer; color: var(--muted, #64748b); padding: 0 0 0 4px; }
+
+/* order journey: site plan and crew by day */
+.jr-sitehead { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; }
+.jr-sitehead h2 { margin: 0; }
+.jr-crew { display: flex; gap: 3px; align-items: flex-end; overflow-x: auto; padding: 10px 0 4px; }
+.jr-day { display: flex; flex-direction: column; align-items: center; min-width: 26px; font-size: 11px; }
+.jr-day .jr-bar2 { width: 18px; background: #0369a1; border-radius: 3px 3px 0 0; }
+.jr-day.unknown .jr-bar2 { background: repeating-linear-gradient(45deg, #0369a1, #0369a1 4px, #7dd3fc 4px, #7dd3fc 8px); }
+.jr-day i { font-style: normal; color: var(--muted, #64748b); }
+.jr-day em { font-style: normal; font-size: 10px; color: #7c3aed; }
+.jr-plan { font-size: 12px; margin-top: 4px; }
+.jr-crit { color: var(--bad, #dc2626); font-weight: 600; }

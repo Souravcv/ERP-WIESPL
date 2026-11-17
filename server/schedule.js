@@ -189,7 +189,7 @@ export function plannerData(projectId, user) {
   return out;
 }
 
-const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
+const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'crew', 'crew_note', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
 
 // Save the planner grid: changed / new rows and deleted ids; the whole schedule is then worked out again.
 export function saveSchedule(projectId, body, user) {

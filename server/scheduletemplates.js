@@ -110,7 +110,31 @@ const HVAC = [
   ['Site closure (material reconciliation, demobilisation)', 'WIESPL', 5, '42', 'Site'],
 ];
 
+// The site work of one 20 × 20 ft modular OT, from the one-time dispatch to handover: the realistic plan of the OT Site
+// Schedule Review (Nov 2026), in working days (Sundays and holidays off). Each row also has the crew (in-house people,
+// only where the site notes give the number; blank = not known yet), a crew note, and the order-journey step it is.
+const OT_SITE = [
+  ['Site work: one modular OT'],
+  ['Drawings handed over, plenum installed, ducting cut-out and riser foundation marked', 'WIESPL', 1, '', 'Site', 4, '4 people, 2 ladders, 2 chain pulleys', 's26'],
+  ['Ducting, 1,200 sq ft at 100–150 sq ft/day (critical path)', 'WIESPL', 10, '2', 'Site', 4, '4 ducting', 's27a'],
+  ['Foundation, MGPS, AHU platform, HVAC stand, cable tray, plenum box, pendant shaft', 'WIESPL', 10, '3ss', 'Site', 4, '4 others; several jobs have no duration yet', 's27b'],
+  ['Electrical work (client scope)', 'Client', 2, '3ss', 'Client', null, "client's electricians; late = client's delay", 's27c'],
+  ['Riser panel joint (glass panel), outside ducting and AHU', 'WIESPL', 2, '3, 4', 'Site', 6, 'panel 4 + HVAC 2', 's28'],
+  ['Wall panel installation', 'WIESPL', 1, '6', 'Site', 4, 'panel 4', 's29'],
+  ['Right angle and ceiling', 'WIESPL', 2, '7', 'Site', 4, 'panel 4', 's30'],
+  ['Panel cut-outs and marking (doors, surgeon panel, lights, pendant)', 'WIESPL', 1, '8', 'Site', 4, 'panel 4', 's31'],
+  ['Coving installation', 'WIESPL', 1, '9', 'Site', null, '? (4 + HVAC 2 not confirmed)', 's32'],
+  ['Surgeon panel, doors, OT lights, ODU, AHU controller, all electrical on', 'WIESPL', 1, '10', 'Site', null, '? several jobs at once: a bigger crew', 's33'],
+  ['System run: AHU and HVAC, ducts flushed', 'WIESPL', 1, '11', 'Site', null, '? HVAC team', 's34'],
+  ['Self-levelling floor and curing (nobody inside; crew does outside work)', 'Vendor', 3, '12', 'Site', null, 'vendor; in-house crew outside only', 's35'],
+  ['Vinyl flooring and HEPA filters (HEPA last, 3 h)', 'Vendor', 1, '13', 'Site', 2, 'vendor + 2 (HEPA)', 's36'],
+  ['Film removal, silicone, air balancing', 'WIESPL', 1, '14', 'Site', null, '?', 's37'],
+  ['HVAC testing: particle count', 'WIESPL', 2, '15', 'Site', null, '? tester (in-house or third party)', 's38'],
+  ['Handover to the client', 'WIESPL', 0, '16', 'Site', null, '', 's40'],
+];
+
 export const TEMPLATES = {
+  ot_site: { label: 'Modular OT site work, one OT (dispatch to handover, with crew)', rows: OT_SITE },
   ot: { label: 'Modular OT (from the Apulaki bar chart)', rows: OT },
   hvac: { label: 'HVAC / cleanroom (from the Jubilant MSP schedule)', rows: HVAC },
 };
@@ -121,5 +145,6 @@ export function templateRows(key) {
   if (!t) return null;
   return t.rows.map((r, i) => r.length === 1
     ? { sr: i + 1, kind: 'Phase', name: r[0], party: 'WIESPL', duration: 0, after: '', sort: i + 1 }
-    : { sr: i + 1, kind: r[2] === 0 ? 'Milestone' : 'Activity', name: r[0], party: r[1], duration: r[2], after: r[3], dept: r[4], sort: i + 1 });
+    : { sr: i + 1, kind: r[2] === 0 ? 'Milestone' : 'Activity', name: r[0], party: r[1], duration: r[2], after: r[3], dept: r[4], sort: i + 1,
+      ...(r.length > 5 ? { crew: r[5], crew_note: r[6] || null, journey_step: r[7] || null } : {}) });
 }

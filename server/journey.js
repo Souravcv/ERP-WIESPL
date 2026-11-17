@@ -6,6 +6,8 @@ import { HttpError, insertRow, updateRow, getRow } from './crud.js';
 import { canView, canWrite, hasFunction } from '../public/js/schema.js';
 import { STEPS, STEP, TICKABLE, PHASES, RACI, JOURNEY_DOC, approvalChain, docNeed } from '../public/js/journey.js';
 import { saveAttachment, deleteAttachment } from './roles.js';
+import { compute as computeSchedule, calendar } from './schedule.js';
+import { templateRows } from './scheduletemplates.js';
 import { notify, notifyDecision } from './notify.js';
 
 export function migrateJourneys() {
@@ -75,14 +77,18 @@ const refsOf = j => [j.enquiry && (j.enquiry.enquiry_no || `Enquiry ${j.enquiry.
 // every step with its state: done / na / open, by hand or by itself, with its date and due date
 function work(j) {
   const stored = Object.fromEntries(db.prepare('SELECT * FROM journey_steps WHERE journey_id = ?').all(j.id).map(r => [r.step, r]));
-  const tasks = stepTasks(j.id), aps = stepApprovals(j.id), files = stepFiles(j.id);
+  const tasks = stepTasks(j.id), aps = stepApprovals(j.id), files = stepFiles(j.id), plan = siteRows(j);
   const part = (key, auto) => {
-    const s = stored[key], task = tasks[key] || null, approval = approvalState(key, aps[key]), more = { task, approval, files: files[key] || [], need: docNeed(key) };
+    const p = plan[key];
+    const s = stored[key], task = tasks[key] || null, approval = approvalState(key, aps[key]), more = { task, approval, files: files[key] || [], need: docNeed(key),
+      plan: p ? { start: p.plan_start, finish: p.plan_finish, crew: p.crew, crew_note: p.crew_note, critical: p.critical === 'Yes', status: p.status } : null };
     if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), ...more };
     const fact = auto && AUTO[auto]?.(j);
     if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, ...more };
     // an open step given to someone: its deadline is the task's
-    return task ? { status: 'open', due: task.due_date, late: !!task.due_date && task.due_date < today(), ...more } : { status: 'open', ...more };
+    // an open step given to someone: its deadline is the task's; else the site plan's finish
+    const due = task?.due_date || p?.plan_finish || null;
+    return due ? { status: 'open', due, late: due < today(), ...more } : { status: 'open', ...more };
   };
   const out = {};
   for (const st of STEPS) {
@@ -132,7 +138,7 @@ export function view(id, user) {
   const j = load(id); closeAutoTasks(j, user);
   const w = work(j);
   const lab = (e, row, f) => (row ? { id: row.id, label: f(row) } : null);
-  return { ...summary(j), ...w, can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, my_role: user.role, people: canAssign(user) ? people() : [], roles: roleMap(),
+  return { ...summary(j), ...w, site: sitePlan(j), can_plan: !!j.project_id && canWrite('schedule_activities', user.role), dispatch: dispatchDate(j, w), can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, my_role: user.role, people: canAssign(user) ? people() : [], roles: roleMap(),
     links: { enquiry: lab('enquiries', j.enquiry, e => `${e.enquiry_no || e.id} · ${e.hospital_name || e.client_name || ''}`), order: lab('sales_orders', j.order, o => `${o.so_no || o.id}${o.client_po_no ? ` · PO ${o.client_po_no}` : ''}`),
       project: lab('projects', j.project, p => `${p.project_no || p.code || p.id} · ${p.name || ''}`) } };
 }
@@ -156,6 +162,7 @@ export function setStep(id, key, body, user) {
     const want = status === 'done' ? 'Done' : status === 'na' ? 'Cancelled' : t && ['Done', 'Cancelled'].includes(t.status) ? 'To do' : null;
     if (t && want && t.status !== want) updateRow('work_tasks', t.id, { status: want, ...(note ? { progress_note: note } : {}) }, user, { system: true });
   });
+  if (status === 'done') siteDone(load(id), key, user);
   audit(user.name, 'journeys', Number(id), 'update', `${key}: ${status}${note ? ` (${note})` : ''}`);
   return view(id, user);
 }
@@ -220,6 +227,7 @@ export function taskSaved(taskId, user) {
   if (t.status === 'Done' && !s) {
     db.prepare("INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, 'done', ?, ?, datetime('now','localtime'), ?)")
       .run(t.journey_id, t.journey_step, [`Task ${t.task_no}`, t.progress_note].filter(Boolean).join(': ').slice(0, 500), t.completed_by || user?.name || t.assigned_to, t.id);
+    siteDone(load(t.journey_id), t.journey_step, user);
     audit(user?.name, 'journeys', t.journey_id, 'update', `${t.journey_step}: done (task ${t.task_no})`);
   } else if (t.status !== 'Done' && s?.task_id === t.id) {
     db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(t.journey_id, t.journey_step);
@@ -395,4 +403,61 @@ export function removeFile(a, user) {
   const s = one('SELECT status FROM journey_steps WHERE journey_id = ? AND step = ?', a.record_id, a.entity.slice(8));
   if (s?.status === 'done' && user.role !== 'admin') throw new HttpError(409, 'The step is done: its documents stay. Undo the step first.');
   deleteAttachment(a.id, user, ['admin', 'manager', 'md'].includes(user.role));
+}
+
+// ---------------------------------------------------------------- site plan with crew (stage 5)
+// The order's project gets the site plan of one modular OT (scheduletemplates.js OT_SITE) in the Project Planner,
+// starting on the dispatch day; each site step of the journey then has its planned dates and crew, and the crew of
+// every working day is added up (the manpower plan the site schedule review asks for).
+const siteRows = j => {
+  if (!j.project_id) return {};
+  return Object.fromEntries(db.prepare('SELECT * FROM schedule_activities WHERE project_id = ? AND journey_step IS NOT NULL').all(j.project_id).map(r => [r.journey_step, r]));
+};
+const dispatchDate = (j, w) => { const x = w.steps.s25; return x?.date || null; };
+
+function sitePlan(j) {
+  const rows = Object.values(siteRows(j)).filter(r => r.plan_start).sort((a, b) => (a.sort ?? a.sr) - (b.sort ?? b.sr));
+  if (!rows.length) return null;
+  const cal = calendar();
+  const start = rows.reduce((m, r) => (r.plan_start < m ? r.plan_start : m), rows[0].plan_start);
+  const end = rows.reduce((m, r) => ((r.plan_finish || r.plan_start) > m ? r.plan_finish || r.plan_start : m), start);
+  const days = [];
+  for (let d = cal.onOrAfter(start), n = 0; d <= end && n < 200; d = cal.add(d, 1), n++) {
+    const on = rows.filter(r => r.kind !== 'Milestone' && r.plan_start <= d && (r.plan_finish || r.plan_start) >= d);
+    const ours = on.filter(r => r.party === 'WIESPL');
+    days.push({ date: d, people: ours.reduce((s, r) => s + (Number(r.crew) || 0), 0), unknown: ours.some(r => r.crew == null), vendor: on.some(r => r.party === 'Vendor'),
+      client: on.some(r => r.party === 'Client'), work: on.map(r => r.name.split(/[,(:]/)[0].trim()) });
+    if (d === end) break;
+  }
+  return { project_id: j.project_id, start, end, working_days: days.length, man_days: days.reduce((s, d) => s + d.people, 0), peak: Math.max(0, ...days.map(d => d.people)),
+    unknown_days: days.filter(d => d.unknown).length, days };
+}
+
+export function makeSitePlan(id, body, user) {
+  if (!canEdit(user.role) || !canWrite('schedule_activities', user.role)) throw new HttpError(403, 'You may not plan the site work');
+  const j = load(id);
+  if (!j.project_id) throw new HttpError(400, 'Link the project of this order first');
+  if (Object.keys(siteRows(j)).length) throw new HttpError(409, 'This project already has its site plan: change it in the Project Planner');
+  const start = String(body?.start || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) throw new HttpError(400, 'Choose the dispatch day (site day 1)');
+  const pid = j.project_id;
+  const top = one('SELECT MAX(sr) sr, MAX(COALESCE(sort, sr)) so FROM schedule_activities WHERE project_id = ?', pid);
+  const off = Number(top.sr) || 0, soff = Number(top.so) || 0;
+  const shift = after => String(after || '').replace(/\d+/g, (n, i, s) => (s[i - 1] === '+' || s[i - 1] === '-' ? n : String(Number(n) + off)));
+  tx(() => {
+    const rows = templateRows('ot_site');
+    rows.forEach((r, i) => insertRow('schedule_activities', { ...r, project_id: pid, sr: r.sr + off, sort: r.sort + soff, after: shift(r.after),
+      ...(i === 1 ? { fixed_start: start } : {}) }, user, { system: true }));
+    computeSchedule(pid);
+  });
+  audit(user.name, 'journeys', id, 'update', `site plan from ${start}`);
+  return view(id, user);
+}
+
+// a site step done on the journey: its activity in the planner is done
+function siteDone(j, key, user) {
+  const r = j.project_id && one("SELECT id, status FROM schedule_activities WHERE project_id = ? AND journey_step = ? AND COALESCE(status, '') <> 'Done'", j.project_id, key);
+  if (!r) return;
+  updateRow('schedule_activities', r.id, { status: 'Done', progress: 100, actual_finish: today() }, user, { system: true });
+  try { computeSchedule(j.project_id); } catch { /* the planner shows its own problems */ }
 }
