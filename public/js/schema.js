@@ -1901,6 +1901,8 @@ export const ENTITIES = {
         { key: 'site', label: 'Site / Hospital', type: 'text', width: 150 },
         { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects', width: 170, blank: '(as above)', split: true },
         { key: 'bom_id', label: 'BOQ', type: 'ref', ref: 'boms', width: 150 },
+        { key: 'need_by', label: 'Needed by', type: 'date', width: 130 },
+        { key: 'promised', label: 'Vendor promised', type: 'date', width: 130 },
       ] },
       // Charges are part of the taxable value (before GST), each shown on the PO.
       { key: 'freight_charges', label: 'Freight Charges (₹)', type: 'money' },

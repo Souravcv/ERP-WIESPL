@@ -45,6 +45,7 @@ import * as ai from './ai.js';
 import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 import * as journey from './journey.js';
+import * as materials from './materials.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -690,6 +691,11 @@ api.post('/production_reports/:id/submit', need('production_reports'), wrap(req 
 api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.user.role)) throw new HttpError(403, 'No access to quality'); return qa.qualityReview(req.query); }));
 api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
 // the order journey: one per order, from the enquiry to the OT handover (server/journey.js)
+// Material tracker per project: BOQ shortage → requisition → PO → received, with needed-by and promised dates
+api.get('/materials/projects', wrap(req => materials.trackedProjects(req.user)));
+api.get('/materials/:projectId', wrap(req => materials.projectMaterials(Number(req.params.projectId), req.user)));
+api.put('/materials/po/:id/project', wrap(req => materials.linkPo(Number(req.params.id), req.body, req.user)));
+api.put('/materials/po/:id/line/:line', wrap(req => materials.setLineDates(Number(req.params.id), req.params.line, req.body, req.user)));
 api.get('/journeys', wrap(req => journey.list(req.user)));
 api.get('/journeys/team', wrap(req => journey.team(req.user)));
 api.get('/journeys/dashboard', wrap(req => journey.dashboard(req.user)));

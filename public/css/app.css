@@ -892,3 +892,14 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-pilotline { margin-top: 10px; font-size: 14px; }
 @media (prefers-color-scheme: dark) { .jr-check.ok { background: transparent; } }
 @media print { .sidebar, nav, .page-head .actions, .jr-btns { display: none !important; } }
+
+/* material tracker */
+.mt-states { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.mt-state { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--chip, #f1f5f9); white-space: nowrap; }
+.mt-state.bad { background: #fee2e2; color: #991b1b; }
+.mt-state.warn { background: #fef3c7; color: #92400e; }
+.mt-state.ok { background: #dbeafe; color: #1e40af; }
+.mt-state.done { background: #dcfce7; color: #166534; }
+.mt-ready { margin-top: 8px; font-weight: 600; color: #15803d; }
+.mt-table input[type=date] { width: 140px; }
+.mt-warn { border-left: 4px solid #f59e0b; }

@@ -25,7 +25,7 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
   CRM: [['#/panels', '🖥️', 'Control Panels & OR App', 'enquiries']],
-  Purchase: [['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
+  Purchase: [['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   'Sales & Projects': [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'projects'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
@@ -146,6 +146,7 @@ async function route() {
       case 'store-check': await storeCheckView(view); break;
       case 'tasks': await tasksView(view); refreshPending(); break;
       case 'project-analysis': await projectAnalysisView(view, a); break;
+      case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
       case 'journey': { const { journeyView } = await import('./views/journey.js'); await journeyView(view, a); break; }
       case 'planner': { const { plannerView } = await import('./views/planner.js'); await plannerView(view, a); break; }
       case 'planner-print': { $('app').classList.add('hidden'); const { plannerPrint } = await import('./views/planner.js'); await plannerPrint($('print-root'), a); break; }

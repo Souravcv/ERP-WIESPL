@@ -80,7 +80,7 @@ async function detail(root, id) {
   const draw = async () => {
     d = await api(`/journeys/${id}`);
     const pct = Math.round((d.finished / d.total) * 100);
-    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', d.can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null,
+    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', d.project_id ? h('a.btn', { href: `#/materials/${d.project_id}` }, '📦 Material') : null, d.can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null,
       h('a.btn', { href: '#/journey/raci' }, '📋 Who does what'), h('a.btn', { href: '#/journey' }, '← All orders')));
     root.replaceChildren(head,
       h('div.card.jr-summary',
@@ -112,7 +112,7 @@ async function detail(root, id) {
     const max = Math.max(1, sp.peak);
     return h('div.card.jr-site', h('div.jr-sitehead', h('h2', '📅 Site plan'),
       h('span', `${fmtDate(sp.start)} → ${fmtDate(sp.end)} · ${sp.working_days} working days · ${sp.man_days} man-days in-house${sp.unknown_days ? ` (+ ${sp.unknown_days} day${sp.unknown_days === 1 ? '' : 's'} with crew not known yet)` : ''} · peak ${sp.peak} people`),
-      h('a.btn.small', { href: `#/planner/${sp.project_id}` }, 'Open in the Project Planner')),
+      h('a.btn.small', { href: `#/planner/${sp.project_id}` }, 'Open in the Project Planner'), h('a.btn.small', { href: `#/materials/${sp.project_id}` }, '📦 Material tracker')),
       h('div.jr-crew', sp.days.map(x => h('div', { class: `jr-day${x.unknown ? ' unknown' : ''}`, title: `${fmtDate(x.date)}: ${x.people} in-house${x.unknown ? ' + ?' : ''}${x.vendor ? ' · vendor' : ''}${x.client ? ' · client' : ''}\n${x.work.join('\n')}` },
         h('span.jr-bar2', { style: `height:${Math.round((x.people / max) * 48) + 2}px` }), h('b', `${x.people}${x.unknown ? '?' : ''}`), h('i', x.date.slice(8)),
         x.vendor || x.client ? h('em', x.vendor ? 'V' : 'C') : null))),
