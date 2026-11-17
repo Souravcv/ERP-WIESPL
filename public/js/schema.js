@@ -704,6 +704,7 @@ export const ENTITIES = {
       { key: 'crew', label: 'Crew (people)', type: 'number', hint: 'In-house people on site for this activity, per day' },
       { key: 'crew_note', label: 'Crew note', type: 'text', hint: 'e.g. 4 ducting · panel 4 + HVAC 2 · vendor' },
       { key: 'duration', label: 'Duration (working days)', type: 'number', default: 1 },
+      { key: 'works', label: 'Works', type: 'select', options: ['Mon–Sat', 'Every day'], default: 'Mon–Sat', hint: 'Every day = Sundays too (site work); holidays stay off' },
       { key: 'after', label: 'After (Sr. No.)', type: 'text', hint: 'e.g. "3" or "3, 5+2" (5 finished + 2 days); "4ss" = starts with 4' },
       { key: 'fixed_start', label: 'Not Before', type: 'date', hint: 'Earliest start (e.g. a date agreed with the client)' },
       { key: 'plan_start', label: 'Start (plan / forecast)', type: 'date', readonly: true },

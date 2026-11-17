@@ -111,7 +111,7 @@ const HVAC = [
 ];
 
 // The site work of one 20 × 20 ft modular OT, from the one-time dispatch to handover: the realistic plan of the OT Site
-// Schedule Review (Nov 2026), in working days (Sundays and holidays off). Each row also has the crew (in-house people,
+// Schedule Review (Nov 2026). Site work runs every day, Sundays too (holidays off). Each row also has the crew (in-house people,
 // only where the site notes give the number; blank = not known yet), a crew note, and the order-journey step it is.
 const OT_SITE = [
   ['Site work: one modular OT'],
@@ -146,5 +146,5 @@ export function templateRows(key) {
   return t.rows.map((r, i) => r.length === 1
     ? { sr: i + 1, kind: 'Phase', name: r[0], party: 'WIESPL', duration: 0, after: '', sort: i + 1 }
     : { sr: i + 1, kind: r[2] === 0 ? 'Milestone' : 'Activity', name: r[0], party: r[1], duration: r[2], after: r[3], dept: r[4], sort: i + 1,
-      ...(r.length > 5 ? { crew: r[5], crew_note: r[6] || null, journey_step: r[7] || null } : {}) });
+      ...(r.length > 5 ? { crew: r[5], crew_note: r[6] || null, journey_step: r[7] || null, works: 'Every day' } : {}) });
 }

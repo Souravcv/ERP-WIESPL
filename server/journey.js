@@ -418,7 +418,7 @@ const dispatchDate = (j, w) => { const x = w.steps.s25; return x?.date || null; 
 function sitePlan(j) {
   const rows = Object.values(siteRows(j)).filter(r => r.plan_start).sort((a, b) => (a.sort ?? a.sr) - (b.sort ?? b.sr));
   if (!rows.length) return null;
-  const cal = calendar();
+  const cal = calendar({ sundays: true }); // site work runs every day
   const start = rows.reduce((m, r) => (r.plan_start < m ? r.plan_start : m), rows[0].plan_start);
   const end = rows.reduce((m, r) => ((r.plan_finish || r.plan_start) > m ? r.plan_finish || r.plan_start : m), start);
   const days = [];

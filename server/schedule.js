@@ -15,9 +15,10 @@ const now = () => new Date().toLocaleString('sv-SE').slice(0, 19);
 const D = s => new Date(s + 'T00:00:00Z');
 const S = d => d.toISOString().slice(0, 10);
 const shift = (s, n) => { const d = D(s); d.setUTCDate(d.getUTCDate() + n); return S(d); };
-export function calendar() {
+// sundays: true = Sundays are working days too (site work runs every day); holidays stay off either way.
+export function calendar({ sundays = false } = {}) {
   const hol = new Set(db.prepare("SELECT date FROM holidays WHERE COALESCE(optional, 'No') <> 'Yes'").all().map(r => r.date));
-  const isWork = s => D(s).getUTCDay() !== 0 && !hol.has(s);
+  const isWork = s => (sundays || D(s).getUTCDay() !== 0) && !hol.has(s);
   const onOrAfter = s => { while (!isWork(s)) s = shift(s, 1); return s; };
   const onOrBefore = s => { while (!isWork(s)) s = shift(s, -1); return s; };
   // Move n working days from a working day (n may be negative); 0 = the day itself.
@@ -55,7 +56,8 @@ const weight = r => Math.max(Number(r.duration) || 0, r.kind === 'Milestone' ? 0
 // Work out every date, float and the critical path; returns rows (with phase roll-ups) and the problems found.
 export function compute(projectId, { save = true } = {}) {
   const project = getRow('projects', projectId);
-  const cal = calendar();
+  const cal = calendar(), every = calendar({ sundays: true });
+  const calOf = r => (r.works === 'Every day' ? every : cal); // each activity counts its own working days
   const t = today();
   const rows = rowsOf(projectId);
   const acts = rows.filter(r => r.kind !== 'Phase');
@@ -95,20 +97,22 @@ export function compute(projectId, { save = true } = {}) {
     r._dur = dur;
     const qtyPct = Number(r.qty) > 0 ? Math.min(100, Math.round((Number(r.qty_done) || 0) / Number(r.qty) * 1000) / 10) : null;
     r.progress = r.actual_finish ? 100 : qtyPct ?? Math.min(100, Math.max(0, Number(r.progress) || 0));
-    let es = projStart;
-    if (r.fixed_start && r.fixed_start > es) es = cal.onOrAfter(r.fixed_start);
+    const rc = calOf(r);
+    let es = rc.onOrAfter(projStart);
+    if (r.fixed_start && r.fixed_start > es) es = rc.onOrAfter(r.fixed_start);
     for (const l of r.links) {
       const p = bySr.get(l.sr);
-      const c = l.type === 'SS' ? cal.add(p.plan_start, l.lag) : dur === 0 && !l.lag ? p.plan_finish : cal.add(cal.add(p.plan_finish, 1), l.lag);
+      const c = l.type === 'SS' ? rc.add(p.plan_start, l.lag) : dur === 0 && !l.lag ? p.plan_finish : rc.add(rc.add(p.plan_finish, 1), l.lag);
       if (c > es) es = c;
     }
     if (r.actual_start) es = r.actual_start;
-    else if (based && es < statusDay) es = statusDay;
-    let ef = dur === 0 ? es : cal.add(es, dur - 1);
+    else if (based && es < rc.onOrAfter(t)) es = rc.onOrAfter(t);
+    let ef = dur === 0 ? es : rc.add(es, dur - 1);
     if (r.actual_finish) ef = r.actual_finish;
     else if (r.actual_start && dur) {
       const left = Math.ceil(dur * (1 - r.progress / 100));
-      const byProgress = left > 0 ? cal.add(statusDay, left - 1) : statusDay;
+      const sd = rc.onOrAfter(t);
+      const byProgress = left > 0 ? rc.add(sd, left - 1) : sd;
       if (byProgress > ef) ef = byProgress;
     }
     r.plan_start = es; r.plan_finish = ef;
@@ -119,22 +123,24 @@ export function compute(projectId, { save = true } = {}) {
   const succ = new Map(acts.map(r => [r.id, []]));
   for (const r of acts) for (const l of r.links) succ.get(bySr.get(l.sr).id).push({ r, l });
   for (const r of [...order].reverse()) {
+    const rc = calOf(r);
     let lf = finish;
     for (const { r: s, l } of succ.get(r.id)) {
-      const c = l.type === 'SS' ? cal.add(cal.add(s._ls, -l.lag), r._dur ? r._dur - 1 : 0)
-        : s._dur === 0 && !l.lag ? s._ls : cal.add(cal.add(s._ls, -l.lag), -1);
+      const sc = calOf(s);
+      const c = l.type === 'SS' ? rc.add(sc.add(s._ls, -l.lag), r._dur ? r._dur - 1 : 0)
+        : s._dur === 0 && !l.lag ? s._ls : rc.add(sc.add(s._ls, -l.lag), -1);
       if (c < lf) lf = c;
     }
     r._lf = lf;
-    r._ls = r._dur ? cal.add(lf, -(r._dur - 1)) : lf;
+    r._ls = r._dur ? rc.add(lf, -(r._dur - 1)) : lf;
     const done = r.status === 'Done';
-    r.total_float = done ? null : cal.between(r.plan_finish, lf);
+    r.total_float = done ? null : rc.between(r.plan_finish, lf);
     r.critical = !done && r.total_float <= 0 ? 'Yes' : '';
   }
   // Late against the baseline (working days), or past its finish without a baseline.
   for (const r of acts) {
-    r.late_days = r.base_finish && r.status !== 'Done' ? Math.max(0, cal.between(r.base_finish, r.plan_finish))
-      : r.base_finish && r.actual_finish ? Math.max(0, cal.between(r.base_finish, r.actual_finish)) : 0;
+    r.late_days = r.base_finish && r.status !== 'Done' ? Math.max(0, calOf(r).between(r.base_finish, r.plan_finish))
+      : r.base_finish && r.actual_finish ? Math.max(0, calOf(r).between(r.base_finish, r.actual_finish)) : 0;
     r.overdue = r.status !== 'Done' && r.plan_finish < t ? 'Yes' : '';
   }
   // Phases: the span and the weighted progress of the activities under them (until the next phase).
@@ -189,7 +195,7 @@ export function plannerData(projectId, user) {
   return out;
 }
 
-const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'crew', 'crew_note', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
+const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'crew', 'crew_note', 'works', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
 
 // Save the planner grid: changed / new rows and deleted ids; the whole schedule is then worked out again.
 export function saveSchedule(projectId, body, user) {

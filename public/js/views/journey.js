@@ -102,7 +102,7 @@ async function detail(root, id) {
       if (!d.project_id) return null;
       const date = h('input', { type: 'date', value: d.dispatch || today() });
       return h('div.card.jr-site', h('h2', '📅 Site plan'),
-        h('p.muted', 'One modular OT from the one-time dispatch to handover: 15 activities in working days (Sundays and holidays off), with the crew of each. It goes into the Project Planner and gives the site steps their dates.'),
+        h('p.muted', 'One modular OT from the one-time dispatch to handover: 15 activities, every day including Sundays (holidays off), with the crew of each. It goes into the Project Planner and gives the site steps their dates.'),
         d.can_plan ? h('div.jr-btns', h('label', 'Dispatch day (site day 1) ', date),
           h('button.btn.primary', { type: 'button', onclick: busy(async () => { await api(`/journeys/${id}/site-plan`, { method: 'POST', body: { start: date.value } }); toast('Site plan made'); await draw(); }) }, '📅 Make the site plan'))
           : h('p.muted', 'Someone who plans projects makes it.'));
@@ -114,7 +114,7 @@ async function detail(root, id) {
       h('div.jr-crew', sp.days.map(x => h('div', { class: `jr-day${x.unknown ? ' unknown' : ''}`, title: `${fmtDate(x.date)}: ${x.people} in-house${x.unknown ? ' + ?' : ''}${x.vendor ? ' · vendor' : ''}${x.client ? ' · client' : ''}\n${x.work.join('\n')}` },
         h('span.jr-bar2', { style: `height:${Math.round((x.people / max) * 48) + 2}px` }), h('b', `${x.people}${x.unknown ? '?' : ''}`), h('i', x.date.slice(8)),
         x.vendor || x.client ? h('em', x.vendor ? 'V' : 'C') : null))),
-      h('div.muted', 'People on site per working day (hover a day for the work). ? = a job whose crew the site notes do not give yet: set it in the planner. V = vendor on site, C = client\'s work.'));
+      h('div.muted', 'People on site per day, Sundays included (hover a day for the work). ? = a job whose crew the site notes do not give yet: set it in the planner. V = vendor on site, C = client\'s work.'));
   };
   const linkBox = (label, key, entity, col) => {
     const l = d.links[key];
