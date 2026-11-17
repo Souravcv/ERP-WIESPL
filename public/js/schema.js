@@ -971,6 +971,7 @@ export const ENTITIES = {
       { key: 'eway_bill', label: 'E-way Bill No', type: 'text', hidden: true },
       { key: 'lines', label: 'Material', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
         { key: 'description', label: 'Description', type: 'textarea', width: 320 },
+        { key: 'hsn', label: 'HSN', type: 'text', width: 110, suggestFrom: 'hsn' },
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'qty', label: 'Qty', type: 'number', width: 80 },
         { key: 'remark', label: 'Remark', type: 'text', width: 160 },

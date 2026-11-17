@@ -119,6 +119,8 @@ function linesEditor(f, value, { readonly, onTotals, extras }) {
             ? h('textarea', { rows: c.type === 'textarea' ? 2 : 1, readOnly: readonly || c.readonly, style: { minHeight: '32px' } })
             : h('input', { type: ['number', 'money'].includes(c.type) ? 'number' : c.type === 'date' ? 'date' : 'text', step: 'any', readOnly: readonly || c.readonly });
         inp.value = l[c.key] ?? (c.type === 'select' ? c.options[0] : '');
+        // a text column with a list to choose from (e.g. HSN codes of the item master); typing anything else is fine
+        if (c.suggestFrom && !readonly) { inp.setAttribute('list', `dl-${c.suggestFrom}`); suggestList(c.suggestFrom); }
         if (c.key === 'qty' && l.split?.length > 1) { inp.readOnly = true; inp.title = 'Total of the projects: change it with "Projects & qty"'; }
         if (c.type === 'select' && l[c.key] == null) l[c.key] = c.options[0];
         inp.oninput = inp.onchange = () => {
@@ -1672,4 +1674,14 @@ function changeHistory(entity, id) {
     box.lastChild.replaceChildren(...(rows.length ? rows.map(a => h('div', h('b', a.action), ` · ${a.user} · ${a.at}`, a.summary ? h('div.muted', a.summary) : null)) : [h('div.muted', 'No history')]));
   });
   return box;
+}
+
+// datalists for line columns, loaded once per page: HSN codes used in the item master
+const SUGGEST_SOURCES = { hsn: '/items/hsn-codes' };
+function suggestList(key) {
+  const id = `dl-${key}`;
+  if (document.getElementById(id) || !SUGGEST_SOURCES[key]) return;
+  const dl = h('datalist', { id });
+  document.body.append(dl);
+  api(SUGGEST_SOURCES[key]).then(rows => dl.replaceChildren(...rows.map(r => h('option', { value: r.value, label: r.label })))).catch(() => dl.remove());
 }

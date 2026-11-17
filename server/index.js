@@ -802,6 +802,19 @@ api.get('/stock/summary', wrap(req => { itemView(req); return stock.stockSummary
 api.get('/dashboard/accounts', wrap(req => { if (!canView('invoices', req.user.role) && !hasFunction(req.user.role, 'po_commercial')) throw new HttpError(403, 'No access to accounts'); return stock.accountsDashboard(); }));
 api.post('/products/import-boq', need('products'), express.raw({ type: () => true, limit: '30mb' }), wrap(req => importer.importProductBoq(req.body, req.query.set, req.user)));
 api.get('/dashboard/store', wrap(req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); return stock.storeDashboard(req.query); }));
+// HSN codes in the item master, to choose on challan lines (with the items that use each)
+api.get('/items/hsn-codes', wrap(req => {
+  if (!canView('items', req.user.role) && !canWrite('challans', req.user.role)) throw new HttpError(403, 'No access to the store');
+  // the item master first; then codes already typed on PO and challan lines
+  const out = new Map();
+  for (const r of db.prepare("SELECT TRIM(hsn) value, COUNT(*) n, GROUP_CONCAT(name, ', ') names FROM (SELECT hsn, name FROM items WHERE TRIM(COALESCE(hsn, '')) <> '' ORDER BY name) GROUP BY TRIM(hsn) ORDER BY n DESC, value").all())
+    out.set(r.value, { value: r.value, label: `${r.value} · ${String(r.names).slice(0, 80)}` });
+  for (const t of ['purchase_orders', 'challans']) {
+    for (const r of db.prepare(`SELECT TRIM(json_extract(j.value, '$.hsn')) value, MIN(json_extract(j.value, '$.description')) d FROM ${t} x, json_each(CASE WHEN json_valid(x.lines) THEN x.lines ELSE '[]' END) j
+      WHERE TRIM(COALESCE(json_extract(j.value, '$.hsn'), '')) <> '' GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 300`).all()) if (!out.has(r.value)) out.set(r.value, { value: r.value, label: `${r.value} · ${String(r.d || '').split('\n')[0].slice(0, 60)}` });
+  }
+  return [...out.values()];
+}));
 api.get('/items/next-code', need('items'), wrap(req => ({ code: nextItemCode(req.query.category) })));
 api.post('/stock/opening', wrap(req => {
   if (!hasFunction(req.user.role, 'stock_opening')) throw new HttpError(403, 'You do not have permission to create opening stock');
@@ -1219,6 +1232,7 @@ api.delete('/:entity/:id', wrap(req => {
   tx(() => {
     for (const s of emptySlips) deleteRow('stock_drafts', s.id, req.user);
     deleteRow(entity, id, req.user);
+    if (entity === 'challans') dispatch.closeChallanGap(row, req.user); // later challans take the number down one
   });
   roles.removeAttachmentsOf(entity, id);
   if (entity === 'bom_items') flow.touchReview(row.bom_id, [row.department], req.user);

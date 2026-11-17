@@ -9,6 +9,7 @@ import { round2, fyOf } from '../public/js/calc.js';
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const fyStart = fy => `20${fy.slice(0, 2)}-04-01`;
 const OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
+const GOES_NEGATIVE = ['OUTWARD', 'TRANSFER', 'JOB_OUT'];
 const APPROVED_PO = ['Approved', 'Sent', 'Partially Received', 'Closed', 'Received'];
 
 export function stockOf(itemId) {
@@ -42,8 +43,9 @@ export function stockEntry(body, user) {
     else if (!body.vendor_id && !body.supplier) body = { ...body, supplier: vendor };
   }
 
-  // Stock check for issues / transfers / scrap (total per item across the slip).
-  if (OUT_TYPES.includes(type) && !body.allowNegative) {
+  // Stock check for scrap only (total per item across the slip). Dispatch, issue, transfer and job work outward go ahead
+  // with no stock: the store's stock goes below zero until the GRN is entered (Stock Summary → negative shows them).
+  if (OUT_TYPES.includes(type) && !GOES_NEGATIVE.includes(type) && !body.allowNegative) {
     const need = {};
     for (const l of lines) need[l.item_id] = (need[l.item_id] || 0) + Math.abs(Number(l.qty));
     const short = [];

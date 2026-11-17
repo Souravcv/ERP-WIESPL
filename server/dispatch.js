@@ -495,3 +495,32 @@ export function challanForIssue(body, issue, user) {
   }, user, { system: true });
   return ch;
 }
+
+// ---------------------------------------------------------------- challan numbers close up after a delete
+// DC-268 deleted → DC-269 becomes DC-268, DC-270 becomes DC-269 … (dispatched and delivered ones too), with the store
+// issue that carries the same number; the counter follows, so the next new challan takes the next free number.
+export function closeChallanGap(row, user) {
+  const m = String(row?.challan_no || '').match(/^(DC|RE)-(\d+)\/20(\d{2}-\d{2})$/);
+  if (!m) return 0;
+  const [, pre, num, fy] = m, gone = Number(num);
+  const re = new RegExp(`^${pre}-(\\d+)/20${fy.replace('-', '\\-')}$`);
+  const later = db.prepare('SELECT id, challan_no, issue_no FROM challans WHERE challan_no LIKE ?').all(`${pre}-%/20${fy}`)
+    .map(r => ({ ...r, n: Number(r.challan_no.match(re)?.[1]) })).filter(r => r.n > gone).sort((a, b) => a.n - b.n);
+  const fmt = n => `${pre}-${String(n).padStart(3, '0')}/20${fy}`;
+  const upChallan = db.prepare('UPDATE challans SET challan_no = ?, issue_no = CASE WHEN issue_no = ? THEN ? ELSE issue_no END WHERE id = ?');
+  const upMoves = db.prepare("UPDATE stock_moves SET doc_no = ?, purpose = REPLACE(purpose, ?, ?) WHERE doc_no = ? AND type IN ('OUTWARD', 'TRANSFER', 'JOB_OUT')");
+  const upAgainst = db.prepare('UPDATE stock_moves SET against_issue_no = ? WHERE against_issue_no = ?');
+  const upDrafts = db.prepare('UPDATE stock_drafts SET doc_no = ? WHERE doc_no = ?');
+  for (const r of later) {
+    const to = fmt(r.n - 1);
+    upChallan.run(to, r.challan_no, to, r.id);
+    upMoves.run(to, r.challan_no, to, r.challan_no);
+    upAgainst.run(to, r.challan_no);
+    upDrafts.run(to, r.challan_no);
+    audit(user.name, 'challans', r.id, 'update', `renumbered ${r.challan_no} → ${to} (${row.challan_no} deleted)`);
+  }
+  // the next new challan follows the last one left in this series
+  const left = db.prepare('SELECT challan_no FROM challans WHERE challan_no LIKE ?').all(`${pre}-%/20${fy}`).map(r => Number(r.challan_no.match(re)?.[1]) || 0);
+  db.prepare('UPDATE counters SET seq = ? WHERE name = ? AND fy = ?').run(Math.max(0, ...left), pre === 'RE' ? 'challan_ret' : 'challan', fy);
+  return later.length;
+}
