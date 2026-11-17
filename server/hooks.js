@@ -132,6 +132,9 @@ const parse = (v, dflt) => {
 export function beforeSave(name, row, existing, user) {
   const date = row.date || existing?.date || today();
   switch (name) {
+    case 'tds_sheets':
+      if (!existing && !row.tds_no) row.tds_no = docNo('tds', date, (n, fy) => `TDS-${n}/20${fy}`);
+      break;
     case 'enquiries': {
       if (!existing && !row.enquiry_no) Object.assign(row, enquiryNumbers(date));
       const custId = row.customer_id ?? existing?.customer_id;

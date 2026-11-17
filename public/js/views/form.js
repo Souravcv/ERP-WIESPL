@@ -1015,6 +1015,16 @@ function actionsFor(entity, row, reload, ctx = {}) {
       A.push(h('a.btn', { href: `#/print/po/${id}?internal=1`, target: '_blank', title: 'With projects / sites and the split per project' }, '🖨 Internal copy'));
       if (st === 'Archived (old)') { A.push(h('span.muted', 'Old PO, kept to look up: not counted in payables, analysis or receipts')); break; }
       if (can(entity) && ['Draft', 'Rejected'].includes(st)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval'));
+      // TDS check (Settings): the items on this PO that need a TDS and have none approved
+      if (!['Cancelled', 'Closed'].includes(st)) {
+        const box = h('span');
+        A.push(box);
+        api(`/purchase_orders/${id}/tds`).then(t => {
+          if (!t.missing.length) return;
+          box.replaceWith(h('div.tds-warn', h('b', t.mode === 'Block' ? '⛔ No approved TDS (the PO cannot be sent for approval): ' : '⚠ No approved TDS: '),
+            t.missing.map((m, i) => [i ? ', ' : '', m.name, h('span.muted', ` (${m.tds})`), can('tds_sheets') && m.tds === 'none' ? h('button.btn.small', { type: 'button', onclick: () => newRecord('tds_sheets', { item_id: m.id }) }, '+ TDS') : null])));
+        }).catch(() => box.remove());
+      }
       if (can(entity) && st === 'Approved') A.push(h('button.btn', { onclick: status('Sent') }, 'Mark as Sent'));
       if (can('stock_moves') && ['Approved', 'Sent', 'Partially Received'].includes(st)) A.push(h('a.btn.good', { href: `#/stock-entry?type=INWARD&po=${id}` }, '📦 Receive Goods (GRN)'));
       if (can(entity) && st === 'Partially Received') A.push(h('button.btn', { onclick: status('Closed', 'Close this PO even though some quantity is still pending?') }, 'Short-close'));
@@ -1129,7 +1139,13 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }) }, '📤 Submit to GM'));
       if (row.status === 'Approved') A.push(h('a.btn', { href: `#/print/creditnote/${id}`, target: '_blank' }, '🖨 Print Credit Note'));
       break;
+    case 'tds_sheets':
+      if (can(entity) && ['Draft', 'Rejected'].includes(row.status)) A.push(h('button.btn.primary', { onclick: submit }, 'Submit for Approval (Design Head › GM › MD)'));
+      if (row.status === 'Pending Approval') A.push(h('span.muted', `Waiting for: ${row.approval_stage || ''}`));
+      if (row.item_id) A.push(h('a.btn', { href: `#/view/items/${row.item_id}` }, 'Open the item'));
+      break;
     case 'items':
+      if (can('tds_sheets')) A.push(h('button.btn', { title: 'Technical Data Sheet of this product, approved Design Head › GM › MD', onclick: () => newRecord('tds_sheets', { item_id: id, title: row.name, specification: row.description || '' }) }, '📄 New TDS'));
       if (can('stock_moves')) {
         A.push(h('a.btn', { href: `#/stock-entry?type=INWARD&item=${id}` }, '📥 Inward'));
         A.push(h('a.btn', { href: `#/stock-entry?type=OUTWARD&item=${id}` }, '📤 Issue'));
@@ -1495,7 +1511,7 @@ async function loginCreated({ username, password, role }) {
 
 // ---------------------------------------------------------------- the document inside its approval request
 const APPROVAL_DOCS = { Quotation: 'quotations', 'Purchase Order': 'purchase_orders', Requisition: 'requisitions', 'Sales Order': 'sales_orders', Payment: 'vendor_payments',
-  Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes', Confirmation: 'probation_reviews', 'Production Plan': 'production_plans' };
+  TDS: 'tds_sheets', Expense: 'expenses', Leave: 'leave_requests', 'Schedule Baseline': 'schedule_baselines', 'Credit Note': 'credit_notes', Confirmation: 'probation_reviews', 'Production Plan': 'production_plans' };
 const shown = (f, v, row) => {
   if (v == null || v === '' || (Array.isArray(v) && !v.length)) return null;
   if (f.type === 'ref') return row[f.key + '_label'] || `#${v}`;

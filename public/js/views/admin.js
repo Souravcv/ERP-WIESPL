@@ -115,7 +115,8 @@ export async function rolesView(root) {
 const SETTINGS_FORM = [
   ['Company', [['company_name', 'Company name'], ['company_short', 'Short name'], ['tagline', 'Tagline'], ['reg_address', 'Registered address', 'ta'], ['works_address', 'Works address', 'ta'],
     ['phone', 'Phone'], ['email', 'Email'], ['website', 'Website'], ['cin', 'CIN'], ['gstin', 'GSTIN'], ['state', 'State (for CGST/SGST vs IGST)'], ['bank_details', 'Bank details (printed on invoices)', 'ta']]],
-  ['Numbering & approvals', [['quote_prefix', 'Document prefix (WIESPL/…)'], ['require_quote_approval', 'Quotations need manager approval', 'yn'], ['require_po_approval', 'Purchase orders need manager approval', 'yn']]],
+  ['Numbering & approvals', [['quote_prefix', 'Document prefix (WIESPL/…)'], ['require_quote_approval', 'Quotations need manager approval', 'yn'], ['require_po_approval', 'Purchase orders need manager approval', 'yn'],
+    ['tds_po_check', 'TDS check on vendor POs (items marked "Needs a TDS"): Off · Warn = show it, the PO goes on · Block = no PO without an approved TDS', 'sel:Warn|Off|Block']]],
   ['Attendance & leave (HR Policy)', [['hr_grace_minutes', 'On time up to shift start + minutes; beyond is a late mark (default 15)'], ['hr_late_marks_free', 'Late marks free per month; each one after is half a day (default 3)'],
     ['hr_half_day_late_minutes', 'Late in + early out up to … minutes is half a day; more cuts the day (default 240)'], ['hr_short_leaves_month', 'Short leaves (1½ h) per month (default 2)'],
     ['hr_pl_per_year', 'Privilege leave (PL) days a year, credited quarterly after confirmation (default 24)'], ['hr_lwp_max_days', 'Leave without pay: most days a year (default 10)'],
@@ -147,6 +148,7 @@ export async function settingsView(root) {
     if (type === 'ta' || type === 'list' || type === 'tall') { el = h('textarea', { rows: type === 'tall' ? 22 : type === 'list' ? 10 : 3 }); el.value = type === 'list' ? (s[k] || []).join('\n') : s[k] ?? ''; }
     else if (type === 'pw') el = h('input', { type: 'password', autocomplete: 'new-password', placeholder: s.web_mail_pass_set ? 'Saved. Leave blank to keep it' : '' });
     else if (type === 'yn') { el = h('select', h('option', 'Yes'), h('option', 'No')); el.value = s[k] || 'Yes'; }
+    else if (String(type).startsWith('sel:')) { const opts = type.slice(4).split('|'); el = h('select', opts.map(o => h('option', o))); el.value = s[k] || opts[0]; }
     else el = h('input', { value: s[k] ?? '' });
     inputs[k] = [el, type];
     return h('label' + (type === 'ta' || type === 'list' || type === 'tall' ? '.span-2' : ''), label, el);

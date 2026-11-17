@@ -39,7 +39,7 @@ export function notifyNew(entity, row, actor) {
   }
 }
 
-const APPROVAL_LINK = { 'Order Journey': id => `#/journey/${id}`, Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}`,
+const APPROVAL_LINK = { TDS: id => `#/view/tds_sheets/${id}`, 'Order Journey': id => `#/journey/${id}`, Quotation: id => `#/quotation/${id}`, 'Purchase Order': id => `#/view/purchase_orders/${id}`, Requisition: id => `#/view/requisitions/${id}`,
   Payment: id => `#/view/vendor_payments/${id}`, Expense: id => `#/view/expenses/${id}`, 'Credit Note': id => `#/view/credit_notes/${id}`, 'Sales Order': id => `#/view/sales_orders/${id}`, Leave: id => `#/view/leave_requests/${id}`, Confirmation: id => `#/view/probation_reviews/${id}`, 'Schedule Baseline': id => `#/view/schedule_baselines/${id}`, 'Production Plan': id => `#/view/production_plans/${id}` };
 
 // An approval step is waiting: tell everyone allowed to approve it.

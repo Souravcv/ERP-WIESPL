@@ -58,6 +58,17 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_po_flow_v2', '\"1\"')").run();
   }
+  // TDS approval (Design Head → GM → MD): each built-in role gets its own step once.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_tds_v1'").get()) {
+    for (const [name, fn] of [['design_head', 'tds_design'], ['manager', 'tds_gm'], ['md', 'tds_md']]) {
+      const r = db.prepare('SELECT perms FROM roles WHERE name = ?').get(name);
+      if (!r) continue;
+      const p = parse(r.perms);
+      p.functions = [...new Set([...(p.functions || []).filter(f => !(name === 'manager' && ['tds_design', 'tds_md'].includes(f))), fn])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_tds_v1', '\"1\"')").run();
+  }
   // The store does not work in the CRM: hide CRM modules from the built-in Store role once.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_store_crm_v1'").get()) {
     const r = db.prepare("SELECT perms FROM roles WHERE name = 'store'").get();

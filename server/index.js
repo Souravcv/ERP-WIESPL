@@ -46,6 +46,7 @@ import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 import * as journey from './journey.js';
 import * as materials from './materials.js';
+import * as tds from './tds.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -273,6 +274,7 @@ const DOC_SERIES = [
   { key: 'stock_RETURN', label: 'Return to Store', table: 'stock_moves', col: 'doc_no', where: "type = 'RETURN'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'stock_SCRAP', label: 'Scrap', table: 'stock_moves', col: 'doc_no', where: "type = 'SCRAP'", fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'challan', label: 'Delivery Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `DC-${n}/20${fy}` },
+  { key: 'tds', label: 'Technical Data Sheet (TDS)', table: 'tds_sheets', col: 'tds_no', fmt: (n, fy) => `TDS-${n}/20${fy}` },
   { key: 'challan_ret', label: 'Returnable Challan', table: 'challans', col: 'challan_no', fmt: (n, fy) => `RE-${n}/20${fy}` },
   { key: 'material_request', label: 'Material Request (to store)', table: 'material_requests', col: 'mr_no', fmt: (n, fy) => `MR-${n}/20${fy}` },
   { key: 'production', label: 'Production Entry', table: 'production_entries', col: 'entry_no', fmt: (n, fy) => `PRD-${n}/20${fy}` },
@@ -407,6 +409,9 @@ api.post('/quotations/:id/submit', need('quotations'), wrap(req => wf.submitForA
 api.post('/quotations/:id/revise', need('quotations'), wrap(req => wf.reviseQuotation(req.params.id, req.user)));
 api.post('/quotations/:id/convert', need('sales_orders'), wrap(req => wf.convertToSalesOrder(req.params.id, req.body, req.user)));
 api.post('/purchase_orders/:id/submit', need('purchase_orders'), wrap(req => wf.submitForApproval('Purchase Order', req.params.id, req.user)));
+// TDS of a product: sent for approval (Design Head → GM → MD); the PO page asks which of its items still need one
+api.post('/tds_sheets/:id/submit', need('tds_sheets'), wrap(req => wf.submitForApproval('TDS', req.params.id, req.user)));
+api.get('/purchase_orders/:id/tds', wrap(req => { if (!canView('purchase_orders', req.user.role)) throw new HttpError(403, 'No access to purchase orders'); return tds.poTds(getRow('purchase_orders', req.params.id)); }));
 api.post('/purchase_orders/:id/commercial', wrap(req => wf.poCommercial(req.params.id, req.body, req.user)));
 // Accounts marks scheduled vendor payments as paid (also after the PO is approved and locked).
 api.post('/purchase_orders/:id/payments', wrap(req => {
@@ -1137,6 +1142,7 @@ const LOCKED = {
   leave_requests: ['Pending Approval', 'Approved', 'Rejected', 'Cancelled'],
   probation_reviews: ['Pending Approval', 'Approved'],
   schedule_baselines: ['Draft', 'Pending Approval', 'Approved', 'Rejected', 'Superseded'],
+  tds_sheets: ['Pending Approval', 'Approved'],
 };
 
 api.get('/:entity/options', wrap(req => { entityOr404(req.params.entity); if (!pickable(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have access to this list'); return options(req.params.entity, req.query.q); }));

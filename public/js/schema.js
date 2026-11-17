@@ -180,6 +180,9 @@ export const roleSees = (role, entity) => !ROLE_SEES[role] || ROLE_SEES[role].in
 // Special actions a role may be allowed, beyond module access.
 export const FUNCTIONS = {
   approve_quotation: 'Approve quotations',
+  tds_design: 'TDS step 1 – Design Head approval',
+  tds_gm: 'TDS step 2 – GM approval',
+  tds_md: 'TDS step 3 – MD approval',
   approve_sales_order: 'Approve sales orders (GM)',
   approve_requisition: 'Approve material requisitions (Purchase Head step)',
   po_check: 'PO step 1 – Purchase approval (Purchase Head: vendor, material & quantity)',
@@ -225,13 +228,13 @@ export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels
 // Pop-up notifications per new document; approval requests always go to whoever may approve that step.
 export const NOTIFY_FUNCTIONS = { material_requests: 'notify_material_request', requisitions: 'notify_requisition', purchase_orders: 'notify_po', boms: 'notify_boq', boqs: 'notify_work_order' };
 export const DEFAULT_FUNCTIONS = {
-  manager: Object.keys(FUNCTIONS),
+  manager: Object.keys(FUNCTIONS).filter(f => !['tds_design', 'tds_md'].includes(f)),
   md: Object.keys(FUNCTIONS),
   sales_head: ['import', 'notify_enquiry', 'task_assign'],
   marketing: ['notify_enquiry'],
   chief_engineer: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
   finance_head: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record', 'pay_final', 'task_assign'],
-  design_head: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'task_assign', 'schedule_baseline'],
+  design_head: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'task_assign', 'schedule_baseline', 'tds_design'],
   qc_head: ['qc_inspect', 'qc_site', 'ncr_close', 'iqc_inspect', 'task_assign', 'notify_work_order'],
   project_head: ['notify_work_order', 'boq_review', 'qc_site', 'task_assign', 'schedule_baseline', 'notify_po'],
   purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_grn_without_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
@@ -277,6 +280,8 @@ export const APPROVAL_FLOWS = {
   Confirmation: [{ stage: 'Management', fn: 'hr_confirm' }],
   'Schedule Baseline': [{ stage: 'Projects Head', fn: 'schedule_baseline' }],
   'Production Plan': [{ stage: 'Production Head', fn: 'production_plan_approve' }],
+  // Technical Data Sheet of a product (Order-to-Execution guide): Design Head → GM → MD
+  TDS: [{ stage: 'Design Head', fn: 'tds_design' }, { stage: 'GM', fn: 'tds_gm' }, { stage: 'MD', fn: 'tds_md' }],
 };
 // Project Planner: who does an activity, and why it ran late (the delay list of the WIESPL / MSP schedules).
 export const SCHEDULE_PARTIES = ['WIESPL', 'Client', 'Vendor', 'PMC', 'Other'];
@@ -573,7 +578,7 @@ export const ENTITIES = {
     statusField: 'status',
     fields: [
       { key: 'also_by', label: 'Can Also Approve', type: 'text', readonly: true, hint: 'The reporting manager (leave)' },
-      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Order Journey', 'Other'], readonly: true },
+      { key: 'doc_type', label: 'Document Type', type: 'select', options: ['Quotation', 'Sales Order', 'Purchase Order', 'Requisition', 'Payment', 'Expense', 'Credit Note', 'Leave', 'Discount', 'Order Journey', 'TDS', 'Other'], readonly: true },
       { key: 'stage', label: 'Approval Step', type: 'text', readonly: true },
       { key: 'doc_id', label: 'Document ID', type: 'number', hidden: true },
       { key: 'journey_step', label: 'Journey step', type: 'text', hidden: true, readonly: true },
@@ -1753,6 +1758,28 @@ export const ENTITIES = {
     ],
   },
   // Half-yearly vendor scorecard (manual 4B): eight parameters 0–100 with their weights; delivery and quality come from data.
+  // Technical Data Sheet of a product: size, material, performance … approved Design Head → GM → MD before it is bought.
+  tds_sheets: {
+    label: 'Technical Data Sheets (TDS)', singular: 'TDS', group: 'Purchase', icon: '📄',
+    write: ['admin', 'manager', 'md', 'design_engineer', 'design_head', 'chief_engineer', 'technical', 'purchase', 'purchase_head'],
+    display: "{t}.tds_no || ' ' || COALESCE({t}.title, '')",
+    search: ['tds_no', 'title', 'make', 'model', 'specification'],
+    list: ['tds_no', 'item_id', 'title', 'make', 'rev', 'status', 'approval_stage', 'approved_by'],
+    statusField: 'status',
+    fields: [
+      { key: 'tds_no', label: 'TDS No', type: 'text', readonly: true, hint: 'Auto: TDS-001/2026-27' },
+      { key: 'item_id', label: 'Item (product)', type: 'ref', ref: 'items', required: true },
+      { key: 'title', label: 'Product', type: 'text', required: true, span: 2 },
+      { key: 'make', label: 'Make / Brand', type: 'text' },
+      { key: 'model', label: 'Model', type: 'text' },
+      { key: 'rev', label: 'Revision', type: 'number', default: 0 },
+      { key: 'specification', label: 'Specification (size, material, performance …)', type: 'textarea', span: 2 },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Pending Approval', 'Approved', 'Rejected'], default: 'Draft', readonly: true },
+      { key: 'approval_stage', label: 'Waiting For', type: 'text', readonly: true },
+      { key: 'approved_by', label: 'Approved By', type: 'text', readonly: true },
+    ],
+  },
   vendor_evaluations: {
     label: 'Vendor Evaluations', singular: 'Vendor Evaluation', group: 'Purchase', icon: '📊', write: ['admin', 'manager', 'purchase_head', 'purchase'],
     display: "{t}.eval_no || ' · ' || COALESCE({t}.period, '')",
@@ -2081,6 +2108,7 @@ export const ENTITIES = {
       { key: 'rate', label: 'Current Price (₹ per unit)', type: 'money' },
       { key: 'gst_rate', label: 'GST %', type: 'number', default: 18 },
       { key: 'hsn', label: 'HSN Code', type: 'text', hint: 'Optional; pre-filled on POs' },
+      { key: 'needs_tds', label: 'Needs a TDS', type: 'select', options: ['No', 'Yes'], default: 'No', hint: 'Yes = a vendor PO for this item is checked for an approved Technical Data Sheet (Settings → TDS check)' },
       { key: 'reorder_level', label: 'Minimum Stock Level', type: 'number', default: 0 },
       { key: 'lead_days', label: 'Lead Time (days)', type: 'number', hint: 'Worked out by itself from PO date to GRN date (average of the last 5 receipts against a PO); BOQ order-by date = required-by − lead time (blank = 7)' },
       { key: 'preferred_vendor_id', label: 'Preferred Vendor', type: 'ref', ref: 'vendors' },

@@ -5,13 +5,15 @@ import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
 import { notify, notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
 import { JOURNEY_DOC, mayDecide } from '../public/js/journey.js';
 import { approvalDecided as journeyDecided } from './journey.js';
+import { checkPoTds, tdsNote, markNeedsTds } from './tds.js';
 
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
 
 const DOCS = {
   Quotation: { entity: 'quotations', ref: 'quote_no', amount: 'grand_total', title: r => `${r.subject || 'Quotation'} — ${r.customer_id_label || ''}`, settingKey: 'require_quote_approval' },
   'Sales Order': { entity: 'sales_orders', ref: 'so_no', amount: 'total_value', noLines: true, title: r => `Sales order – ${r.customer_id_label || ''}${r.client_po_no ? ' – client PO ' + r.client_po_no : ''}` },
-  'Purchase Order': { entity: 'purchase_orders', ref: 'po_no', amount: 'total', title: r => `PO to ${r.vendor_id_label || ''}`, settingKey: 'require_po_approval' },
+  'Purchase Order': { entity: 'purchase_orders', ref: 'po_no', amount: 'total', title: r => `PO to ${r.vendor_id_label || ''}${tdsNote(r)}`, settingKey: 'require_po_approval' },
+  TDS: { entity: 'tds_sheets', ref: 'tds_no', amount: null, noLines: true, title: r => `TDS ${r.title || ''} – ${r.item_id_label || ''}${r.make ? ` (${r.make}${r.model ? ' ' + r.model : ''})` : ''}${Number(r.rev) ? ` rev ${r.rev}` : ''}` },
   Requisition: { entity: 'requisitions', ref: 'req_no', amount: null, title: r => `Requisition – ${r.project_name || r.project_id_label || ''} (${(r.lines || []).length} items)` },
   Payment: { entity: 'vendor_payments', ref: 'payment_no', amount: 'amount', noLines: true,
     title: r => `Pay ${r.vendor_id_label || ''} – PO ${r.po_id_label || ''}${r.off_terms === 'Yes' ? ' – OUTSIDE PO TERMS' : ''}` },
@@ -33,7 +35,7 @@ const gmNeeded = (docType, row) => {
   const lim = Number(getSettings().payment_approval_limit ?? 50000) || 50000;
   return (Number(row.amount) || 0) > lim || row.off_terms === 'Yes';
 };
-const STAGED = ['purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews', 'production_plans'];
+const STAGED = ['tds_sheets', 'purchase_orders', 'vendor_payments', 'expenses', 'credit_notes', 'sales_orders', 'leave_requests', 'schedule_baselines', 'probation_reviews', 'production_plans'];
 
 export function canApprove(docType, stage, user, ap = null) {
   if (docType === JOURNEY_DOC) return !!ap && mayDecide(user.role, ap.approver_role);
@@ -61,6 +63,8 @@ export function submitForApproval(docType, id, user) {
     const v = db.prepare('SELECT name, vendor_status, blacklist_reason FROM vendors WHERE id = ?').get(row.vendor_id);
     if (v?.vendor_status === 'Blacklisted') throw new HttpError(409, `${v.name} is blacklisted (${v.blacklist_reason || 'see the vendor'}): choose another vendor`);
   }
+  if (docType === 'Purchase Order') checkPoTds(row); // Block: stops here; Warn: the approval title says which TDS is missing
+  if (docType === 'TDS') markNeedsTds(row.item_id);
   if (!['Draft', 'Rejected', ...(d.submitFrom || [])].includes(row.status)) throw new HttpError(400, `Only Draft or Rejected documents can be submitted (current: ${row.status})`);
   if (docType === 'Confirmation' && !['Confirm', 'Extend probation', 'Not suitable – separate'].includes(row.recommendation)) throw new HttpError(400, 'Choose the recommendation (confirm, extend or not suitable) first');
   if (docType === 'Production Plan' && !(row.lines || []).some(l => l.order_id && Number(l.target) > 0)) throw new HttpError(400, 'Give at least one production order a target for the month');
@@ -112,7 +116,7 @@ export function decide(approvalId, decision, comments, user) {
     const patch = {};
     if (d.entity === 'purchase_orders') patch[step.field] = `${user.name} (${stamp()})`;
     if (d.noLines) patch.approved_by = [getRow(d.entity, ap.doc_id).approved_by, `${user.name} (${ap.stage}, ${stamp()})`].filter(Boolean).join(' · ');
-    const moreSteps = idx + 1 < flow.length && (!d.noLines || gmNeeded(ap.doc_type, getRow(d.entity, ap.doc_id)));
+    const moreSteps = idx + 1 < flow.length && (!d.noLines || !['Payment', 'Expense'].includes(ap.doc_type) || gmNeeded(ap.doc_type, getRow(d.entity, ap.doc_id)));
     if (moreSteps) {
       const row = getRow(d.entity, ap.doc_id);
       // The next step is still the original requester's request, so the final decision reaches them.
