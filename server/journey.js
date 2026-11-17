@@ -2,15 +2,17 @@
 // order's enquiry, sales order and project, whichever exist. Steps are ticked by hand (who, when, a note), or by
 // themselves when the CRM already records the fact (an approved quotation, a project, a vendor PO …).
 import { db, tx, audit } from './db.js';
-import { HttpError } from './crud.js';
-import { canView, canWrite } from '../public/js/schema.js';
-import { STEPS, STEP, TICKABLE, PHASES } from '../public/js/journey.js';
+import { HttpError, insertRow, updateRow, getRow } from './crud.js';
+import { canView, canWrite, hasFunction } from '../public/js/schema.js';
+import { STEPS, STEP, TICKABLE, PHASES, RACI } from '../public/js/journey.js';
 
 export function migrateJourneys() {
   db.exec(`CREATE TABLE IF NOT EXISTS journeys (id INTEGER PRIMARY KEY, enquiry_id INTEGER, sales_order_id INTEGER, project_id INTEGER,
       created_at TEXT DEFAULT (datetime('now','localtime')));
     CREATE TABLE IF NOT EXISTS journey_steps (journey_id INTEGER NOT NULL, step TEXT NOT NULL, status TEXT NOT NULL, note TEXT, by_name TEXT,
       at TEXT DEFAULT (datetime('now','localtime')), PRIMARY KEY (journey_id, step));`);
+  // a step ticked by its task (so reopening the task reopens the step)
+  if (!db.prepare('PRAGMA table_info(journey_steps)').all().some(c => c.name === 'task_id')) db.exec('ALTER TABLE journey_steps ADD COLUMN task_id INTEGER');
 }
 
 const LINKS = ['enquiries', 'sales_orders', 'projects'];
@@ -70,11 +72,14 @@ const refsOf = j => [j.enquiry && (j.enquiry.enquiry_no || `Enquiry ${j.enquiry.
 // every step with its state: done / na / open, by hand or by itself, with its date and due date
 function work(j) {
   const stored = Object.fromEntries(db.prepare('SELECT * FROM journey_steps WHERE journey_id = ?').all(j.id).map(r => [r.step, r]));
+  const tasks = stepTasks(j.id);
   const part = (key, auto) => {
-    const s = stored[key];
-    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10) };
+    const s = stored[key], task = tasks[key] || null;
+    if (s) return { status: s.status, note: s.note, by: s.by_name, at: s.at, date: s.at?.slice(0, 10), task };
     const fact = auto && AUTO[auto]?.(j);
-    return fact ? { status: 'done', auto: true, date: fact.date || null, fact } : { status: 'open' };
+    if (fact) return { status: 'done', auto: true, date: fact.date || null, fact, task };
+    // an open step given to someone: its deadline is the task's
+    return task ? { status: 'open', task, due: task.due_date, late: !!task.due_date && task.due_date < today() } : { status: 'open' };
   };
   const out = {};
   for (const st of STEPS) {
@@ -85,7 +90,7 @@ function work(j) {
     } else if (st.derived) out[st.key] = { status: out[st.derived].status, derived: true };
     else out[st.key] = part(st.key, st.auto);
   }
-  for (const st of STEPS) if (st.due && out[st.key].status === 'open') {
+  for (const st of STEPS) if (st.due && out[st.key].status === 'open' && !out[st.key].task) {
     const from = out[st.due.after];
     if (from?.status === 'done' && from.date) { out[st.key].due = addDays(from.date, st.due.days); out[st.key].late = out[st.key].due < today(); }
   }
@@ -96,7 +101,8 @@ function work(j) {
   const next = STEPS.find((s, i) => i > last && out[s.key].status === 'open');
   const gaps = STEPS.filter((s, i) => i < last && out[s.key].status === 'open').map(s => s.key);
   for (const k of gaps) out[k].gap = true;
-  return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => out[s.key].late) };
+  const isLate = x => x.late || x.subs?.some(p => p.late);
+  return { steps: out, finished, total: STEPS.length, next: next?.key || null, phase: next ? next.phase : PHASES.length, gaps: gaps.length, late: STEPS.some(s => isLate(out[s.key])) };
 }
 
 // every role with its label and the people who have it now, for the who-does-what of each step
@@ -114,14 +120,15 @@ const summary = j => { const w = work(j); return { id: j.id, title: titleOf(j), 
 export function list(user) {
   if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
   ensureJourneys();
-  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), can_edit: canEdit(user.role), roles: roleMap() };
+  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), can_edit: canEdit(user.role), can_assign: canAssign(user), roles: roleMap() };
 }
 
 export function view(id, user) {
   if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
-  const j = load(id), w = work(j);
+  const j = load(id); closeAutoTasks(j, user);
+  const w = work(j);
   const lab = (e, row, f) => (row ? { id: row.id, label: f(row) } : null);
-  return { ...summary(j), ...w, can_edit: canEdit(user.role), roles: roleMap(),
+  return { ...summary(j), ...w, can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, people: canAssign(user) ? people() : [], roles: roleMap(),
     links: { enquiry: lab('enquiries', j.enquiry, e => `${e.enquiry_no || e.id} · ${e.hospital_name || e.client_name || ''}`), order: lab('sales_orders', j.order, o => `${o.so_no || o.id}${o.client_po_no ? ` · PO ${o.client_po_no}` : ''}`),
       project: lab('projects', j.project, p => `${p.project_no || p.code || p.id} · ${p.name || ''}`) } };
 }
@@ -133,11 +140,113 @@ export function setStep(id, key, body, user) {
   const status = String(body?.status || ''), note = String(body?.note || '').trim().slice(0, 500) || null;
   if (!['done', 'na', 'open'].includes(status)) throw new HttpError(400, 'Choose done, not needed or open');
   load(id);
-  if (status === 'open') db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(id, key);
-  else db.prepare(`INSERT INTO journey_steps (journey_id, step, status, note, by_name, at) VALUES (?, ?, ?, ?, ?, datetime('now','localtime'))
-    ON CONFLICT (journey_id, step) DO UPDATE SET status = excluded.status, note = excluded.note, by_name = excluded.by_name, at = excluded.at`).run(id, key, status, note, user.name);
+  tx(() => {
+    if (status === 'open') db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(id, key);
+    else db.prepare(`INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, ?, ?, ?, datetime('now','localtime'), NULL)
+      ON CONFLICT (journey_id, step) DO UPDATE SET status = excluded.status, note = excluded.note, by_name = excluded.by_name, at = excluded.at, task_id = NULL`).run(id, key, status, note, user.name);
+    // the step's task follows: done, cancelled (not needed) or open again
+    const t = one("SELECT id, status FROM work_tasks WHERE journey_id = ? AND journey_step = ? ORDER BY id DESC LIMIT 1", id, key);
+    const want = status === 'done' ? 'Done' : status === 'na' ? 'Cancelled' : t && ['Done', 'Cancelled'].includes(t.status) ? 'To do' : null;
+    if (t && want && t.status !== want) updateRow('work_tasks', t.id, { status: want, ...(note ? { progress_note: note } : {}) }, user, { system: true });
+  });
   audit(user.name, 'journeys', Number(id), 'update', `${key}: ${status}${note ? ` (${note})` : ''}`);
   return view(id, user);
+}
+
+// ---------------------------------------------------------------- steps as tasks (stage 2)
+// A step is given to a person as a task in the Task Scheduler, with a deadline: it shows in their My tasks, they get a
+// pop-up, and when they mark it Done the step ticks itself (and the other way round).
+const canAssign = user => user.role === 'admin' || hasFunction(user.role, 'task_assign');
+const people = () => db.prepare('SELECT u.name, u.role, r.label FROM users u LEFT JOIN roles r ON r.name = u.role WHERE u.active = 1 ORDER BY u.name').all()
+  .map(u => ({ name: u.name, role: u.role, label: u.label || u.role }));
+const stepTasks = jid => {
+  const out = {};
+  for (const t of db.prepare("SELECT id, task_no, assigned_to, assigned_by, due_date, status, priority, journey_step FROM work_tasks WHERE journey_id = ? AND status <> 'Cancelled' ORDER BY id").all(jid)) out[t.journey_step] = t;
+  return out;
+};
+const flatSteps = x => { const flat = {}; for (const [k, v] of Object.entries(x)) { flat[k] = v; for (const p of v.subs || []) flat[p.key] = p; } return flat; };
+const stepTitle = key => { for (const s of STEPS) { if (s.key === key) return s.title; const p = s.subs?.find(x => x.key === key); if (p) return `${s.title}: ${p.title}`; } return key; };
+const stepNo = key => { const s = STEPS.find(x => x.key === key || x.subs?.some(p => p.key === key)); return s ? Number(s.key.slice(1)) : ''; };
+
+export function giveStep(id, key, body, user) {
+  if (!canEdit(user.role)) throw new HttpError(403, 'You cannot change the order journey');
+  if (!TICKABLE.has(key)) throw new HttpError(400, 'Unknown step');
+  const j = load(id);
+  const to = String(body?.assigned_to || '').trim();
+  const due = String(body?.due_date || '').slice(0, 10);
+  if (!to) throw new HttpError(400, 'Choose who does it');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) throw new HttpError(400, 'Choose the deadline');
+  if (!one('SELECT 1 FROM users WHERE active = 1 AND lower(name) = lower(?)', to)) throw new HttpError(400, `${to} has no active login`);
+  if (!canAssign(user) && to.toLowerCase() !== String(user.name).toLowerCase()) throw new HttpError(403, 'You can give a step to yourself only: ask your head to give it to someone else');
+  if (flatSteps(work(j).steps)[key]?.status !== 'open') throw new HttpError(409, 'This step is already finished');
+  const priority = ['Normal', 'High', 'Urgent', 'Low'].includes(body?.priority) ? body.priority : 'Normal';
+  const note = String(body?.note || '').trim().slice(0, 1000);
+  const old = one("SELECT * FROM work_tasks WHERE journey_id = ? AND journey_step = ? AND status NOT IN ('Done', 'Cancelled') ORDER BY id DESC LIMIT 1", id, key);
+  if (old) {
+    updateRow('work_tasks', old.id, { assigned_to: to, due_date: due, priority, ...(note ? { description: `${old.description || ''}\n${note}`.trim() } : {}) }, user);
+  } else {
+    const r = RACI[key] || {};
+    const title = `${titleOf(j)}: ${stepNo(key)}. ${stepTitle(key)}`;
+    insertRow('work_tasks', { title: title.slice(0, 200), assigned_to: to, priority, category: category(key), start_date: today(), due_date: due, status: 'To do',
+      project_id: j.project_id || null, customer_id: j.project?.customer_id || j.order?.customer_id || null, journey_id: j.id, journey_step: key,
+      description: [note, r.doc ? `Must be in the CRM: ${r.doc}` : null, r.a?.length ? `Approved by: ${r.a.map(roleLabel).join(' › ')}` : null, `Order journey: #/journey/${j.id}`].filter(Boolean).join('\n'),
+      checklist: r.doc ? [{ item: r.doc, done: '' }] : [] }, user, { system: true });
+  }
+  audit(user.name, 'journeys', Number(id), 'update', `${key}: given to ${to}, due ${due}`);
+  return view(id, user);
+}
+const roleLabel = r => one('SELECT label FROM roles WHERE name = ?', r)?.label || (r === 'client' ? 'Client' : r === 'vendor' ? 'Vendor' : r);
+const category = key => { const s = STEPS.find(x => x.key === key || x.subs?.some(p => p.key === key)); const r = RACI[key]?.r?.[0] || '';
+  return s?.kind === 'site' ? 'Site work' : /purchase|store/.test(r) ? 'Purchase' : /accounts|finance/.test(r) ? 'Accounts' : /design/.test(r) ? 'Design / R&D' : /production/.test(r) ? 'Production' : /sales/.test(r) ? 'Sales follow-up' : 'Office'; };
+
+// after any save of a task: a journey task marked Done ticks its step; reopened, it opens the step it ticked
+export function taskSaved(taskId, user) {
+  const t = db.prepare('SELECT id, task_no, journey_id, journey_step, status, progress_note, completed_by, assigned_to FROM work_tasks WHERE id = ?').get(taskId);
+  if (!t?.journey_id || !t.journey_step || !one('SELECT 1 FROM journeys WHERE id = ?', t.journey_id)) return;
+  const s = one('SELECT * FROM journey_steps WHERE journey_id = ? AND step = ?', t.journey_id, t.journey_step);
+  if (t.status === 'Done' && !s) {
+    db.prepare("INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, 'done', ?, ?, datetime('now','localtime'), ?)")
+      .run(t.journey_id, t.journey_step, [`Task ${t.task_no}`, t.progress_note].filter(Boolean).join(': ').slice(0, 500), t.completed_by || user?.name || t.assigned_to, t.id);
+    audit(user?.name, 'journeys', t.journey_id, 'update', `${t.journey_step}: done (task ${t.task_no})`);
+  } else if (t.status !== 'Done' && s?.task_id === t.id) {
+    db.prepare('DELETE FROM journey_steps WHERE journey_id = ? AND step = ?').run(t.journey_id, t.journey_step);
+    audit(user?.name, 'journeys', t.journey_id, 'update', `${t.journey_step}: open again (task ${t.task_no} reopened)`);
+  }
+}
+
+// a step the CRM ticked by itself (an approved quotation, a PO …) closes its task
+function closeAutoTasks(j, user) {
+  const open = db.prepare("SELECT id, journey_step FROM work_tasks WHERE journey_id = ? AND status NOT IN ('Done', 'Cancelled')").all(j.id);
+  if (!open.length) return;
+  const flat = flatSteps(work(j).steps);
+  for (const t of open) if (flat[t.journey_step]?.auto) updateRow('work_tasks', t.id, { status: 'Done', progress_note: `The CRM records it: ${flat[t.journey_step].fact?.text || ''}` }, { name: 'system', role: 'admin' }, { system: true });
+}
+
+// the team: everyone's open tasks (journey steps first), late and due this week, and the next steps nobody has yet
+export function team(user) {
+  if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
+  if (!canAssign(user)) throw new HttpError(403, 'Only people who give tasks see the team view');
+  ensureJourneys();
+  const soon = (() => { const x = new Date(); x.setDate(x.getDate() + 7); return x.toLocaleString('sv-SE').slice(0, 10); })();
+  const rows = db.prepare("SELECT t.id, t.task_no, t.title, t.assigned_to, t.assigned_by, t.due_date, t.status, t.priority, t.journey_id, t.journey_step FROM work_tasks t WHERE t.status NOT IN ('Done', 'Cancelled') ORDER BY t.due_date, t.id").all();
+  const byPerson = new Map();
+  for (const u of people()) byPerson.set(u.name.toLowerCase(), { name: u.name, role: u.label, tasks: [] });
+  for (const t of rows) {
+    const k = String(t.assigned_to || '').trim().toLowerCase(); if (!byPerson.has(k)) byPerson.set(k, { name: t.assigned_to || '—', role: 'no active login', tasks: [] });
+    byPerson.get(k).tasks.push({ ...t, late: !!t.due_date && t.due_date < today(), soon: !!t.due_date && t.due_date <= soon });
+  }
+  const team = [...byPerson.values()].filter(p => p.tasks.length).map(p => ({ ...p, late: p.tasks.filter(t => t.late).length, week: p.tasks.filter(t => t.soon && !t.late).length,
+    journey: p.tasks.filter(t => t.journey_id).length })).sort((a, b) => b.late - a.late || b.tasks.length - a.tasks.length);
+  // the next step of every order that is not finished, when nobody has it as a task
+  const waiting = [];
+  for (const r of db.prepare('SELECT id FROM journeys ORDER BY id DESC').all()) {
+    const j = load(r.id), w = work(j);
+    if (!w.next) continue;
+    const st = STEPS.find(s => s.key === w.next), x = w.steps[w.next];
+    const parts = st.subs ? x.subs.filter(p => p.status === 'open' && !p.task).map(p => ({ key: p.key, title: `${st.title}: ${p.title}` })) : x.task || st.derived ? [] : [{ key: st.key, title: st.title }];
+    for (const p of parts) waiting.push({ journey_id: j.id, order: titleOf(j), step: p.key, no: stepNo(p.key), title: p.title, does: (RACI[p.key]?.r || []).map(roleLabel) });
+  }
+  return { team, waiting, today: today(), people: people(), roles: roleMap(), can_edit: canEdit(user.role) };
 }
 
 // link the enquiry, sales order or project of this order; one that started a journey of its own on its own is merged in

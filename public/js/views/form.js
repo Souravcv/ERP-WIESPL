@@ -551,6 +551,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (row.status === 'To do' || row.status === 'Waiting') A.push(h('button.btn', { onclick: set('In progress') }, '▶ Start'));
       if (!['Done', 'Cancelled'].includes(row.status)) A.push(h('button.btn.good', { onclick: set('Done') }, '✔ Done'));
       if (row.status === 'Done') A.push(h('button.btn', { onclick: set('In progress') }, '↺ Reopen'));
+      if (row.journey_id) A.push(h('a.btn', { href: `#/journey/${row.journey_id}` }, '🧭 Open the order journey'));
       A.push(h('a.btn', { href: '#/taskboard' }, '🗂️ Task board'));
       break;
     }

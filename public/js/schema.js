@@ -1331,6 +1331,8 @@ export const ENTITIES = {
       { key: 'completed_at', label: 'Completed At', type: 'text', readonly: true },
       { key: 'completed_by', label: 'Completed By', type: 'text', readonly: true },
       { key: 'parent_id', label: 'Repeats', type: 'number', hidden: true },
+      { key: 'journey_id', label: 'Order journey', type: 'number', hidden: true, readonly: true },
+      { key: 'journey_step', label: 'Journey step', type: 'text', hidden: true, readonly: true },
       { key: 'overdue', label: 'Overdue', type: 'yn', computed: "CASE WHEN {t}.status NOT IN ('Done', 'Cancelled') AND {t}.due_date < date('now', 'localtime') THEN 'Yes' ELSE '' END" },
     ],
   },

@@ -1,7 +1,7 @@
 // The order journey (public/js/journey.js): every order on a board by the phase it is in, and one order's 41 steps in
 // six columns, as on the End-to-End Flow sheet. Steps tick by hand (done / not needed, with a note) or by themselves
 // when the CRM already records the fact.
-import { h, api, toast, fail, busy, modal, fmtDate } from '../ui.js';
+import { h, api, toast, fail, busy, modal, fmtDate, today } from '../ui.js';
 import { PHASES, STEPS, RACI } from '../journey.js';
 
 const KIND = { start: 'Start / milestone', gate: 'Approval or check', client: 'Client', vendor: 'Vendor', site: 'Site', end: 'Handover', step: 'Step' };
@@ -15,11 +15,40 @@ const raciLines = (roles, key) => { const x = RACI[key]; if (!x) return null;
   return h('div.jr-raci', h('div', h('span.jr-rk', 'Does'), roleList(roles, x.r)), x.a.length ? h('div', h('span.jr-rk', 'Approves'), roleList(roles, x.a)) : null,
     h('div', h('span.jr-rk', 'By'), x.due), h('div', h('span.jr-rk', 'Needs'), x.doc)); };
 
+// the deadline a step starts with: its own (from the step before), or the RACI rule counted from today
+const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
+const defaultDue = (key, due) => { if (due) return due; const rule = RACI[key]?.due || '';
+  const m = rule.match(/(\d+) days?/); return addDays(today(), /same day/i.test(rule) ? 0 : m ? Number(m[1]) : 3); };
+
+// give a step (or a part of one) to a person as a task with a deadline; resolves true when given
+async function giveStep(jid, key, title, { task, due, people, roles, me, canAssign }) {
+  const doers = new Set((RACI[key]?.r || []).flatMap(r => roles?.[r]?.people || []));
+  const list = canAssign ? [...people].sort((a, b) => (doers.has(b.name) - doers.has(a.name)) || a.name.localeCompare(b.name)) : [{ name: me, label: 'you' }];
+  const who = h('select', list.map(u => h('option', { value: u.name }, `${doers.has(u.name) ? '★ ' : ''}${u.name} (${u.label})`)));
+  who.value = task?.assigned_to || list[0]?.name || '';
+  const date = h('input', { type: 'date', value: task?.due_date || defaultDue(key, due) });
+  const pri = h('select', ['Normal', 'High', 'Urgent', 'Low'].map(x => h('option', x))); pri.value = task?.priority || 'Normal';
+  const note = h('textarea', { rows: 2, placeholder: 'What to do, or anything they should know (optional)' });
+  const r = RACI[key];
+  const body = h('div.form-grid', { style: { display: 'grid', gap: '8px' } },
+    r ? h('div.muted', `Does it: ${(r.r || []).map(x => roles?.[x]?.label || x).join(', ')} · Deadline rule: ${r.due}`) : null,
+    h('label', 'Who does it', who), canAssign ? h('div.muted', '★ = has the role that does this step') : null,
+    h('label', 'Deadline', date), h('label', 'Priority', pri), h('label', 'Note', note),
+    r?.doc ? h('div.muted', `They tick it Done when this is in the CRM: ${r.doc}`) : null);
+  const ok = await modal(task ? `Change: ${title}` : `Give as a task: ${title}`, body, [{ label: 'Cancel', value: false }, { label: task ? 'Save' : '📌 Give', cls: 'primary', value: true }]);
+  if (!ok) return false;
+  await api(`/journeys/${jid}/steps/${key}/give`, { method: 'POST', body: { assigned_to: who.value, due_date: date.value, priority: pri.value, note: note.value } });
+  toast(`Given to ${who.value}, due ${fmtDate(date.value)}`);
+  return true;
+}
+
 export async function journeyView(root, id) {
   if (id === 'raci') return raciView(root);
+  if (id === 'team') return teamView(root);
   if (id) return detail(root, Number(id));
-  const { journeys } = await api('/journeys');
-  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'), h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
+  const { journeys, can_assign } = await api('/journeys');
+  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'),
+    can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
   const cols = PHASES.map(p => {
     const here = journeys.filter(j => !j.done && j.phase === p.no);
     return h('div.jr-col', { style: `--ph:${p.colour}` },
@@ -48,7 +77,8 @@ async function detail(root, id) {
   const draw = async () => {
     d = await api(`/journeys/${id}`);
     const pct = Math.round((d.finished / d.total) * 100);
-    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', h('a.btn', { href: '#/journey/raci' }, '📋 Who does what'), h('a.btn', { href: '#/journey' }, '← All orders')));
+    const head = h('div.page-head', h('h1', '🧭 ', d.title), h('div.actions', d.can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null,
+      h('a.btn', { href: '#/journey/raci' }, '📋 Who does what'), h('a.btn', { href: '#/journey' }, '← All orders')));
     root.replaceChildren(head,
       h('div.card.jr-summary',
         h('div.jr-links', linkBox('Enquiry', 'enquiry', 'enquiries', 'enquiry_id'), linkBox('Sales order', 'order', 'sales_orders', 'sales_order_id'), linkBox('Project', 'project', 'projects', 'project_id')),
@@ -97,10 +127,16 @@ async function detail(root, id) {
     const info = x.auto && x.fact ? h('div.jr-fact', h('a', { href: x.fact.href }, x.fact.text), x.date ? ` · ${fmtDate(x.date)}` : '')
       : x.status !== 'open' ? h('div.jr-fact', `${x.by || ''}${x.at ? ` · ${fmtDate(x.at.slice(0, 10))}` : ''}`, x.note ? h('div', `“${x.note}”`) : null) : null;
     const due = x.due ? h('div', { class: x.late ? 'jr-late' : 'muted' }, `Due ${fmtDate(x.due)}`) : null;
+    const t = x.task;
+    const task = t ? h('div.jr-task', '📌 ', h('a', { href: `#/view/work_tasks/${t.id}` }, t.assigned_to), ` · ${t.task_no || 'task'} · ${t.status}`) : null;
+    const give = () => giveStep(id, key, title, { task: t, due: x.due, people: d.people, roles: d.roles, me: d.me, canAssign: d.can_assign }).then(ok => ok && draw()).catch(fail);
+    const mine = t && t.assigned_to?.toLowerCase() === String(d.me).toLowerCase();
+    const giveBtn = !d.can_edit || x.status !== 'open' ? null : d.can_assign ? h('button.btn.small', { type: 'button', onclick: give }, t ? 'Change' : '📌 Give')
+      : !t ? h('button.btn.small', { type: 'button', onclick: give }, "🙋 I'll do it") : null;
     const btns = !d.can_edit || x.auto ? null : x.status === 'open'
-      ? h('div.jr-btns', h('button.btn.small.primary', { type: 'button', onclick: busy(() => tick(key, 'done', title)) }, '✓ Done'), h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'na', title)) }, 'Not needed'))
+      ? h('div.jr-btns', h('button.btn.small.primary', { type: 'button', onclick: busy(() => tick(key, 'done', title)) }, '✓ Done'), h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'na', title)) }, 'Not needed'), giveBtn)
       : h('div.jr-btns', h('button.btn.small', { type: 'button', onclick: busy(() => tick(key, 'open', title)) }, 'Undo'));
-    return [chip, info, due, btns];
+    return [chip, info, task, due, mine && x.status === 'open' ? h('div.jr-mine', 'Yours') : null, btns];
   };
   const stepCard = s => {
     const x = d.steps[s.key];
@@ -130,4 +166,23 @@ async function raciView(root) {
     h('div.card.flush.table-wrap', h('table.data.jr-raci-table', h('thead', h('tr', ['Phase', 'Step', 'Does (R)', 'Approves (A)', 'Gives input (C)', 'Is told (I)', 'Deadline', 'Must be in the CRM'].map(t => h('th', t)))),
       h('tbody', rows.map(rw => { const x = RACI[rw.key] || {}; const ph = PHASES[rw.phase - 1];
         return h('tr', h('td', h('span.jr-dot', { style: `--ph:${ph.colour}` }), ph.no), h('td', h('b', rw.no)), h('td', roleList(roles, x.r)), h('td', roleList(roles, x.a)), h('td', roleList(roles, x.c)), h('td', roleList(roles, x.i)), h('td', x.due || ''), h('td', x.doc || '')); })))));
+}
+
+// the team: everyone's open tasks (late first), and the next step of each order that nobody has yet
+async function teamView(root) {
+  const d = await api('/journeys/team');
+  const draw = () => teamView(root).catch(fail);
+  const row = t => h('div', { class: `jr-ttask${t.late ? ' late' : ''}` },
+    h('a', { href: t.journey_id ? `#/journey/${t.journey_id}` : `#/view/work_tasks/${t.id}` }, t.journey_id ? '🧭 ' : '', t.title),
+    h('span', { class: t.late ? 'jr-late' : 'muted' }, t.due_date ? ` · due ${fmtDate(t.due_date)}` : ''), h('span.muted', ` · ${t.status}`));
+  root.replaceChildren(h('div.page-head', h('h1', '👥 Team'), h('div.actions', h('a.btn', { href: '#/taskboard' }, '🗂️ Task board'), h('a.btn', { href: '#/journey' }, '← Order Journey'))),
+    h('p.muted', 'What everyone has open, late first. 🧭 = a step of an order journey. Below them: the next step of each order that nobody has been given yet.'),
+    h('div.jr-team', d.team.length ? d.team.map(p => h('div.card.jr-person',
+      h('div.jr-phead', h('b', p.name), h('span.muted', p.role), h('span.jr-counts', p.late ? h('span.jr-late', `${p.late} late`) : null, ` ${p.week} this week · ${p.tasks.length} open`)),
+      p.tasks.slice(0, 12).map(row), p.tasks.length > 12 ? h('div.muted', `+ ${p.tasks.length - 12} more`) : null)) : h('p.muted', 'No open tasks.')),
+    h('div.card', h('h2', `⏳ Next steps nobody has (${d.waiting.length})`),
+      d.waiting.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Order', 'Step', 'Done by', ''].map(x => h('th', x)))),
+        h('tbody', d.waiting.map(w => h('tr', h('td', h('a', { href: `#/journey/${w.journey_id}` }, w.order)), h('td', `${w.no}. ${w.title}`), h('td', w.does.join(', ')),
+          h('td', d.can_edit ? h('button.btn.small', { type: 'button', onclick: () => giveStep(w.journey_id, w.step, w.title, { people: d.people, roles: d.roles, canAssign: true }).then(ok => ok && draw()).catch(fail) }, '📌 Give') : null))))))
+        : h('p.muted', 'Every order has its next step given to someone.')));
 }

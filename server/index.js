@@ -691,7 +691,9 @@ api.get('/production/quality', wrap(req => { if (!canView('qc_inspections', req.
 api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.completeInspection(req.params.id, req.user)));
 // the order journey: one per order, from the enquiry to the OT handover (server/journey.js)
 api.get('/journeys', wrap(req => journey.list(req.user)));
+api.get('/journeys/team', wrap(req => journey.team(req.user)));
 api.get('/journeys/:id', wrap(req => journey.view(Number(req.params.id), req.user)));
+api.post('/journeys/:id/steps/:step/give', wrap(req => journey.giveStep(Number(req.params.id), req.params.step, req.body, req.user)));
 api.post('/journeys/:id/steps/:step', wrap(req => journey.setStep(Number(req.params.id), req.params.step, req.body, req.user)));
 api.put('/journeys/:id/links', wrap(req => journey.setLinks(Number(req.params.id), req.body, req.user)));
 api.get('/project-qc/:id', wrap(req => qcp.board(req.params.id, req.user)));

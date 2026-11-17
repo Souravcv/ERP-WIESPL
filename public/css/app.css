@@ -830,3 +830,13 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-role.nobody { color: var(--warn); text-decoration: underline dotted; }
 .jr-raci-table td { vertical-align: top; font-size: 12.5px; }
 .jr-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--ph); margin-right: 6px; }
+
+/* order journey: steps as tasks, team view */
+.jr-task { font-size: 12px; margin-top: 4px; }
+.jr-mine { display: inline-block; font-size: 11px; font-weight: 600; color: var(--accent, #2563eb); margin-top: 2px; }
+.jr-team { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; margin-top: 12px; }
+.jr-person { margin: 0; }
+.jr-phead { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.jr-counts { margin-left: auto; font-size: 12px; }
+.jr-ttask { font-size: 13px; padding: 4px 0; border-top: 1px solid var(--line, #e5e7eb); }
+.jr-ttask.late a { color: var(--bad); }
