@@ -693,6 +693,8 @@ api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.comp
 api.get('/journeys', wrap(req => journey.list(req.user)));
 api.get('/journeys/team', wrap(req => journey.team(req.user)));
 api.get('/journeys/dashboard', wrap(req => journey.dashboard(req.user)));
+api.get('/journeys/guide', wrap(req => journey.guide(req.user)));
+api.put('/journeys/pilot', wrap(req => journey.setPilot(req.body, req.user)));
 api.get('/journeys/:id', wrap(req => journey.view(Number(req.params.id), req.user)));
 api.post('/journeys/:id/site-plan', wrap(req => journey.makeSitePlan(Number(req.params.id), req.body, req.user)));
 api.post('/journeys/:id/steps/:step/files', express.raw({ type: () => true, limit: '200mb' }), wrap(req => journey.addFile(Number(req.params.id), req.params.step, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user)));

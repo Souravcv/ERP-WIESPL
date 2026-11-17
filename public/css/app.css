@@ -879,3 +879,16 @@ table.data tbody tr:hover { background: color-mix(in srgb, var(--brand-2) 5%, tr
 .jr-pb { display: grid; grid-template-columns: minmax(120px, 240px) 1fr 40px; gap: 8px; align-items: center; font-size: 13px; }
 .jr-pbtrack { background: var(--chip, #f1f5f9); border-radius: 6px; height: 14px; overflow: hidden; }
 .jr-pbtrack span { display: block; height: 100%; }
+
+/* order journey: pilot and role guide */
+.jr-pilot { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: .05em; background: #7c3aed; color: #fff; border-radius: 4px; padding: 1px 5px; margin-right: 6px; vertical-align: middle; }
+.jr-checks { display: grid; gap: 8px; margin: 10px 0; }
+.jr-check { display: flex; gap: 10px; align-items: center; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line, #e5e7eb); }
+.jr-check > div { flex: 1; }
+.jr-check.ok { background: #f0fdf4; }
+.jr-check.ok .jr-tick { color: #15803d; }
+.jr-check.todo .jr-tick { color: #b45309; }
+.jr-tick { font-size: 18px; font-weight: 700; width: 20px; text-align: center; }
+.jr-pilotline { margin-top: 10px; font-size: 14px; }
+@media (prefers-color-scheme: dark) { .jr-check.ok { background: transparent; } }
+@media print { .sidebar, nav, .page-head .actions, .jr-btns { display: none !important; } }

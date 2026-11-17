@@ -131,7 +131,7 @@ const summary = j => { const w = work(j); return { id: j.id, title: titleOf(j), 
 export function list(user) {
   if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
   ensureJourneys();
-  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), can_edit: canEdit(user.role), can_assign: canAssign(user), roles: roleMap() };
+  return { journeys: db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => summary(load(r.id))), pilot: pilotId(), can_edit: canEdit(user.role), can_assign: canAssign(user), roles: roleMap() };
 }
 
 export function view(id, user) {
@@ -549,4 +549,47 @@ export function dashboard(user) {
     week: w.steps.filter(x => !x.late && x.due && x.due <= addDays(w.today, 7)).sort((a, b) => a.due.localeCompare(b.due)),
     approvals: w.approvals.sort((a, b) => b.days - a.days),
     people: [...byPerson].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n) };
+}
+
+// ---------------------------------------------------------------- pilot and rollout (stage 7)
+// One real order runs through the journey first. The guide page shows the pilot checklist (worked out from the data)
+// and, for each role, its steps and daily routine.
+const pilotId = () => { const v = Number(getSettings().journey_pilot) || null; return v && one('SELECT 1 FROM journeys WHERE id = ?', v) ? v : null; };
+export function guide(user) {
+  if (!canSee(user.role)) throw new HttpError(403, 'You do not have access to the order journeys');
+  ensureJourneys();
+  const roles = roleMap(), pid = pilotId(), lead = canAssign(user);
+  const used = [...new Set(Object.values(RACI).flatMap(x => [...x.r, ...x.a]))].filter(r => roles[r] && !roles[r].outside);
+  const out = { roles, my_role: user.role, can_lead: lead, pilot: null, checks: null,
+    orders: lead ? db.prepare('SELECT id FROM journeys ORDER BY id DESC').all().map(r => { const j = load(r.id); return { id: r.id, title: titleOf(j), refs: refsOf(j) }; }) : [] };
+  if (pid) {
+    const j = load(pid), w = work(j), flat = flatSteps(w.steps);
+    const keys = [...TICKABLE].filter(k => flat[k]);
+    out.pilot = { ...summary(j), tasks: keys.filter(k => flat[k].task).length, docs: keys.filter(k => flat[k].files?.length).length,
+      approvals: one("SELECT COUNT(*) n FROM approvals WHERE doc_type = ? AND doc_id = ?", JOURNEY_DOC, pid).n, site_plan: !!sitePlan(j) };
+  }
+  if (lead) {
+    const nobody = used.filter(r => !roles[r].people.length);
+    const year = String(Number(today().slice(0, 4)) + (today().slice(5, 7) >= '10' ? 1 : 0));
+    const crewUnknown = one("SELECT COUNT(*) n FROM schedule_activities WHERE journey_step IS NOT NULL AND crew IS NULL AND party = 'WIESPL' AND kind = 'Activity'").n;
+    out.checks = [
+      { ok: !nobody.length, title: 'Every role in "Who does what" has a person', detail: nobody.length ? `Nobody has: ${nobody.map(r => roles[r].label).join(', ')}. Give the roles under Admin → Users.` : 'All roles have a person.', link: '#/users' },
+      { ok: !!pid, title: 'Pilot order chosen', detail: pid ? out.pilot.title : 'Choose one real order below: it runs through every step first.' },
+      { ok: !!out.pilot?.tasks, title: 'Pilot: steps given to people as tasks', detail: out.pilot ? `${out.pilot.tasks} step(s) given as tasks` : 'After the pilot order is chosen', link: '#/journey/team' },
+      { ok: !!out.pilot?.docs, title: 'Pilot: documents attached to the steps', detail: out.pilot ? `${out.pilot.docs} step(s) with documents` : '—' },
+      { ok: !!out.pilot?.approvals, title: 'Pilot: a gate sent for approval', detail: out.pilot ? `${out.pilot.approvals} approval(s)` : '—' },
+      { ok: !!out.pilot?.site_plan, title: 'Pilot: site plan made from the dispatch day', detail: out.pilot ? (out.pilot.site_plan ? 'Made' : 'On the order\'s journey, once it has a project') : '—' },
+      { ok: !!one("SELECT 1 FROM holidays WHERE date LIKE ?", `${year}-%`), title: `Holidays of ${year} entered (site plans skip them)`, detail: 'HR → Holidays', link: '#/list/holidays' },
+      { ok: !crewUnknown, title: 'Crew known for every site activity', detail: crewUnknown ? `${crewUnknown} site activit${crewUnknown === 1 ? 'y has' : 'ies have'} no crew yet (the site notes do not give it): set it in the Project Planner` : 'All set' },
+    ];
+  }
+  return out;
+}
+export function setPilot(body, user) {
+  if (!canAssign(user)) throw new HttpError(403, 'Only people who give tasks choose the pilot order');
+  const id = body?.journey_id ? Number(body.journey_id) : null;
+  if (id) load(id);
+  db.prepare("INSERT INTO settings (key, value) VALUES ('journey_pilot', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(id));
+  audit(user.name, 'journeys', id, 'update', id ? 'chosen as the pilot order' : 'pilot order cleared');
+  return guide(user);
 }

@@ -46,15 +46,16 @@ export async function journeyView(root, id) {
   if (id === 'raci') return raciView(root);
   if (id === 'team') return teamView(root);
   if (id === 'dashboard') return journeyDashboard(root);
+  if (id === 'guide') return guideView(root);
   if (id) return detail(root, Number(id));
-  const { journeys, can_assign } = await api('/journeys');
+  const { journeys, can_assign, pilot } = await api('/journeys');
   const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'),
-    h('a.btn', { href: '#/journey/dashboard' }, '📊 Dashboard'), can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
+    h('a.btn', { href: '#/journey/guide' }, '📘 Pilot & my part'), h('a.btn', { href: '#/journey/dashboard' }, '📊 Dashboard'), can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
   const cols = PHASES.map(p => {
     const here = journeys.filter(j => !j.done && j.phase === p.no);
     return h('div.jr-col', { style: `--ph:${p.colour}` },
       h('div.jr-colhead', h('span.jr-no', p.no), h('div', h('b', p.title), h('div.muted', p.sub)), h('span.jr-count', here.length)),
-      here.length ? here.map(card) : h('p.muted.jr-empty', 'No order here'));
+      here.length ? here.map(j => card(j, pilot)) : h('p.muted.jr-empty', 'No order here'));
   });
   const done = journeys.filter(j => j.done);
   root.replaceChildren(head,
@@ -63,10 +64,10 @@ export async function journeyView(root, id) {
     done.length ? h('div.card', h('h2', `✅ Handed over (${done.length})`), h('div.jr-done', done.map(card))) : null);
 }
 
-function card(j) {
+function card(j, pilot) {
   const pct = Math.round((j.finished / j.total) * 100);
   return h('a.jr-card', { href: `#/journey/${j.id}` },
-    h('div.jr-title', j.title, j.late ? h('span.jr-late', 'Late') : null),
+    h('div.jr-title', j.id === pilot ? h('span.jr-pilot', 'PILOT') : null, j.title, j.late ? h('span.jr-late', 'Late') : null),
     j.refs.length ? h('div.muted.jr-refs', j.refs.join(' · ')) : null,
     h('div.jr-bar', h('span', { style: { width: `${pct}%` } })),
     h('div.jr-next', h('span.muted', `${j.finished}/${j.total} · next: `), j.next_title),
@@ -297,4 +298,47 @@ export async function journeyDashboard(root, { embedded = false } = {}) {
       h('tbody', d.approvals.map(a => h('tr', h('td', h('a', { href: `#/journey/${a.journey_id}` }, a.order)), h('td', h('a', { href: `#/view/approvals/${a.id}` }, `${a.no}. ${a.title}`)),
         h('td', a.with, a.who.length ? h('div.muted', a.who.join(', ')) : h('div.jr-late', 'nobody has this role')), h('td.nowrap', { class: a.days >= 2 ? 'jr-late' : '' }, `${a.days} day${a.days === 1 ? '' : 's'}`))))))
       : h('p.muted', 'No approvals waiting.')));
+}
+
+// the pilot checklist (for the people who lead it) and each role's part: its steps and its daily routine
+const ROUTINE = [
+  ['Every morning', 'Open ✅ My tasks: your journey steps, the tasks given to you, and the approvals waiting for you. Late ones are red.'],
+  ['Doing a step', 'Open the order (🧭 link), do the work, attach the document (📎 + Attach), then press ✓ Done. A check or decision step asks for a written note instead.'],
+  ['A gate', 'Press 📨 Send for approval. The approvers decide in order; the last approval ticks the step. If rejected, the reason comes back to you: fix it and send again.'],
+  ['Approving', 'Approve or reject on the order (or in Approvals) the same day. Write what has to change when you reject.'],
+  ['A task given to you', 'Mark it Done when the step is done: the step ticks itself (a gate goes for approval).'],
+  ['Heads', 'Every day: 👥 Team page: give the next steps that nobody has, with a deadline; check what is late on 📊 Dashboard.'],
+  ['Site', 'Site steps have their days and crew from the site plan. Attach the day\'s photos and tick the step when it is finished.'],
+];
+async function guideView(root) {
+  const d = await api('/journeys/guide');
+  const pick = h('select', Object.entries(d.roles).filter(([, x]) => !x.outside).sort((a, b) => a[1].label.localeCompare(b[1].label)).map(([k, x]) => h('option', { value: k }, x.label)));
+  pick.value = d.roles[d.my_role] ? d.my_role : 'project_head';
+  const partBox = h('div');
+  const rows = STEPS.flatMap(st => (st.subs ? st.subs.map(p => ({ key: p.key, no: st.key.slice(1), title: `${st.title}: ${p.title}` })) : st.derived ? [] : [{ key: st.key, no: st.key.slice(1), title: st.title }]));
+  const showPart = () => {
+    const r = pick.value, label = d.roles[r]?.label || r;
+    const of = (kind) => rows.filter(x => RACI[x.key]?.[kind]?.includes(r));
+    const list = (items, extra) => (items.length ? h('table.data', h('tbody', items.map(x => h('tr', h('td.nowrap', h('b', x.no)), h('td', x.title), h('td.muted', extra(RACI[x.key])))))) : h('p.muted', 'None'));
+    partBox.replaceChildren(
+      h('p', h('b', label), d.roles[r]?.people.length ? `: ${d.roles[r].people.join(', ')}` : h('span.jr-late', ' – nobody has this role yet')),
+      h('h3', `You do (${of('r').length})`), list(of('r'), x => [`By: ${x.due}`, `Needs: ${x.doc}`].join(' · ')),
+      h('h3', `You approve (${of('a').length})`), list(of('a'), x => `Done by: ${x.r.map(k => d.roles[k]?.label || k).join(', ')}`),
+      h('h3', `You give input (${of('c').length})`), list(of('c'), x => `Asked by: ${x.r.map(k => d.roles[k]?.label || k).join(', ')}`),
+      h('h3', `You are told (${of('i').length})`), list(of('i'), () => ''));
+  };
+  pick.onchange = showPart; showPart();
+  const choose = d.can_lead ? (() => {
+    const sel = h('select', h('option', { value: '' }, '— none —'), d.orders.map(o => h('option', { value: o.id }, `${o.title}${o.refs.length ? ` (${o.refs.join(' · ')})` : ''}`)));
+    sel.value = d.pilot?.id || '';
+    return h('div.jr-btns', h('label', 'Pilot order ', sel), h('button.btn.primary', { type: 'button', onclick: busy(async () => { await api('/journeys/pilot', { method: 'PUT', body: { journey_id: sel.value || null } }); toast('Saved'); await guideView(root); }) }, 'Save'));
+  })() : null;
+  root.replaceChildren(
+    h('div.page-head', h('h1', '📘 Pilot & my part'), h('div.actions', h('button.btn', { type: 'button', onclick: () => window.print() }, '🖨 Print'), h('a.btn', { href: '#/journey' }, '← Order Journey'))),
+    d.checks ? h('div.card', h('h2', '🚦 Pilot checklist'), h('p.muted', 'One real order goes through every step first, with the real people. When it has reached handover, the next orders follow.'),
+      h('div.jr-checks', d.checks.map(c => h('div', { class: `jr-check ${c.ok ? 'ok' : 'todo'}` }, h('span.jr-tick', c.ok ? '✓' : '○'), h('div', h('b', c.title), h('div.muted', c.detail)), c.link && !c.ok ? h('a.btn.small', { href: c.link }, 'Open') : null))),
+      choose,
+      d.pilot ? h('div.jr-pilotline', h('span.jr-pilot', 'PILOT'), h('a', { href: `#/journey/${d.pilot.id}` }, d.pilot.title), ` · ${d.pilot.finished} of ${d.pilot.total} steps · next: ${d.pilot.next_title}`) : null) : null,
+    h('div.card', h('h2', '🗓 Every day in the CRM'), h('table.data', h('tbody', ROUTINE.map(([a, b]) => h('tr', h('td.nowrap', h('b', a)), h('td', b)))))),
+    h('div.card', h('div.jr-sitehead', h('h2', '🧩 Your part in the order journey'), h('label', 'Role ', pick)), partBox));
 }
