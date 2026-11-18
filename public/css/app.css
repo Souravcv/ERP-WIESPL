@@ -1009,3 +1009,6 @@ span.ai-chip { color: var(--text-2); }
 .inv-info, .inv-sum { width: 100%; margin: 0; }
 .inv-terms { margin: 0; padding-left: 18px; }
 .inv-terms li { margin: 1px 0; }
+
+/* role editor: screens & visibility */
+.role-screens { border: 1px solid var(--border, #e5e7eb); background: var(--bg, #f8fafc); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }

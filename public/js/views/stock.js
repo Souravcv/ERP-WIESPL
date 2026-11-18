@@ -13,6 +13,15 @@ const NO_PO_REASONS = ['Material received on urgent production requirement.', 'M
 const RETURN_REASONS = ['Unused Material – Site Work Completed', 'Excess Material – Site Requirement Completed', 'Reusable Material – Returned from Site', 'Faulty', 'Rework', 'Excess', 'Physical count'];
 const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
+// the HSN codes already in use (item master, POs, challans), loaded once for the GRN's HSN boxes
+function hsnList() {
+  if (!document.getElementById('dl-hsn-grn')) {
+    const dl = h('datalist', { id: 'dl-hsn-grn' });
+    document.body.append(dl);
+    api('/items/hsn-codes').then(rows => dl.replaceChildren(...rows.map(r => h('option', { value: r.value, label: r.label })))).catch(() => {});
+  }
+  return 'dl-hsn-grn';
+}
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
 const DRAFTED = ['OUTWARD', 'TRANSFER']; // saved as a draft; the store posts it
 const CHALLAN_KEYS = ['vendor_id', 'ship_to', 'receiver_name', 'site_contact', 'section', 'vehicle_no', 'driver', 'porter_amount', 'challan_type'];
@@ -259,7 +268,8 @@ export async function stockEntryView(root) {
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store', 'Production'])), field('To *', sv('to_location', ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'])));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
-    if (['RETURN', 'SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : type === 'RETURN' ? RETURN_REASONS : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
+    if (type === 'RETURN') F.push(field('Reason for Entry *', v('reason', h('select', [''].concat(RETURN_REASONS).map(o => h('option', { value: o }, o || '— choose the reason —'))))));
+    else if (['SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
     F.push(h('label.span-2', 'Remarks', v('remarks', h('input'))));
     if (type === 'TRANSFER' && !header.from_location) header.from_location = 'Store';
     return F;
@@ -292,6 +302,8 @@ export async function stockEntryView(root) {
         po && type === 'INWARD' ? h('td', { style: { minWidth: '280px' } }, poPicker(l)) : null,
         h('td', itemPicker(itemOpts, l.item_id, { onPick: id => { l.item_id = id; if (!priced) l.rate = null; render(); } }),
           null),
+        // HSN of the material received: from the PO line or the item, else typed / chosen from the codes already in use
+        type === 'INWARD' ? h('td', h('input', { value: l.hsn ?? it?.hsn ?? '', list: hsnList(), placeholder: 'HSN', style: { width: '100px' }, oninput: e => { l.hsn = e.target.value.trim(); } })) : null,
         stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         type === 'INWARD' ? h('td', h('input', { value: l.batch_no || '', placeholder: 'batch / lot', style: { width: '100px' }, oninput: e => { l.batch_no = e.target.value; } })) : null,
         type === 'INWARD' ? h('td', h('input', { value: l.rack ?? it?.location ?? '', placeholder: 'rack / bin', style: { width: '90px' }, oninput: e => { l.rack = e.target.value; } })) : null,
@@ -303,7 +315,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, po && type === 'INWARD' ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), type === 'INWARD' ? h('th', 'HSN Code') : null, h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, po && type === 'INWARD' ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
@@ -330,6 +342,7 @@ export async function stockEntryView(root) {
   }
 
   async function save(allowNegative = false, allowReserved = false) {
+    if (type === 'RETURN' && !header.reason) throw new Error('Choose the reason for the return');
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(po && type === 'INWARD' && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };

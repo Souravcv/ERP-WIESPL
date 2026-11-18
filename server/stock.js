@@ -115,6 +115,7 @@ export function stockEntry(body, user) {
         }, user, { system: true });
         created.push(row.id);
       }
+      if (type === 'INWARD' && l.hsn) db.prepare("UPDATE items SET hsn = ? WHERE id = ? AND TRIM(COALESCE(hsn, '')) = ''").run(String(l.hsn).trim(), Number(l.item_id));
       if (idx >= 0) po.lines[idx].received = round2((Number(po.lines[idx].received) || 0) + Number(l.qty));
     }
     if (po) {
