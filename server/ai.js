@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { db, getSettings, setSettings, DATA_DIR, audit } from './db.js';
-import { ENTITIES, canView, WORKER_ROLES } from '../public/js/schema.js';
+import { ENTITIES, canView, WORKER_ROLES, STOCK_SQL } from '../public/js/schema.js';
 import { listRows, getRow, HttpError, options } from './crud.js';
 import { PART_UI, DOOR_TYPES, FLOOR_TYPES } from '../public/js/parts.js';
 import { VIDEOS } from '../public/js/explainers.js';
@@ -26,7 +26,7 @@ const DOC_TYPES = /\.(txt|md|csv|json|html?|pdf)$/i;
 
 // ---------------------------------------------------------------- the built-in engine
 export const ENGINE_DIR = process.env.WIESPL_AI_ENGINE_DIR || path.join(DATA_DIR, 'ai-engine');
-const ENGINE = { chat: { port: 8080, proc: null, model: null, log: '' }, embed: { port: 8081, proc: null, model: null, log: '' } };
+const ENGINE = { chat: { port: Number(process.env.WIESPL_AI_CHAT_PORT) || 8080, proc: null, model: null, log: '' }, embed: { port: Number(process.env.WIESPL_AI_EMBED_PORT) || 8081, proc: null, model: null, log: '' } };
 function engineFiles() {
   const exe = path.join(ENGINE_DIR, 'bin', process.platform === 'win32' ? 'llama-server.exe' : 'llama-server'), dir = path.join(ENGINE_DIR, 'models');
   let models = []; try { models = fs.readdirSync(dir).filter(m => /\.gguf$/i.test(m)).map(m => ({ name: m, size: fs.statSync(path.join(dir, m)).size })); } catch { /* none */ }
@@ -38,19 +38,37 @@ const builtIn = () => { const s = getSettings(); return !s.ai_url && !process.en
 export function startEngine() {
   if (!builtIn() || process.env.WIESPL_AI_SHARED) return; // WIESPL_AI_SHARED=1: another CRM on this PC already runs the engine
   const F = engineFiles(); if (!F.exe) return;
-  const threads = String(Math.max(2, Math.min(8, os.cpus().length - 2)));
+  // Measured on the office laptop (i5-12500H): writing is quickest on ¾ of the CPU threads, reading a question on all
+  // of them, with flash attention: ~35% faster than 8 threads.
+  const cpus = os.cpus().length, write = String(Math.max(2, Math.round(cpus * 0.75))), read = String(Math.max(2, cpus));
   const run = (kind, model, args) => {
     const e = ENGINE[kind]; if (!model || e.proc) return;
     e.model = path.basename(model); e.log = '';
-    const p = spawn(F.exe, ['-m', model, '--host', '127.0.0.1', '--port', String(e.port), '-t', threads, ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(F.exe, ['-m', model, '--host', '127.0.0.1', '--port', String(e.port), ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const keep = d => { e.log = (e.log + d).slice(-4000); };
     p.stdout.on('data', keep); p.stderr.on('data', keep);
     p.on('exit', code => { e.proc = null; if (!stopping) { keep(`\n[stopped: ${code}]`); setTimeout(() => run(kind, model, args), 15000); } });
     e.proc = p;
   };
-  run('chat', F.chat, ['-c', '8192', '--jinja', '--no-webui']);
-  run('embed', F.embed, ['--embeddings', '-c', '2048', '-b', '2048', '-ub', '2048']);
+  run('chat', F.chat, ['-t', write, '-tb', read, '-fa', 'on', '-c', '8192', '--jinja', '--no-webui']);
+  run('embed', F.embed, ['-t', '4', '--embeddings', '-c', '2048', '-b', '2048', '-ub', '2048']);
+  if (F.chat) warmUp();
   if (F.embed) autoIndex(path.basename(F.embed));
+}
+// Once the engine is up, have it read the instructions and the tool descriptions, so even the first question is quick.
+async function warmUp() {
+  for (let i = 0; i < 100 && !stopping; i++) {
+    try {
+      const h = await fetch(`http://127.0.0.1:${ENGINE.chat.port}/health`, { signal: AbortSignal.timeout(2000) });
+      if (h.ok) {
+        await fetch(`http://127.0.0.1:${ENGINE.chat.port}/v1/chat/completions`, { method: 'POST', headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(300000),
+          body: JSON.stringify({ messages: [{ role: 'system', content: systemPrompt() }, { role: 'user', content: 'Hello' }], tools: TOOLS.map(t => ({ type: 'function', function: t })), max_tokens: 1 }) });
+        console.log(`  AI: ready (${ENGINE.chat.model})`);
+        return;
+      }
+    } catch { /* still loading */ }
+    await new Promise(r => setTimeout(r, 3000));
+  }
 }
 // Build the document index by itself the first time (or after the search model changes), once the engine is up.
 function autoIndex(model) {
@@ -95,7 +113,10 @@ export function saveAiConfig(body, user) {
 export function migrateAi() {
   db.exec(`CREATE TABLE IF NOT EXISTS ai_chunks (id INTEGER PRIMARY KEY, source TEXT NOT NULL, title TEXT, chunk TEXT NOT NULL, vec BLOB,
     model TEXT, updated_at TEXT DEFAULT (datetime('now','localtime')));
-    CREATE INDEX IF NOT EXISTS ix_ai_chunks_source ON ai_chunks(source);`);
+    CREATE INDEX IF NOT EXISTS ix_ai_chunks_source ON ai_chunks(source);
+    CREATE TABLE IF NOT EXISTS ai_conversations (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL DEFAULT '',
+      messages TEXT NOT NULL DEFAULT '[]', created_at TEXT DEFAULT (datetime('now','localtime')), updated_at TEXT DEFAULT (datetime('now','localtime')));
+    CREATE INDEX IF NOT EXISTS ix_ai_conversations_user ON ai_conversations(user_id, updated_at);`);
   fs.mkdirSync(DOCS_DIR, { recursive: true });
 }
 
@@ -284,21 +305,19 @@ async function runTool(name, args, user, sources) {
   if (name === 'search_everything') {
     const text = String(a.text || a.query || '').trim(); if (!text) throw new Error('Give the text to look for');
     const words = [text, ...text.split(/\s+/).filter(w => w.length > 3)].filter((w, i, all) => all.indexOf(w) === i);
-    const hits = [];
+    const groups = []; let found = 0;
     for (const w of words) {
       for (const m of viewable(role)) {
-        const ent = ENTITIES[m]; if (!ent.search?.length || hits.length >= 20) continue;
+        const ent = ENTITIES[m]; if (!ent.search?.length || found >= 20) continue;
         let rows = []; try { rows = listRows(m, { q: w, limit: 5 }); } catch { continue; }
-        for (const r of rows) {
-          if (hits.some(h => h.module === m && h.id === r.id)) continue;
-          const rec = Object.fromEntries(Object.entries(cleanRow(m, r, role)).filter(([, v]) => v !== null && v !== '' && v !== undefined).slice(0, 10));
-          hits.push({ module: m, module_label: ent.label, id: r.id, record: rec });
-          sources.push({ module: m, id: r.id, label: `${ent.singular || ent.label} #${r.id}` });
-        }
+        rows = rows.filter(r => !groups.some(g => g.m === m && g.rows.some(x => x.id === r.id))).slice(0, 20 - found);
+        if (!rows.length) continue;
+        found += rows.length; groups.push({ m, rows });
+        rows.forEach(r => sources.push({ module: m, id: r.id, label: `${ent.singular || ent.label} #${r.id}` }));
       }
-      if (hits.length) break; // the whole phrase matched; no need to try single words
+      if (found) break; // the whole phrase matched; no need to try single words
     }
-    return { text, found: hits.length, results: hits.slice(0, 20) };
+    return found ? `Found ${found} record(s) with "${text}":\n\n` + groups.map(g => `${ENTITIES[g.m].label}:\n${table(g.m, g.rows, role)}`).join('\n\n') : `Nothing in the CRM has "${text}".`;
   }
   if (name === 'describe_module') {
     const ent = mustSee(a.module, role);
@@ -311,7 +330,7 @@ async function runTool(name, args, user, sources) {
     if (a.from) q.from = a.from; if (a.to) q.to = a.to;
     const rows = listRows(a.module, q);
     rows.forEach(r => sources.push({ module: a.module, id: r.id, label: `${ent.singular || ent.label} #${r.id}` }));
-    return { module: a.module, count: rows.length, records: rows.map(r => cleanRow(a.module, r, role)), ...(rows.length ? {} : { hint: 'Nothing found here. Try search_everything with the key word, or another module.' }) };
+    return rows.length ? `${ent.label}: ${rows.length} record(s), newest first:\n${table(a.module, rows, role)}` : `${ent.label}: nothing found. Try search_everything with the key word, or another module.`;
   }
   if (name === 'get_record') {
     mustSee(a.module, role);
@@ -343,80 +362,247 @@ async function runTool(name, args, user, sources) {
   throw new Error(`Unknown tool ${name}`);
 }
 
-function systemPrompt(user) {
-  const mods = viewable(user.role).map(m => `${m} (${ENTITIES[m].label})`).join(', ');
-  const today = new Date().toLocaleDateString('en-CA');
-  return `You are the WIESPL Assistant inside WIESPL's CRM & ERP. WIESPL (Western India Electromedical Systems Pvt. Ltd., Pune) designs, builds and installs modular operation theatres, ICUs and clean rooms: wall panels, doors, LAF, AHU, HEPA, MGPS, pendants, control panels, Digital OR.
-Today is ${today}. You are talking with ${user.name} (role: ${user.role}).
-Answer from facts only: use the tools to look up CRM records and WIESPL's documents; never invent numbers, names or records. If the tools find nothing, say so.
-CRM modules this user may read: ${mods}.
-When the user names a person, client, company, hospital, place, product or event (e.g. "Sourav", "Diwali"), call search_everything first. When the user asks about a module (e.g. "the holidays", "my leave requests"), list its records with find_records instead of describing its fields. Company holidays and festivals (Diwali, Holi, Eid, Christmas, Independence Day...) are in the holidays module: for "how many days off for Diwali" use find_records on holidays with that text and count the days. Staff leave applications are in leave_requests.
-For questions about WIESPL products, specifications, norms or how things work, use search_documents. For questions about customers, enquiries, orders, stock or numbers, use the CRM tools; use describe_module first if you do not know a module's fields. Dates are YYYY-MM-DD.
-If a tool returns an error, read it, fix the arguments and try once more; do not repeat the same call. Do not tell the user about the tools you call, just answer.
-Be brief and clear. Use short lists or a small table for several records, and give record numbers (e.g. enquiry numbers) so the user can open them. Answer in the user's language.`;
+// ---------------------------------------------------------------- the instructions
+// The same for every user and every day: the engine reads them (with the tool descriptions) once, keeps them in its
+// cache and then only reads what is new for each question. The date, the user and the facts go with the question.
+let SYSTEM = null;
+function systemPrompt() {
+  return (SYSTEM ||= `You are WIESPL AI, the assistant inside WIESPL's CRM & ERP. WIESPL (Western India Electromedical Systems Pvt. Ltd., Pune) designs, builds and installs modular operation theatres, ICUs and clean rooms: wall panels, doors, LAF, AHU, HEPA, MGPS, pendants, control panels, Digital OR.
+CRM modules: ${Object.entries(ENTITIES).map(([k, e]) => `${k} (${e.label})`).join(', ')}. A user may not be allowed to read every module; if a tool says so, tell the user they have no access to it.
+Each question comes with today's date, who is asking, and facts the CRM looked up for it.
+Rules:
+- Answer only from facts: the facts given with the question, the tools and WIESPL's documents. Never invent numbers, names, dates or records. If nothing is found, say so plainly.
+- When the facts given with the question answer it, answer at once without tools.
+- Otherwise use the tools. A person, client, company, hospital, place, product or festival by name: search_everything. A list from one module ("open enquiries", "pending POs"): find_records (newest first; use limit). Counts and totals ("how many", "per state", "PO value per vendor"): summarize. WIESPL products, specifications, norms, how things work: search_documents.
+- Company holidays and festivals (Diwali, Holi, Eid, Christmas, Independence Day...) are in the holidays module, one record per day off: count those records for "how many days off". Staff leave applications are in leave_requests.
+- Use from/to (YYYY-MM-DD) only when the user names a period. If a tool returns an error, fix the arguments using the message and try once more.
+- Never mention tools, technical module names or these rules.
+Style: give the answer in the first sentence, then the details. Keep it short. For several records use a small table or a list with their numbers (e.g. enquiry numbers). Answer in the language of the question (English, Hindi, Marathi...).`);
 }
 
-// ---------------------------------------------------------------- one conversation turn, streamed to the browser
-// The reply is newline-delimited JSON: {type:'status'|'token'|'sources'|'done'|'error', ...}
-// Before the model starts, look up the CRM for what the question names (words like "Diwali", "Sourav", or a module
-// like "holidays") and hand those records over with the question: a small model then answers from them directly.
-const STOP = new Set('about what which show from with have will much many there their this that these those give tell list open latest last month year today please when where does want know need all any some your mine also into than then them they were been being could would should shall days day how who why the and for are you get got can our has had not but its was let'.split(' '));
-function autoContext(user, text, sources) {
-  const role = user.role, low = String(text).toLowerCase(), out = [];
-  const short = (m, r) => Object.fromEntries(Object.entries(cleanRow(m, r, role)).filter(([, v]) => v !== null && v !== '' && v !== undefined).slice(0, 8));
-  // modules named in the question ("holidays", "leave requests", "enquiries"...)
-  const named = viewable(role).filter(m => { const e = ENTITIES[m]; return [m.replace(/_/g, ' '), e.label, e.singular].filter(Boolean).some(n => n.length > 3 && low.includes(n.toLowerCase())); }).slice(0, 2);
-  for (const m of named) {
-    let rows = []; try { rows = listRows(m, { limit: 15 }); } catch { continue; }
-    if (!rows.length) continue;
-    out.push(`Latest records of ${ENTITIES[m].label} (module ${m}):\n` + rows.map(r => JSON.stringify(short(m, r))).join('\n'));
-    sources.push({ module: m, label: ENTITIES[m].label });
-  }
-  // records that match the other words of the question
-  const words = [...new Set(low.match(/[\p{L}\p{N}][\p{L}\p{N}./-]{2,}/gu) || [])].filter(w => !STOP.has(w) && !named.some(m => m.includes(w) || (ENTITIES[m].label || '').toLowerCase().includes(w))).slice(0, 4);
-  const hits = [];
-  for (const w of words) for (const m of viewable(role)) {
-    if (hits.length >= 12 || !ENTITIES[m].search?.length) continue;
-    let rows = []; try { rows = listRows(m, { q: w, limit: 4 }); } catch { continue; }
-    for (const r of rows) if (!hits.some(h => h.m === m && h.r.id === r.id)) { hits.push({ m, r }); sources.push({ module: m, id: r.id, label: `${ENTITIES[m].singular || ENTITIES[m].label} #${r.id}` }); }
-  }
-  if (hits.length) out.push('CRM records that match words of the question:\n' + hits.map(h => `[${h.m}] ` + JSON.stringify(short(h.m, h.r))).join('\n'));
-  return out.length ? `Facts looked up from the CRM for this question (use them; call tools only if you need more):\n${out.join('\n\n')}`.slice(0, 7000) : '';
+// ---------------------------------------------------------------- facts for one question, looked up before the model starts
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const ymd = d => d.toLocaleDateString('en-CA');
+// "today", "this month", "last month", "this year", "this FY", "in November", "in 2025"... → a date range
+function period(low, now = new Date()) {
+  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
+  const range = (a, b, label) => ({ label, from: ymd(a), to: ymd(b) });
+  if (/\btoday\b|\baaj\b/.test(low)) return range(now, now, 'today');
+  if (/\byesterday\b|\bkal\b/.test(low)) return range(new Date(y, m, d - 1), new Date(y, m, d - 1), 'yesterday');
+  const monday = new Date(y, m, d - ((now.getDay() + 6) % 7));
+  if (/\b(this|current) week\b/.test(low)) return range(monday, now, 'this week');
+  if (/\b(last|previous) week\b/.test(low)) return range(new Date(y, m, monday.getDate() - 7), new Date(y, m, monday.getDate() - 1), 'last week');
+  if (/\bnext week\b/.test(low)) return range(new Date(y, m, monday.getDate() + 7), new Date(y, m, monday.getDate() + 13), 'next week');
+  if (/\bnext month\b/.test(low)) return range(new Date(y, m + 1, 1), new Date(y, m + 2, 0), 'next month');
+  if (/\b(coming up|upcoming|coming|next|future|ahead|remaining)\b/.test(low)) return range(now, new Date(y + 1, m, d), 'from today on');
+  if (/\b(this|current) month\b/.test(low)) return range(new Date(y, m, 1), new Date(y, m + 1, 0), 'this month');
+  if (/\b(last|previous) month\b/.test(low)) return range(new Date(y, m - 1, 1), new Date(y, m, 0), 'last month');
+  const fy = m >= 3 ? y : y - 1, fyRange = s => range(new Date(s, 3, 1), new Date(s + 1, 2, 31), `FY ${s}-${String(s + 1).slice(2)}`);
+  if (/\b(this|current) (fy|financial year)\b/.test(low)) return fyRange(fy);
+  if (/\b(last|previous) (fy|financial year)\b/.test(low)) return fyRange(fy - 1);
+  if (/\b(this|current) year\b/.test(low)) return range(new Date(y, 0, 1), new Date(y, 11, 31), String(y));
+  if (/\b(last|previous) year\b/.test(low)) return range(new Date(y - 1, 0, 1), new Date(y - 1, 11, 31), String(y - 1));
+  const year = Number((low.match(/\b(20\d\d)\b/) || [])[1]) || 0;
+  const mi = MONTHS.findIndex(n => (n === 'may' ? /\bmay\s+20\d\d\b/ : new RegExp(`\\b${n}\\b`)).test(low));
+  if (mi >= 0) { const yr = year || y; return range(new Date(yr, mi, 1), new Date(yr, mi + 1, 0), `${MONTHS[mi]} ${yr}`); }
+  if (year && /\b(in|for|during|of)\s+20\d\d\b/.test(low)) return range(new Date(year, 0, 1), new Date(year, 11, 31), String(year));
+  return null;
 }
+// records as a small table: far fewer words for the engine to read than JSON
+function table(m, rows, role, maxCols = 8) {
+  const recs = rows.map(r => cleanRow(m, r, role));
+  const cols = [...new Set(recs.flatMap(r => Object.keys(r)))].filter(k => k !== 'id').slice(0, maxCols);
+  const cell = v => String(v ?? '').replace(/\s+/g, ' ').replace(/\|/g, '/').slice(0, 90);
+  return [`id | ${cols.join(' | ')}`, ...recs.map(r => `${r.id} | ${cols.map(c => cell(r[c])).join(' | ')}`)].join('\n');
+}
+// The field a question groups by: "per state", "by vendor", "state-wise", "each salesperson", "monthly"
+// the words a question groups by: "per state", "by vendor", "state-wise" → state, vendor, state
+const groupWords = low => [...low.matchAll(/\b(?:per|by|each|every)\s+([\p{L}][\p{L}_ ]{1,30}?)(?=\s+(?:this|last|in|for|during|from|of|with|and|or|is|are|was)\b|[?.!,]|$)/gu), ...low.matchAll(/\b([\p{L}]+)[- ]?wise\b/gu)].map(x => x[1].trim());
+function groupField(m, low) {
+  if (/\bmonth(ly|-wise| wise)\b|\bper month\b|\bby month\b|\beach month\b/.test(low) && ENTITIES[m].fields.some(f => f.key === 'date')) return { key: 'month', label: 'Month' };
+  const words = groupWords(low);
+  const fields = ENTITIES[m].fields.filter(f => !f.computed && f.type !== 'section' && f.type !== 'json' && !HIDE.test(f.key));
+  for (const w of words) {
+    const s = w.replace(/s$/, ''), norm = v => String(v || '').toLowerCase().replace(/_id$/, '').replace(/_/g, ' ');
+    const f = fields.find(f => norm(f.key) === s || norm(f.label) === s) || fields.find(f => norm(f.label).includes(s) || s.includes(norm(f.key)));
+    if (f) return { key: f.key, label: f.label || f.key };
+  }
+  return null;
+}
+const STOP = new Set(('about what which show from with have will much many there their this that these those give tell list open latest last first month months year years today please when where does want know need all any some your mine also into than then them they were been being could would should shall days day how who why the and for are you get got can our has had not but its was let ' +
+  'wiespl make makes made type types kind kinds find search record records detail details info information details me my we us is am be do did an of to in on at by it as or if so no yes new old current previous week weeks number numbers count total per each every between under over more less most top recent recently hour hours minute minutes time times change changes coming upcoming next pending approved active status').split(' '));
+const NO_WORD_SEARCH = new Set(['boq_items', 'bom_items', 'schedule_baselines']); // line items: too many, too alike
+const DOC_MIN = 0.7; // how close a document passage must be to the question to be handed over (related ones score 0.75+)
+async function questionContext(user, text, sources) {
+  const role = user.role, low = String(text).toLowerCase(), when = period(low), can = viewable(role), facts = [];
+  // 1. low stock, worked out from the stock moves
+  const lowStock = /\blow\b.{0,12}\bstock\b|\bstock\b.{0,20}\blow\b|re-?order|out of stock|short(age)? of|running out|below (the )?(minimum|min|reorder)/.test(low) && can.includes('items');
+  if (lowStock) {
+    const rows = db.prepare(`SELECT * FROM (SELECT t.id, t.code, t.name, t.uom, t.reorder_level, ${STOCK_SQL.replaceAll('{t}', 't')} AS stock FROM items t) WHERE reorder_level > 0 AND stock <= reorder_level ORDER BY stock - reorder_level LIMIT 30`).all();
+    facts.push(`Items at or below their reorder level: ${rows.length}${rows.length ? ':\nid | Code | Item | Stock | Reorder level\n' + rows.map(r => `${r.id} | ${r.code || ''} | ${r.name} | ${r.stock} ${r.uom || ''} | ${r.reorder_level}`).join('\n') : '.'}`);
+    rows.slice(0, 8).forEach(r => sources.push({ module: 'items', id: r.id, label: `Item ${r.code || '#' + r.id}` }));
+  }
+  // 2. modules the question names ("holidays", "enquiries", "purchase orders"...): their records, in the period if one is named
+  let named = can.filter(m => !(lowStock && m === 'items')).filter(m => { const e = ENTITIES[m]; return [m.replace(/_/g, ' '), e.label, e.singular].filter(Boolean).some(n => n.length > 3 && low.includes(n.toLowerCase())); });
+  // "PO value per vendor": vendors is how to group the purchase orders, not what is asked about
+  const dims = groupWords(low).map(w => w.replace(/s$/, ''));
+  if (named.length > 1) named = named.filter(m => !dims.some(w => [m, ENTITIES[m].label, ENTITIES[m].singular].filter(Boolean).some(n => n.toLowerCase().replace(/s$/, '').startsWith(w))));
+  named = named.slice(0, 2);
+  for (const m of named) {
+    const ent = ENTITIES[m], dated = !!when && ent.fields.some(f => f.key === 'date');
+    // "approved vendors", "pending leave requests", "open complaints": only those with that status
+    const sf = ent.statusField && ent.fields.find(f => f.key === ent.statusField);
+    const status = sf?.options?.filter(Boolean).find(o => { const l = String(o).toLowerCase(), first = l.split(/[\s(]/)[0]; return new RegExp(`\\b${l.replace(/[^a-z0-9 ]/g, '.')}\\b`).test(low) || (first.length >= 4 && new RegExp(`\\b${first}\\b`).test(low)); });
+    const where = [...(dated ? ['date >= ?', 'date <= ?'] : []), ...(status ? [`${sf.key} = ?`] : [])], params = [...(dated ? [when.from, when.to] : []), ...(status ? [status] : [])];
+    let rows = [], total = 0;
+    try {
+      rows = listRows(m, { ...(dated ? { from: when.from, to: when.to } : {}), ...(status ? { [sf.key]: status } : {}), limit: dated || status ? 25 : 12 });
+      total = db.prepare(`SELECT COUNT(*) AS n FROM ${m}${where.length ? ' WHERE ' + where.join(' AND ') : ''}`).get(...params).n;
+    } catch { continue; }
+    const g = groupField(m, low);
+    if (!g) facts.push(`${ent.label}${status ? ` with status "${status}"` : ''}${dated ? ` dated ${when.from} to ${when.to} (${when.label})` : ''}: ${total} record${total === 1 ? '' : 's'}${rows.length < total ? `; the newest ${rows.length}` : ''}${rows.length ? ':\n' + table(m, rows, role) : '.'}`);
+    // "per state", "by vendor", "state-wise", "each salesperson": counted (and summed) right here
+    if (g) {
+      const money = /value|amount|worth|total|₹|\brs\b|rupee|sum/.test(low) && ent.fields.find(f => !f.computed && ['money', 'number'].includes(f.type) && /grand_total|^total|amount|value/.test(f.key));
+      try {
+        const out = await runTool('summarize', { module: m, group_by: g.key, ...(money ? { sum_field: money.key } : {}), ...(dated ? { from: when.from, to: when.to } : {}) }, user, sources);
+        const label = g.key === 'month' ? 'Month' : g.label;
+        facts.push(`${ent.label} per ${label}${dated ? ` (${when.label})` : ''}, worked out by the CRM:\n${label} | Count${money ? ' | ' + (money.label || money.key) : ''}\n` +
+          out.rows.map(r => `${r[g.key]} | ${r.count}${money ? ' | ' + (r[money.key] ?? '') : ''}`).join('\n') + `\nTotal: ${out.rows.reduce((s, r) => s + r.count, 0)}`);
+      } catch (e) { facts.push(`(Could not count ${ent.label} per ${g.label}: ${e.message})`); }
+    } else if (/how many|count|per |total|sum|average|most|least|highest|lowest|top |wise/.test(low)) {
+      facts.push(`Fields of ${ent.label} (for counting or filtering with the tools): ${ent.fields.filter(f => !f.computed && f.type !== 'section' && f.type !== 'json' && !HIDE.test(f.key)).slice(0, 35).map(f => `${f.key} (${f.label || f.key})`).join(', ')}`);
+    }
+    sources.push({ module: m, label: ent.label });
+  }
+  // 3. records that match the specific words of the question ("Diwali", "Sourav", "Kerala"); a word found all over the CRM says nothing
+  // (the module's own name and its field names, e.g. "state" in "enquiries per state", are not things to look for)
+  const nameWords = named.flatMap(m => [m, ENTITIES[m].label, ENTITIES[m].singular || '', ...ENTITIES[m].fields.flatMap(f => [f.key.replace(/_id$/, ''), f.label || ''])].map(n => n.toLowerCase()));
+  const words = [...new Set(low.match(/[\p{L}\p{N}][\p{L}\p{N}./-]{2,}/gu) || [])]
+    .filter(w => !STOP.has(w) && !MONTHS.includes(w) && !/^20\d\d$/.test(w) && !(lowStock && /stock|low|item/.test(w)) && !nameWords.some(n => n.includes(w))).slice(0, 5);
+  // WIESPL's own documents, for questions about products, norms and how things work (looked up first: when a
+  // document clearly answers, records that merely share a word, e.g. "operation", would only be noise)
+  let docs = [];
+  if (!named.length && !lowStock) {
+    try {
+      docs = (await searchDocs(text, 3)).filter(h => h.score >= DOC_MIN);
+      if (process.env.AI_DEBUG) console.log('[ai docs]', docs.map(h => `${h.title} ${h.score.toFixed(2)}`).join(', ') || 'none close enough');
+    } catch { /* the search engine is still starting: the model can still use the tools */ }
+  }
+  const seen = new Set();
+  if (docs.some(h => h.score >= 0.72)) words.length = 0;
+  for (const w of words) {
+    const found = [];
+    for (const m of can) {
+      if (NO_WORD_SEARCH.has(m) || !ENTITIES[m].search?.length) continue;
+      let rows = []; try { rows = listRows(m, { q: w, limit: 6 }); } catch { continue; }
+      rows = rows.filter(r => !seen.has(`${m}:${r.id}`));
+      if (rows.length) found.push({ m, rows });
+    }
+    const n = found.reduce((s, f) => s + f.rows.length, 0);
+    if (!n || n > 10) continue;
+    for (const { m, rows } of found) {
+      rows.forEach(r => { seen.add(`${m}:${r.id}`); sources.push({ module: m, id: r.id, label: `${ENTITIES[m].singular || ENTITIES[m].label} #${r.id}` }); });
+      facts.push(`${ENTITIES[m].label} with "${w}":\n${table(m, rows, role)}`);
+    }
+  }
+  for (const h of docs) { facts.push(`From WIESPL's document "${h.title}":\n${h.chunk.slice(0, 900)}`); sources.push({ doc: h.source, label: h.title }); }
+  let body = facts.join('\n\n');
+  if (body.length > 5000) body = body.slice(0, 5000) + '\n…';
+  const now = new Date();
+  return `Today: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} (${ymd(now)}). Asked by: ${user.name} (role ${role}).\n` +
+    (body ? `Facts the CRM looked up for this question:\n${body}` : 'The CRM found no facts for this question by itself.') + `\n\nQuestion: ${text}`;
+}
+
+// ---------------------------------------------------------------- conversations: each person's own, kept on the server
+const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
+export function listConversations(user) {
+  return db.prepare('SELECT id, title, updated_at, json_array_length(messages) AS n FROM ai_conversations WHERE user_id = ? ORDER BY updated_at DESC, id DESC LIMIT 200').all(user.id);
+}
+export function getConversation(user, id) {
+  const c = db.prepare('SELECT id, title, messages, created_at, updated_at FROM ai_conversations WHERE id = ? AND user_id = ?').get(Number(id), user.id);
+  if (!c) throw new HttpError(404, 'That conversation is not there any more');
+  return { ...c, messages: JSON.parse(c.messages) };
+}
+export function renameConversation(user, id, title) {
+  const t = String(title || '').trim().slice(0, 80); if (!t) throw new HttpError(400, 'Give it a name');
+  if (!db.prepare('UPDATE ai_conversations SET title = ? WHERE id = ? AND user_id = ?').run(t, Number(id), user.id).changes) throw new HttpError(404, 'That conversation is not there any more');
+  return { ok: true };
+}
+export function deleteConversation(user, id) {
+  db.prepare('DELETE FROM ai_conversations WHERE id = ? AND user_id = ?').run(Number(id), user.id);
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------- one question, answered and streamed to the browser
+// The reply is newline-delimited JSON: {type:'conversation'|'status'|'token'|'reset'|'sources'|'done'|'error', ...}
+// The browser sends {text, conversation?}; the server keeps the conversation. (An older panel sends {messages}.)
 export async function chat(req, res) {
-  const user = req.user, cfg = aiConfig();
-  const history = (Array.isArray(req.body?.messages) ? req.body.messages : []).slice(-12)
-    .filter(m => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string').map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
-  if (!history.length || history[history.length - 1].role !== 'user') throw new HttpError(400, 'Ask a question');
+  const user = req.user, cfg = aiConfig(), b = req.body || {}, legacy = Array.isArray(b.messages);
+  let conv = null, text, past;
+  if (legacy) {
+    const all = b.messages.slice(-12).filter(m => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string').map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
+    if (!all.length || all[all.length - 1].role !== 'user') throw new HttpError(400, 'Ask a question');
+    text = all.pop().content; past = all;
+  } else {
+    text = String(b.text || '').trim().slice(0, 4000); if (!text) throw new HttpError(400, 'Ask a question');
+    if (b.conversation) {
+      conv = db.prepare('SELECT id, title, messages FROM ai_conversations WHERE id = ? AND user_id = ?').get(Number(b.conversation), user.id);
+      if (!conv) throw new HttpError(404, 'That conversation is not there any more');
+    }
+    past = conv ? JSON.parse(conv.messages).slice(-12).map(m => ({ role: m.role, content: String(m.content || '').slice(0, 4000) })) : [];
+  }
   res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store', 'x-accel-buffering': 'no' });
   const send = o => { try { res.write(JSON.stringify(o) + '\n'); } catch { /* the browser went away */ } };
   const abort = new AbortController(); res.on('close', () => abort.abort());
-  const sources = [], facts = autoContext(user, history[history.length - 1].content, sources);
-  const messages = [{ role: 'system', content: systemPrompt(user) + (facts ? '\n\n' + facts : '') }, ...history];
-  if (process.env.AI_DEBUG && facts) console.log('[ai facts]', facts.slice(0, 400).replace(/\n/g, ' | '));
+  if (!legacy) {
+    if (!conv) conv = { id: Number(db.prepare('INSERT INTO ai_conversations (user_id, title, messages) VALUES (?, ?, ?)').run(user.id, text.replace(/\s+/g, ' ').slice(0, 80), '[]').lastInsertRowid), title: text.replace(/\s+/g, ' ').slice(0, 80) };
+    send({ type: 'conversation', id: conv.id, title: conv.title });
+  }
+  const t0 = Date.now(), sources = [];
+  send({ type: 'status', text: 'Looking in the CRM…' });
+  const question = await questionContext(user, text, sources);
+  if (process.env.AI_DEBUG) console.log('[ai question]', question.slice(0, 700).replace(/\n/g, ' | '));
+  const messages = [{ role: 'system', content: systemPrompt() }, ...past, { role: 'user', content: question }];
   const tools = TOOLS.map(t => ({ type: 'function', function: t }));
-  const LABEL = { search_everything: 'Searching the CRM',  describe_module: 'Reading the module', find_records: 'Looking up records', get_record: 'Opening a record', summarize: 'Counting', search_documents: 'Searching WIESPL documents' };
+  const LABEL = { search_everything: 'Searching the CRM', describe_module: 'Reading the module', find_records: 'Looking up records', get_record: 'Opening a record', summarize: 'Counting', search_documents: 'Searching WIESPL documents' };
+  let answer = '', failed = '', items = [];
   try {
-    for (let round = 0; round < 6; round++) {
+    send({ type: 'status', text: 'Thinking…' });
+    for (let round = 0; round < 5; round++) {
       const { content, calls } = await streamRound(cfg, messages, tools, abort.signal, t => send({ type: 'token', text: t }));
+      answer = content;
       if (isOllama()) messages.push({ role: 'assistant', content, ...(calls.length ? { tool_calls: calls.map(c => ({ function: { name: c.name, arguments: c.args } })) } : {}) });
       else messages.push({ role: 'assistant', content, ...(calls.length ? { tool_calls: calls.map(c => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })) } : {}) });
       if (!calls.length) break;
+      answer = '';
       if (content) send({ type: 'reset' }); // text written before a lookup was the model thinking aloud: clear it
       for (const c of calls) {
         const fn = c.name, args = normArgs(c.args); c.args = args;
-        send({ type: 'status', text: `${LABEL[fn] || fn}${args?.module ? ': ' + (ENTITIES[args.module]?.label || args.module) : args?.query ? ': ' + args.query : ''}…` });
+        send({ type: 'status', text: `${LABEL[fn] || fn}${args?.module ? ': ' + (ENTITIES[args.module]?.label || args.module) : args?.query ? ': ' + args.query : args?.text ? ': ' + args.text : ''}…` });
         if (process.env.AI_DEBUG) console.log('[ai tool]', fn, JSON.stringify(args));
         let out; try { out = await runTool(fn, args, user, sources); } catch (e) { out = { error: e.message }; }
-        const text = JSON.stringify(out).slice(0, 12000);
-        messages.push(isOllama() ? { role: 'tool', content: text, tool_name: fn } : { role: 'tool', tool_call_id: c.id, content: text });
+        const result = (typeof out === 'string' ? out : JSON.stringify(out)).slice(0, 6000);
+        messages.push(isOllama() ? { role: 'tool', content: result, tool_name: fn } : { role: 'tool', tool_call_id: c.id, content: result });
       }
     }
     const seen = new Set();
-    send({ type: 'sources', items: sources.filter(s => { const k = s.module ? `${s.module}:${s.id ?? ''}` : s.doc; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12) });
-    send({ type: 'done' });
+    items = sources.filter(s => { const k = s.module ? `${s.module}:${s.id ?? ''}` : s.doc; if (seen.has(k)) return false; seen.add(k); return true; }).slice(0, 12);
+    send({ type: 'sources', items });
+    send({ type: 'done', seconds: Math.round((Date.now() - t0) / 1000) });
   } catch (e) {
-    if (!abort.signal.aborted) send({ type: 'error', text: e.message || String(e) });
+    failed = e.message || String(e);
+    if (!abort.signal.aborted) send({ type: 'error', text: failed });
+  } finally {
+    if (conv) { // keep the question and the answer (or what there was of it) with the conversation
+      try {
+        const all = JSON.parse(db.prepare('SELECT messages FROM ai_conversations WHERE id = ?').get(conv.id)?.messages || '[]');
+        all.push({ role: 'user', content: text, at: stamp() });
+        const reply = answer.trim() + (abort.signal.aborted ? (answer.trim() ? ' …' : '(stopped)') : '');
+        all.push({ role: 'assistant', content: reply || (failed ? '⚠️ ' + failed : 'I could not find an answer to that.'), sources: items, at: stamp(), seconds: Math.round((Date.now() - t0) / 1000), ...(failed && !abort.signal.aborted ? { error: true } : {}) });
+        db.prepare("UPDATE ai_conversations SET messages = ?, updated_at = datetime('now','localtime') WHERE id = ?").run(JSON.stringify(all.slice(-80)), conv.id);
+      } catch (e) { console.error('AI: could not keep the conversation', e.message); }
+    }
   }
   res.end();
 }
@@ -425,8 +611,8 @@ export async function chat(req, res) {
 async function streamRound(cfg, messages, tools, signal, onText) {
   const ollama = isOllama();
   const res = ollama
-    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.2, num_ctx: 8192 } }, signal)
-    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.2 }, signal);
+    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.3, top_p: 0.8, top_k: 20, num_ctx: 8192, num_predict: 900 } }, signal)
+    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.3, top_p: 0.8, top_k: 20, max_tokens: 900, cache_prompt: true }, signal);
   let content = '', buf = ''; const calls = [], parts = [];
   const reader = res.body.getReader(), dec = new TextDecoder();
   for (;;) {
@@ -441,6 +627,7 @@ async function streamRound(cfg, messages, tools, signal, onText) {
         for (const c of j.message?.tool_calls || []) calls.push({ id: 'call_' + calls.length, name: c.function?.name, args: typeof c.function?.arguments === 'string' ? JSON.parse(c.function.arguments || '{}') : c.function?.arguments || {} });
         if (j.message?.content) { content += j.message.content; onText(j.message.content); }
       } else {
+        if (j.timings && process.env.AI_DEBUG) { const t = j.timings; console.log(`[ai speed] read ${t.prompt_n} new tokens in ${(t.prompt_ms / 1000).toFixed(1)}s (${t.prompt_per_second?.toFixed(0)}/s, ${t.cache_n ?? 0} from cache), wrote ${t.predicted_n} in ${(t.predicted_ms / 1000).toFixed(1)}s (${t.predicted_per_second?.toFixed(1)}/s)`); }
         const d = j.choices?.[0]?.delta || {};
         for (const c of d.tool_calls || []) { const p = (parts[c.index ?? 0] ||= { id: '', name: '', args: '' }); if (c.id) p.id = c.id; if (c.function?.name) p.name += c.function.name; if (c.function?.arguments) p.args += c.function.arguments; }
         if (d.content) { content += d.content; onText(d.content); }

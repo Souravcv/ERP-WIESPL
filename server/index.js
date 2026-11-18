@@ -259,6 +259,11 @@ api.delete('/settings/mail-files/:name', requireRole(), wrap(req => { const name
 // ---------------------------------------------------------------- WIESPL Assistant (AI on a WIESPL machine, server/ai.js)
 // everyone may ask; it sees only the modules their role may see. Settings and the document library: admin only.
 api.post('/ai/chat', (req, res, next) => ai.chat(req, res).catch(next));
+// each person's own conversations (nobody else's, not even an admin's view)
+api.get('/ai/conversations', wrap(req => ai.listConversations(req.user)));
+api.get('/ai/conversations/:id', wrap(req => ai.getConversation(req.user, req.params.id)));
+api.patch('/ai/conversations/:id', wrap(req => ai.renameConversation(req.user, req.params.id, req.body?.title)));
+api.delete('/ai/conversations/:id', wrap(req => ai.deleteConversation(req.user, req.params.id)));
 api.post('/ai/voice', express.raw({ type: () => true, limit: '25mb' }), wrap(req => ai.transcribe(req.body)));
 api.get('/ai/status', wrap(async req => { const s = await ai.status(); return req.user.role === 'admin' ? { ...s, indexing: ai.indexingNow() } : { ok: s.ok, chatModel: s.chatModel, voice: s.voice, error: s.error }; }));
 api.put('/ai/settings', requireRole(), wrap(req => ai.saveAiConfig(req.body, req.user)));

@@ -48,7 +48,7 @@ function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
   $('btn-signature').style.display = WORKER_ROLES.includes(role) ? 'none' : ''; // no documents to sign
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/news' }, '📰 News'));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a.nav-ai', { href: '#/ai' }, '🤖 WIESPL AI'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/news' }, '📰 News'));
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
@@ -94,7 +94,7 @@ function showNav() {
 
 let navHash = null;
 function highlightNav() {
-  const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/^#\/boq\/.*/, '#/list/boqs').replace(/^#\/bom\/.*/, '#/list/boms').replace(/^#\/planner\/.*/, '#/planner').replace(/\/(new|\d+)$/, '');
+  const hash = location.hash.split('?')[0].replace(/^#\/(edit|view)\//, '#/list/').replace(/^#\/quotation\/.*/, '#/list/quotations').replace(/^#\/boq\/.*/, '#/list/boqs').replace(/^#\/bom\/.*/, '#/list/boms').replace(/^#\/planner\/.*/, '#/planner').replace(/^#\/ai\/.*/, '#/ai').replace(/\/(new|\d+)$/, '');
   let active = null;
   for (const a of document.querySelectorAll('#nav a')) { const on = a.getAttribute('href') === hash; a.classList.toggle('active', on); if (on) active = a; }
   // Only when the screen changes: the menu is redrawn by the pending count too, and must not undo what the person opened.
@@ -122,6 +122,7 @@ async function route() {
   $('sidebar').classList.remove('open');
   $('print-root').classList.add('hidden');
   $('app').classList.remove('hidden');
+  document.body.classList.toggle('ai-page', page === 'ai'); // the AI's own page: no floating chat button over it
   highlightNav();
   view.replaceChildren(h('div.empty', 'Loading…'));
   try {
@@ -156,6 +157,7 @@ async function route() {
       case 'lots': { const { lotsView } = await import('./views/lots.js'); await lotsView(view); break; }
       case 'health': { const { healthView } = await import('./views/lots.js'); await healthView(view); break; }
       case 'vendor-performance': { const { vendorPerformanceView } = await import('./views/vendorperf.js'); await vendorPerformanceView(view); break; }
+      case 'ai': { const { aiView } = await import('./views/ai.js'); await aiView(view, a); break; }
       case 'drafts': { const { draftsView } = await import('./views/drafts.js'); await draftsView(view); break; }
       case 'attend': { const { attendView } = await import('./views/attend.js'); await attendView(view); break; }
       case 'performance': { const { performanceView } = await import('./views/performance.js'); await performanceView(view); break; }
