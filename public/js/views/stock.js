@@ -8,6 +8,9 @@ const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')
 const ENTRY_TYPES = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
 // Issue and Delivery Challan are both stock going out: one Outward tab, and the slip says which of the two it is.
 const TABS = ['INWARD', 'OUTWARD', 'TRANSFER', 'RETURN', 'SCRAP', 'ADJUST', 'JOB_OUT', 'JOB_IN'];
+// Why material may be received before / without a PO (the GRN asks for one; Purchase, Accounts and the GM see it in the pop-up).
+const NO_PO_REASONS = ['Material received on urgent production requirement.', 'Material received against verbal approval from management.', 'PO is under process by the Purchase Department.', 'Material received for emergency maintenance work.', 'Material received against sample or trial requirement.', 'Material received directly from the customer.', 'Material received for replacement against defective material.', 'Material received before PO release due to urgent site requirement.'];
+const RETURN_REASONS = ['Unused Material – Site Work Completed', 'Excess Material – Site Requirement Completed', 'Reusable Material – Returned from Site', 'Faulty', 'Rework', 'Excess', 'Physical count'];
 const TITLES = { INWARD: '📥 Inward (GRN)', OUTWARD: '📤 Outward', TRANSFER: '🔀 Material Transfer (MTN)', RETURN: '↩️ Return Material', SCRAP: '🗑️ Scrap', OPENING: '🏁 Opening Stock', ADJUST: '⚖️ Adjustment', JOB_OUT: '🛠️ Job Work Outward', JOB_IN: '🛠️ Job Work Inward' };
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const field = (label, el, hint) => h('label', label, hint ? h('span.hint', hint) : null, el);
@@ -222,7 +225,7 @@ export async function stockEntryView(root) {
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
       if (!po) F.push(field('or PO No', v('po_no', h('input', { placeholder: 'e.g. 020/2026-27' })), 'an approved PO in the CRM'),
         h('label.span-2', 'Reason for receiving without a PO (if there is no PO) *', h('span.hint', 'Purchase, Accounts and the GM are told, so the PO can be raised or attached'),
-          v('reason', h('input', { placeholder: 'e.g. urgent site requirement – PO to follow' }))));
+          v('reason', h('select', [''].concat(NO_PO_REASONS).map(o => h('option', { value: o }, o || '— choose the reason —'))))));
     }
     // Job work: parts sent to a vendor for a process, and parts received from the vendor
     if (['JOB_OUT', 'JOB_IN'].includes(type)) {
@@ -256,7 +259,7 @@ export async function stockEntryView(root) {
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store', 'Production'])), field('To *', sv('to_location', ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'])));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
-    if (['RETURN', 'SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
+    if (['RETURN', 'SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : type === 'RETURN' ? RETURN_REASONS : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
     F.push(h('label.span-2', 'Remarks', v('remarks', h('input'))));
     if (type === 'TRANSFER' && !header.from_location) header.from_location = 'Store';
     return F;

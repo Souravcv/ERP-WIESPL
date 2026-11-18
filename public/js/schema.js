@@ -222,6 +222,10 @@ export const FUNCTIONS = {
   notify_material_request: 'Pop-up: new material request to the store',
   work_log: 'Daily Team Work: enter who did what each day (own department; with "see everyone" any department) and see the whole department',
   perf_all: 'Performance: see everyone, all departments',
+  screen_journey: 'Screen: Order Journey (enquiry → handover)',
+  screen_news: 'Screen: News (hospital leads & industry news)',
+  screen_taskboard: 'Screen: Task board',
+  see_stock_value: 'Store: see prices, rates and stock value (hidden from everyone else)',
 };
 // Departments a BOQ section belongs to; each one is reviewed before the BOQ can be made Final.
 export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels', 'Doors', 'MGPS', 'Flooring / Civil', 'Lighting', 'Bought-out'];
@@ -252,6 +256,13 @@ export const DEFAULT_FUNCTIONS = {
   service: ['import', 'task_assign'],
   planning: ['work_log', 'perf_all', 'task_assign', 'notify_work_order', 'notify_po', 'production_release'],
 };
+// Screens and the stock value: roles that had them before they became selectable keep them (a one-off migration in server/roles.js does the same for the saved roles).
+const STOCK_VALUE_ROLES = ['finance_head', 'accounts', 'purchase_head', 'purchase', 'store', 'technical', 'chief_engineer', 'planning'];
+for (const r of Object.keys(ROLE_INFO)) {
+  const worker = WORKER_ROLES.includes(r);
+  const add = [...(worker ? [] : ['screen_news', 'screen_taskboard']), ...(['admin', 'manager', 'md'].includes(r) || STOCK_VALUE_ROLES.includes(r) ? ['see_stock_value'] : [])];
+  if (add.length && r !== 'admin') DEFAULT_FUNCTIONS[r] = [...new Set([...(DEFAULT_FUNCTIONS[r] || []), ...add])];
+}
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
 
 // Approval steps; who may approve is the role's function list.
@@ -2612,7 +2623,7 @@ export const ENTITIES = {
       { key: 'from_location', label: 'From Location', type: 'text', suggest: ['Store', 'Production'], showIf: { type: ['TRANSFER'] } },
       { key: 'to_location', label: 'To Location', type: 'text', suggest: ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'], showIf: { type: ['TRANSFER'] } },
       { key: 'against_issue_no', label: 'Original Issue No', type: 'text', showIf: { type: ['RETURN'] } },
-      { key: 'reason', label: 'Reason', type: 'text', suggest: ['Faulty', 'Rework', 'Excess', 'Rusting', 'Expiry', 'Cut', 'Damaged'], showIf: { type: ['RETURN', 'SCRAP', 'ADJUST'] } },
+      { key: 'reason', label: 'Reason', type: 'text', suggest: ['Unused Material – Site Work Completed', 'Excess Material – Site Requirement Completed', 'Reusable Material – Returned from Site', 'Faulty', 'Rework', 'Excess', 'Rusting', 'Expiry', 'Cut', 'Damaged'], showIf: { type: ['RETURN', 'SCRAP', 'ADJUST'] } },
       { key: 'purpose', label: 'Purpose', type: 'text', showIf: { type: ['TRANSFER', 'OUTWARD', 'JOB_OUT', 'JOB_IN'] } },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
       { key: 'import_batch', label: 'Import Batch', type: 'text', hidden: true },

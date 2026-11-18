@@ -156,6 +156,26 @@ api.use((req, res, next) => {
   res.status(403).json({ error: 'Your role does not have access to this' });
 });
 
+// Stock value: prices, rates and values of the store are for roles with the function "see_stock_value" (Roles & Permissions).
+// Everyone else gets the same screens and the same quantities, with those figures left out of the answer.
+const STOCK_VALUE_SEGS = new Set(['stock', 'items', 'stock_moves', 'lots', 'iqc', 'dashboard', 'stock_drafts']);
+api.use((req, res, next) => {
+  const role = req.user?.role;
+  const [, seg, sub] = req.path.split('/');
+  if (!STOCK_VALUE_SEGS.has(seg) || hasFunction(role, 'see_stock_value')) return next();
+  if (seg === 'dashboard' && sub !== 'store') return next();
+  if (seg === 'items' && ['hsn-codes', 'next-code'].includes(sub)) return next();
+  if (req.method !== 'GET') {
+    // an edit made without seeing the price must not blank it
+    if (['items', 'stock_moves'].includes(seg) && req.body && typeof req.body === 'object') delete req.body.rate;
+    return next();
+  }
+  const send = res.json.bind(res);
+  const clean = o => (Array.isArray(o) ? o.map(clean) : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => !/rate|price|value|cost/i.test(k)).map(([k, x]) => [k, clean(x)])) : o);
+  res.json = body => send(clean(body));
+  next();
+});
+
 api.get('/me', wrap(req => {
   const r = roles.listRoles().find(x => x.name === req.user.role);
   // the company's settings (terms, bank details ...) are not for the least-access roles
@@ -846,13 +866,15 @@ api.get('/reports/po-lines', wrap(req => { if (!canView('purchase_orders', req.u
 // Stock movements as on screen: one sheet by GRN / slip, one sheet item by item. Prices only on the priced types, as on screen.
 api.get('/export/stock-movements', wrap(async (req, res) => {
   storeView(req);
+  const seeValue = hasFunction(req.user.role, 'see_stock_value'); // without it the price and value columns are left out
   const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
   const label = t => MOVE_TYPES[t]?.label || t;
   const { rows } = stock.stockDocs({ ...req.query, limit: 1000000 }, 1000000);
   const lines = stock.stockDocLines(req.query);
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
-  const sheet = (name, title, cols, data, totals) => {
+  const sheet = (name, title, allCols, data, totals) => {
+    const cols = seeValue ? allCols : allCols.filter(c => !/rate|value|price/i.test(c[0]));
     const ws = wb.addWorksheet(name);
     ws.addRow([title]).font = { bold: true, size: 13 };
     ws.addRow(cols.map(c => c[0])).font = { bold: true };
@@ -878,13 +900,15 @@ api.get('/export/stock-movements', wrap(async (req, res) => {
 }));
 api.get('/export/stock-summary', wrap(async (req, res) => {
   itemView(req);
+  const seeValue = hasFunction(req.user.role, 'see_stock_value'); // without it the price and value columns are left out
   const { from, to, rows } = stock.stockSummary(req.query);
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Stock Summary');
-  const cols = [['code', 'Item Code', 10], ['name', 'Item Name', 40], ['category', 'Category', 16], ['abc', 'ABC', 5], ['fsn', 'FSN', 7], ['rate', 'Price', 10], ['uom', 'UOM', 7],
+  const allCols = [['code', 'Item Code', 10], ['name', 'Item Name', 40], ['category', 'Category', 16], ['abc', 'ABC', 5], ['fsn', 'FSN', 7], ['rate', 'Price', 10], ['uom', 'UOM', 7],
     ['opening', 'Opening', 9], ['inward', 'Inward', 9], ['outward', 'Outward', 9], ['transfer', 'Transfer', 9], ['return', 'Return', 9], ['scrap', 'Scrap', 8], ['adjust', 'Adjust', 8],
     ['closing', 'Closing', 9], ['closing_value', 'Closing Value', 14], ['inward_value', 'Inward Value', 14], ['consumption_value', 'Consumption Value', 16], ['last_out', 'Last Outward', 12], ['days_since_out', 'Days Since', 9]];
+  const cols = seeValue ? allCols : allCols.filter(c => !/rate|value|price/i.test(c[0]));
   ws.addRow([`Stock Summary ${from} to ${to}`]).font = { bold: true, size: 13 };
   const hdr = ws.addRow(cols.map(c => c[1]));
   hdr.font = { bold: true };

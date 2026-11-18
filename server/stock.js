@@ -82,6 +82,7 @@ export function stockEntry(body, user) {
     // Goods received without a PO are taken in (the GRN screen asks for the supplier and the reason); Purchase,
     // Accounts and the GM are told below.
     const noPo = type === 'INWARD' && !header.po_id;
+    if (noPo && !String(header.reason || '').trim()) throw new HttpError(400, 'Without a PO, choose the reason for receiving the material without one');
     if (type === 'INWARD' && header.po_id) {
       po = getRow('purchase_orders', header.po_id);
       if (!['Approved', 'Sent', 'Partially Received'].includes(po.status)) throw new HttpError(400, `PO ${po.po_no} is ${po.status}; only approved POs can be received`);

@@ -21,7 +21,7 @@ export function migrateJourneys() {
 }
 
 const LINKS = ['enquiries', 'sales_orders', 'projects'];
-const canSee = role => LINKS.some(e => canView(e, role));
+const canSee = role => hasFunction(role, 'screen_journey');
 export const canSeeRole = canSee;
 const canEdit = role => role === 'admin' || LINKS.some(e => canWrite(e, role));
 const one = (sql, ...a) => db.prepare(sql).get(...a);

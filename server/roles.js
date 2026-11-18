@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, audit, DATA_DIR } from './db.js';
 import { HttpError } from './crud.js';
-import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, ROLE_SEES, defaultPermissions, setPermissions } from '../public/js/schema.js';
+import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, ROLE_SEES, WORKER_ROLES, defaultPermissions, setPermissions } from '../public/js/schema.js';
 
 const parse = s => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
 
@@ -285,6 +285,22 @@ export function seedRoles() {
       db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_planner_v1', '\"1\"')").run();
+  }
+  // Selectable screens + stock value (once): roles keep the Order Journey / News / Task board they had; the stock value (prices, rates,
+  // values) stays with Accounts, Purchase, Store and the heads, and can be switched per role on Roles & Permissions.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_screens_value_v1'").get()) {
+    const eff = loadRoles();
+    for (const r of db.prepare('SELECT name, perms FROM roles').all()) {
+      if (r.name === 'admin') continue;
+      const p = parse(r.perms), mods = eff[r.name]?.modules || {}, add = [];
+      const worker = WORKER_ROLES.includes(r.name);
+      if (['enquiries', 'sales_orders', 'projects'].some(m => mods[m] && mods[m] !== 'none')) add.push('screen_journey');
+      if (!worker) add.push('screen_news', 'screen_taskboard');
+      if (['manager', 'md', 'finance_head', 'accounts', 'purchase_head', 'purchase', 'store', 'technical', 'chief_engineer', 'planning'].includes(r.name)) add.push('see_stock_value');
+      p.functions = [...new Set([...(p.functions || []), ...add])];
+      db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify(p), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_screens_value_v1', '\"1\"')").run();
   }
   loadRoles();
 }

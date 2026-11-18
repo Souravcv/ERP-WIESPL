@@ -27,7 +27,7 @@ const EXTRA_LINKS = {
   CRM: [['#/panels', '🖥️', 'Control Panels & OR App', 'enquiries']],
   Purchase: [['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
-  'Sales & Projects': [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'projects'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
+  'Sales & Projects': [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
@@ -48,10 +48,10 @@ function buildNav(pending = 0) {
   const nav = $('nav');
   const role = state.user.role;
   $('btn-signature').style.display = WORKER_ROLES.includes(role) ? 'none' : ''; // no documents to sign
-  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a.nav-ai', { href: '#/ai' }, '🤖 WIESPL AI'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/taskboard' }, '🗂️ Task board'), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/news' }, '📰 News'));
+  nav.replaceChildren(h('a', { href: '#/dashboard' }, '📊 Dashboard'), h('a.nav-ai', { href: '#/ai' }, '🤖 WIESPL AI'), h('a', { href: '#/tasks' }, '✅ My tasks', tasksOpen ? h('span.count', tasksOpen) : null), WORKER_ROLES.includes(role) ? null : h('a', { href: '#/drafts' }, '📝 My drafts'), h('a', { href: '#/attend' }, '🕘 My attendance'), h('a', { href: '#/performance' }, '📈 Performance'), hasFunction(role, 'screen_taskboard') ? h('a', { href: '#/taskboard' }, '🗂️ Task board') : null, hasFunction(role, 'screen_news') ? h('a', { href: '#/news' }, '📰 News') : null);
   for (const g of GROUPS) {
     const links = [
-      ...(EXTRA_LINKS[g] || []).filter(l => canView(l[3], role) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
+      ...(EXTRA_LINKS[g] || []).filter(l => (l[3].startsWith('fn:') ? hasFunction(role, l[3].slice(3)) : canView(l[3], role)) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
       ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role) && !(k === 'items' && WORKER_ROLES.includes(role)))
         .map(([key, e]) => h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null)),
     ];

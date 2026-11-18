@@ -5,7 +5,7 @@
 // drop noise (patients, crime, politics). Fetched every 3 hours; old items go after 90 days.
 import { db, getSettings, audit } from './db.js';
 import { insertRow, HttpError } from './crud.js';
-import { canWrite, WORKER_ROLES } from '../public/js/schema.js';
+import { canWrite, hasFunction } from '../public/js/schema.js';
 import { notify } from './notify.js';
 
 export function migrateNews() {
@@ -172,7 +172,7 @@ export async function refresh(user = { name: 'system' }) {
 }
 
 // ---------------------------------------------------------------- the page
-export const mayView = user => !WORKER_ROLES.includes(user.role);
+export const mayView = user => hasFunction(user.role, 'screen_news');
 export function list(user, q = {}) {
   if (!mayView(user)) throw new HttpError(403, 'No access to the news');
   const where = ["status <> 'dismissed'"], args = [];
