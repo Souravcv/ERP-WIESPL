@@ -1,4 +1,4 @@
-import { h, api, state, fmtDate } from '../ui.js';
+import { h, api, state, fmtDate, navDepth } from '../ui.js';
 import { loadSigns, sigImg, stampImg, plainSigner } from '../signs.js';
 import { bomDoc } from './bom.js';
 import { bomRows } from './form.js';
@@ -22,7 +22,7 @@ function bar(title) {
   return h('div.print-bar', h('b', title), h('span', { style: { flex: 1 } }),
     h('span', { style: { fontSize: '12px', opacity: 0.8 } }, 'Use "Save as PDF" in the print dialog to create a PDF'),
     h('button.btn.small', { onclick: () => window.print() }, '🖨 Print / Save PDF'),
-    h('button.btn.small', { onclick: () => (history.length > 1 ? history.back() : window.close()) }, 'Close'));
+    h('button.btn.small', { onclick: () => (navDepth() > 0 ? history.back() : window.close()) }, 'Close'));
 }
 
 // ---------------------------------------------------------------- quotation

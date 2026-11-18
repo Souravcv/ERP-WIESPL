@@ -1,5 +1,5 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
-import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy, redirect, setHashQuery } from '../ui.js';
 import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker, bomRows } from './form.js';
@@ -81,10 +81,10 @@ export async function stockEntryView(root) {
   const p = qs();
   // Editing a draft: open the slip as it was saved (a draft against a BOQ / work order reloads with its pending list).
   const draft = p.draft ? await api(`/stock_drafts/${p.draft}`) : null;
-  if (draft && draft.status !== 'Draft') { toast(`That slip is already ${draft.status}`); location.hash = `#/view/stock_drafts/${draft.id}`; return; }
+  if (draft && draft.status !== 'Draft') { toast(`That slip is already ${draft.status}`); redirect(`#/view/stock_drafts/${draft.id}`); return; }
   const dp = draft?.payload || {};
-  if (draft && dp.bom_id && !p.bom) { location.hash = `#/stock-entry?type=OUTWARD&bom=${dp.bom_id}&draft=${draft.id}`; return; }
-  if (draft && dp.boq_id && !p.boq) { location.hash = `#/stock-entry?type=OUTWARD&boq=${dp.boq_id}&draft=${draft.id}`; return; }
+  if (draft && dp.bom_id && !p.bom) { redirect(`#/stock-entry?type=OUTWARD&bom=${dp.bom_id}&draft=${draft.id}`); return; }
+  if (draft && dp.boq_id && !p.boq) { redirect(`#/stock-entry?type=OUTWARD&boq=${dp.boq_id}&draft=${draft.id}`); return; }
   if (draft) p.type = draft.type;
   let type = ENTRY_TYPES.includes(p.type) ? p.type : 'OUTWARD';
   const startDc = p.type === 'DC';
@@ -394,7 +394,7 @@ export async function stockEntryView(root) {
   const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
   const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
   saveLabel();
-  const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; makeChallan = false; lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
+  const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; makeChallan = false; setHashQuery(`type=${t}`); lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
     tabs.querySelectorAll('button').forEach((b, i) => b.classList.toggle('active', TABS[i] === type));
     saveLabel();

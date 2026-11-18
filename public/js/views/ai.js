@@ -49,14 +49,14 @@ export async function aiView(view, id) {
   }
   function go(cid) { // open a chat (or a new one) without reloading the page
     abortCtl?.abort(); side.classList.remove('open');
-    history.replaceState(null, '', cid ? `#/ai/${cid}` : '#/ai');
+    history.replaceState(history.state, '', cid ? `#/ai/${cid}` : '#/ai');
     openChat(cid);
   }
 
   // ---- one conversation
   async function openChat(cid) {
     conv = null;
-    if (cid) { try { conv = await api('/ai/conversations/' + cid); } catch (e) { fail(e); history.replaceState(null, '', '#/ai'); } }
+    if (cid) { try { conv = await api('/ai/conversations/' + cid); } catch (e) { fail(e); history.replaceState(history.state, '', '#/ai'); } }
     title.textContent = conv?.title || 'WIESPL AI';
     showList(); render(); input.focus();
   }
@@ -81,7 +81,7 @@ export async function aiView(view, id) {
     const ctl = abortCtl = new AbortController();
     try {
       await ask({ text, conversation: conv.id, signal: ctl.signal, onEvent: ev => {
-        if (ev.type === 'conversation' && !conv.id) { conv.id = ev.id; history.replaceState(null, '', `#/ai/${ev.id}`); loadList(); }
+        if (ev.type === 'conversation' && !conv.id) { conv.id = ev.id; history.replaceState(history.state, '', `#/ai/${ev.id}`); loadList(); }
         live.on(ev); log.scrollTop = log.scrollHeight;
       } });
       live.stop();

@@ -1,4 +1,4 @@
-import { h, api, money, fmtDate, badge, tip, state, fail } from '../ui.js';
+import { h, api, money, fmtDate, badge, tip, state, fail, redirect, hashParams, setHashParam } from '../ui.js';
 import { fyOf } from '../calc.js';
 import { canView, hasFunction, WORKER_ROLES } from '../schema.js';
 import { storeDashboard } from './storedash.js';
@@ -52,13 +52,15 @@ export async function dashboardView(root) {
     canView('projects', role) && canView('purchase_orders', role) && ['projects', '🏗️ Projects'], canView('service_tickets', role) && ['service', '🛠️ Service'],
     ['enquiries', 'sales_orders', 'projects'].some(e => canView(e, role)) && ['journey', '🧭 Order Journey']].filter(Boolean);
   // Shop floor and site people land on their own performance.
-  if (WORKER_ROLES.includes(role)) { location.hash = window.Capacitor?.isNativePlatform?.() ? '#/attend' : '#/performance'; return; } // the Android app is for attendance
+  if (WORKER_ROLES.includes(role)) { redirect(window.Capacitor?.isNativePlatform?.() ? '#/attend' : '#/performance'); return; } // the Android app is for attendance
   if (!views.length) { root.replaceChildren(h('div.page-head', h('h1', '📊 Dashboard')), h('div.card', h('p', `Welcome, ${state.user.name}. Use the menu on the left.`))); return; }
-  let tab = sessionStorage.getItem('dash-tab');
+  // The tab is in the address (#/dashboard?tab=journey), so Back from a record opened here shows the same tab.
+  let tab = hashParams().get('tab') || sessionStorage.getItem('dash-tab');
   if (!views.some(v => v[0] === tab)) {
     const pref = { accounts: 'accounts', store: 'store', service: 'service', engineer: 'service' }[role];
     tab = views.some(v => v[0] === pref) ? pref : views[0][0];
   }
+  setHashParam('tab', tab);
   if (tab === 'crm') return crmDashboard(root, views);
   if (tab === 'journey') {
     const jbox = h('div', h('div.muted', 'Loading…'));
@@ -96,7 +98,7 @@ export async function dashboardView(root) {
 }
 function tabsOf(views, active, root) {
   if (views.length < 2) return null;
-  return h('div.tabs', views.map(([k, label]) => h('button', { class: k === active ? 'active' : '', onclick: () => { sessionStorage.setItem('dash-tab', k); dashboardView(root); } }, label)));
+  return h('div.tabs', views.map(([k, label]) => h('button', { class: k === active ? 'active' : '', onclick: () => { sessionStorage.setItem('dash-tab', k); setHashParam('tab', k); dashboardView(root); } }, label)));
 }
 
 async function crmDashboard(root, views) {

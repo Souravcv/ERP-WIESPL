@@ -1,4 +1,4 @@
-import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry, backLink, goBack, redirect } from '../ui.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS, ROLE_INFO } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
@@ -1206,10 +1206,10 @@ function itemSummary(itemId) {
 export async function recordView(root, entity, id) {
   const ent = ENTITIES[entity];
   if (!ent) throw new Error('Unknown module');
-  if (ent.editor === 'quotation' && id !== 'new') { location.hash = `#/quotation/${id}`; return; }
-  if (ent.editor === 'boq' && id !== 'new' && !/details=1/.test(location.hash)) { location.hash = `#/boq/${id}`; return; }
-  if (ent.editor === 'bom' && id !== 'new' && !/details=1/.test(location.hash)) { location.hash = `#/bom/${id}`; return; }
-  if (entity === 'stock_moves' && id === 'new') { location.hash = '#/stock-entry'; return; }
+  if (ent.editor === 'quotation' && id !== 'new') { redirect(`#/quotation/${id}`); return; }
+  if (ent.editor === 'boq' && id !== 'new' && !/details=1/.test(location.hash)) { redirect(`#/boq/${id}`); return; }
+  if (ent.editor === 'bom' && id !== 'new' && !/details=1/.test(location.hash)) { redirect(`#/bom/${id}`); return; }
+  if (entity === 'stock_moves' && id === 'new') { redirect('#/stock-entry'); return; }
   let isNew = id === 'new';
   const presets = Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
   let row = {};
@@ -1436,7 +1436,7 @@ export async function recordView(root, entity, id) {
     if (isNew) {
       // From here on this page edits the saved record, so saving again never makes a copy.
       isNew = false; id = saved.id;
-      window.history.replaceState(null, '', recordHref(entity, saved.id));
+      window.history.replaceState(history.state, '', recordHref(entity, saved.id));
       if (newFiles.pending().length) await newFiles.uploadTo(saved.id).catch(e => fail(new Error(`Saved, but a file could not be uploaded: ${e.message}`)));
     }
     if (quiet) return saved;
@@ -1448,7 +1448,7 @@ export async function recordView(root, entity, id) {
       const target = parentField && ['followups', 'payments', 'contacts', 'material_approvals'].includes(entity)
         ? recordHref(parentField.ref, back[1])
         : recordHref(entity, saved.id);
-      if (location.hash === target) recordView(root, entity, saved.id); else location.hash = target;
+      if (location.hash === target) recordView(root, entity, saved.id); else redirect(target);
     } else recordView(root, entity, id);
     return saved;
   }
@@ -1459,7 +1459,7 @@ export async function recordView(root, entity, id) {
     await api(`/${entity}/${id}`, { method: 'DELETE' });
     clearRefCache(entity);
     toast('Deleted');
-    location.hash = `#/list/${entity}`;
+    goBack(`#/list/${entity}`);
   }
 
   const newFiles = pendingAttachments(entity);
@@ -1475,7 +1475,7 @@ export async function recordView(root, entity, id) {
   const statusVal = ent.statusField && r[ent.statusField];
   root.replaceChildren(
     h('div.page-head',
-      h('a.btn.small', { href: `#/list/${entity}` }, '‹ Back'),
+      backLink(`#/list/${entity}`),
       h('h1', `${ent.icon} ${title}`), statusVal ? badge(statusVal) : null,
       r.approval_stage ? h('span.badge.warn', `waiting: ${r.approval_stage}`) : null,
       locked ? h('span.muted', '🔒 locked') : null,

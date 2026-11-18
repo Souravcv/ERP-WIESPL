@@ -1,4 +1,4 @@
-import { h, api, state, display, fail, download, toast, confirmBox, clearRefCache, busy, modal } from '../ui.js';
+import { h, api, state, display, fail, download, toast, confirmBox, clearRefCache, busy, modal, setHashQuery } from '../ui.js';
 import { ENTITIES, fieldMap, canWrite, canDelete } from '../schema.js';
 import { inr } from '../calc.js';
 
@@ -124,7 +124,7 @@ export async function listView(root, entity) {
   const statusSel = ent.statusField
     ? h('select', h('option', { value: '' }, ent.hiddenStatus ? `All (without “${ent.hiddenStatus}”)` : 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
     : null;
-  if (statusSel) statusSel.value = params.get('status') || '';
+  if (statusSel) statusSel.value = params.get(ent.statusField) || params.get('status') || '';
   // More filters (ent.filters), e.g. the enquiry salesperson and state.
   const extraSels = (ent.filters || []).map(k => fm[k]).filter(Boolean).map(f => {
     const opts = f.type === 'person' ? [...new Set([...state.people.map(p => p.name), ...(f.suggest || [])])].sort((a, b) => a.localeCompare(b)) : f.options.filter(Boolean);
@@ -136,8 +136,8 @@ export async function listView(root, entity) {
     return sel;
   });
   const hasDate = !!fm.date;
-  const from = hasDate ? h('input', { type: 'date', title: 'From date' }) : null;
-  const to = hasDate ? h('input', { type: 'date', title: 'To date' }) : null;
+  const from = hasDate ? h('input', { type: 'date', title: 'From date', value: params.get('from') || '' }) : null;
+  const to = hasDate ? h('input', { type: 'date', title: 'To date', value: params.get('to') || '' }) : null;
   const body = h('div.card.flush');
   const full = canDelete(entity, state.user.role);
   const selected = full ? new Set() : null;
@@ -167,8 +167,16 @@ export async function listView(root, entity) {
     return p.toString();
   };
   let timer;
+  // The filters go into the address (no new history entry), so Back from a record opened here shows the same filtered list.
+  const keepInHash = () => {
+    if (location.hash.split('?')[0] !== `#/list/${entity}`) return;
+    const p = new URLSearchParams(query());
+    for (const [k, v] of params) if (!fm[k] && !['q', 'from', 'to', 'status', 't'].includes(k) && !p.has(k)) p.set(k, v);
+    setHashQuery(p.toString());
+  };
   async function load() {
     try {
+      keepInHash();
       let rows = await api(`/${entity}?${query()}`);
       // e.g. old imported POs: only listed (and totalled) when that status is chosen
       if (ent.hiddenStatus && !statusSel?.value) rows = rows.filter(r => r[ent.statusField] !== ent.hiddenStatus);

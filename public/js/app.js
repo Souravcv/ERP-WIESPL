@@ -1,4 +1,4 @@
-import { h, api, state, toast, fail, modal } from './ui.js';
+import { h, api, state, toast, fail, modal, markNav, redirect } from './ui.js';
 import { startI18n, getLang, setLang } from './i18n.js';
 import { initAssistant } from './assistant.js';
 import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES } from './schema.js';
@@ -118,6 +118,7 @@ export async function refreshPending() {
 
 async function route() {
   const view = $('view');
+  markNav();
   const [page, a, b] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   $('sidebar').classList.remove('open');
   $('print-root').classList.add('hidden');
@@ -250,7 +251,7 @@ async function start() {
   refreshPending();
   startNotifications();
   if (state.user.must_change) await changePassword(true);
-  if (!location.hash || location.hash === '#/login') location.hash = '#/dashboard';
+  if (!location.hash || location.hash === '#/login') redirect('#/dashboard');
   else route();
 }
 

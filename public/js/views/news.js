@@ -1,12 +1,12 @@
 // News (server/news.js): new hospitals all over India (sales leads), OT & hospital technology, regulation. Headlines link
 // to the publisher's site; a new hospital becomes an enquiry with one click.
-import { h, api, toast, fail, busy, fmtDate } from '../ui.js';
+import { h, api, toast, fail, busy, fmtDate, hashParams, setHashParam } from '../ui.js';
 
 const TABS = [['leads', '🏥 New hospitals (leads)'], ['tech', '⚙️ OT & hospital technology'], ['regulation', '📜 Rules & NABH'], ['all', '🌐 All']];
 const ago = s => { if (!s) return ''; const d = Math.round((Date.now() - Date.parse(s.replace(' ', 'T'))) / 864e5); return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`; };
 
 export async function newsView(root) {
-  let tab = 'leads'; try { tab = sessionStorage.getItem('news-tab') || 'leads'; } catch { /* private window */ }
+  let tab = hashParams().get('tab') || 'leads'; try { tab = hashParams().get('tab') || sessionStorage.getItem('news-tab') || 'leads'; } catch { /* private window */ }
   const search = h('input', { type: 'search', placeholder: 'Search: city, hospital, word…', style: { minWidth: '220px' } });
   const stateSel = h('select', h('option', { value: '' }, 'All states'));
   const out = h('div');
@@ -36,7 +36,7 @@ export async function newsView(root) {
       h('a.btn.small', { href: n.url, target: '_blank', rel: 'noopener noreferrer' }, 'Read ↗'),
       n.status !== 'lead' ? h('button.btn.small', { type: 'button', title: 'Not useful: hide it', onclick: act(n, 'dismissed') }, 'Hide') : null));
   const draw = () => {
-    tabs.replaceChildren(...TABS.map(([k, label]) => h('button', { type: 'button', class: `tab${k === tab ? ' active' : ''}`, onclick: () => { tab = k; try { sessionStorage.setItem('news-tab', k); } catch { /* ignore */ } load().catch(fail); } },
+    tabs.replaceChildren(...TABS.map(([k, label]) => h('button', { type: 'button', class: `tab${k === tab ? ' active' : ''}`, onclick: () => { tab = k; setHashParam('tab', k); try { sessionStorage.setItem('news-tab', k); } catch { /* ignore */ } load().catch(fail); } },
       label, d.counts[k === 'tech' ? 'ot' : k] ? h('span.count', d.counts[k === 'tech' ? 'ot' : k]) : null)));
     const st = d.status;
     const broken = st?.feeds?.filter(f => !f.ok) || [];

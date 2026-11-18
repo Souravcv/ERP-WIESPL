@@ -10,6 +10,35 @@ Element.prototype.replaceChildren = function (...kids) {
   return nativeReplace.apply(this, kids.flat(Infinity).filter(k => k != null && k !== false));
 };
 
+// ---------------------------------------------------------------- history: Back returns to the page (and tab) you came from
+// Each history entry of the app carries its depth in history.state (kept across reloads and back / forward),
+// so "‹ Back" knows whether there is an earlier screen of the CRM to go back to.
+let lastDepth = null;
+export const navDepth = () => history.state?.wiesplDepth ?? 0;
+export function markNav() { // called by the router on every screen change
+  if (history.state?.wiesplDepth == null) history.replaceState({ ...(history.state || {}), wiesplDepth: lastDepth == null ? 0 : lastDepth + 1 }, '');
+  lastDepth = history.state.wiesplDepth;
+}
+// Back to the previous screen; the fallback (usually the list) only when this tab has no earlier CRM screen.
+export function goBack(fallback) { if (navDepth() > 0) history.back(); else location.hash = fallback; }
+// "‹ Back" button; without history it opens the fallback and says where (e.g. "‹ BOQs").
+export function backLink(fallback, label = '‹ Back') {
+  return h('a.btn.small', { href: fallback, onclick: e => {
+    if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || navDepth() < 1) return; // new tab / no history: follow the link
+    e.preventDefault(); history.back();
+  } }, navDepth() > 0 ? '‹ Back' : label);
+}
+// Go to another screen in place of this one (a redirect), so Back does not land on the redirecting address again.
+export function redirect(hash) { history.replaceState(history.state, '', hash); window.dispatchEvent(new HashChangeEvent('hashchange')); }
+// Read / write the ?query of the current address without a new history entry and without redrawing the screen
+// (tabs and filters, so that coming back to this entry shows the same tab).
+export const hashParams = () => new URLSearchParams(location.hash.split('?')[1] || '');
+export function setHashQuery(qs) {
+  const base = location.hash.split('?')[0], next = qs ? `${base}?${qs}` : base;
+  if (next !== location.hash) history.replaceState(history.state, '', next);
+}
+export function setHashParam(key, value) { const p = hashParams(); if (value) p.set(key, value); else p.delete(key); setHashQuery(p.toString()); }
+
 // h('div.card#x', {onclick}, children...) - tiny element builder; strings are always text, never HTML.
 export function h(tag, attrs, ...children) {
   const [, name = 'div', rest = ''] = tag.match(/^([a-z0-9]+)?(.*)$/i);

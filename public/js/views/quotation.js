@@ -1,4 +1,4 @@
-import { h, api, state, toast, fail, modal, confirmBox, fieldInput, badge, money, clearRefCache } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, fieldInput, badge, money, clearRefCache, backLink, hashParams, setHashParam } from '../ui.js';
 import { canWrite, UOMS } from '../schema.js';
 import { roomAreas, quoteTotals, lineBasicRate, lineQty, inr, round2, amountInWords, MM_PER_FT, AREA_BASES } from '../calc.js';
 
@@ -79,7 +79,7 @@ export async function quotationView(root, id) {
   data.annex ||= { usp: true, bod: true, summary: true, terms: true, scope: true };
   const editable = EDITABLE.includes(q.status) && canWrite('quotations', state.user.role);
   let dirty = false;
-  let tab = sessionStorage.getItem('q-tab') || 'rooms';
+  let tab = hashParams().get('tab') || sessionStorage.getItem('q-tab') || 'rooms';
 
   const head = {};
   const headFields = [
@@ -457,13 +457,13 @@ export async function quotationView(root, id) {
   const TABS = [['rooms', '1. Rooms & Basis of Design', roomsTab], ['boq', '2. BOQ', boqTab], ['optional', '3. Optional Items', optionalTab], ['summary', '4. Summary', summaryTab], ['terms', '5. Letter, Terms & Scope', termsTab]];
   function render() {
     live = { refresh: () => {} };
-    tabs.replaceChildren(...TABS.map(([k, label]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; sessionStorage.setItem('q-tab', k); render(); } }, label)));
+    tabs.replaceChildren(...TABS.map(([k, label]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; sessionStorage.setItem('q-tab', k); setHashParam('tab', k); render(); } }, label)));
     tabBody.replaceChildren(TABS.find(t => t[0] === tab)[2]());
     refresh();
   }
 
   root.replaceChildren(
-    h('div.page-head', h('a.btn.small', { href: '#/list/quotations' }, '‹ Back'), h('h1', `🧾 ${q.quote_no}`), badge(q.status),
+    h('div.page-head', backLink('#/list/quotations'), h('h1', `🧾 ${q.quote_no}`), badge(q.status),
       q.approved_by ? h('span.muted', `approved by ${q.approved_by} ${q.approved_at || ''}`) : null,
       editable ? null : h('span.muted', '🔒 read-only (use Revise to change)'),
       h('div.actions', actions())),

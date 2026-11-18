@@ -1,6 +1,6 @@
 // BOQ / Bill of Material window (WIESPL engineers' format): components by section, what is procured
 // (requisition → PO → GRN), what is sent to site and what is pending. Dispatch makes the challan automatically.
-import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy, reservedRetry } from '../ui.js';
+import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, busy, reservedRetry, backLink } from '../ui.js';
 import { canView, canWrite, hasFunction } from '../schema.js';
 import { sigImg, stampImg } from '../signs.js';
 import { itemPicker, attachments, bomRows, toProcure } from './form.js';
@@ -311,7 +311,7 @@ export async function bomView(root, bomId) {
   const items_ = rows.filter(r => r.qty > 0);
   const k = (label, v, sub) => h('div.kpi', h('div.label', label), h('div.value', v), sub ? h('div.sub', sub) : null);
   root.replaceChildren(
-    h('div.page-head', h('a.btn.small', { href: '#/list/boms' }, '‹ BOQs'),
+    h('div.page-head', backLink('#/list/boms', '‹ BOQs'),
       h('h1', `📑 ${bom.bom_no} · ${bom.client || ''}`), badge(bom.status),
       h('div.actions',
         h('a.btn', { href: `#/print/bom/${bomId}`, target: '_blank' }, '🖨 Print BOQ'),

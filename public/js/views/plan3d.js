@@ -1,7 +1,7 @@
 // 🧊 A CAD floor plan (DWG / DXF attached to any record) shown in 3D like an architect's model: solid walls with
 // dark section-cut tops, glass, raised furniture, soft shadows and colour-coded room names.
 // The DWG is read once in a Web Worker (plan-worker.js); the result is kept on the server so it reopens instantly.
-import { h, api, toast, fail } from '../ui.js';
+import { h, api, toast, fail, goBack } from '../ui.js';
 import { guessRole } from '../plan-extract.js';
 import { roomSize, isOt, openOtStudio, finishText, quantitiesDialog } from './plan3d-extras.js';
 import { findRoom, highlightMeshes, otMark, disposeGroup, DEFAULT_FINISH, BRIEF_NAMES } from './plan3d-rooms.js';
@@ -69,7 +69,7 @@ export async function plan3dView(root, fileId) {
   const onKey = e => { if (!wrap.isConnected) return document.removeEventListener('keydown', onKey); if (e.key === 'Escape' && wrap.classList.contains('p3-full') && !wrap.querySelector('.p3-touring')) toggleFull(wrap); };
   document.addEventListener('keydown', onKey);
   root.replaceChildren(
-    h('div.page-head', h('h1', `🧊 ${name}`), h('div.actions', h('button.btn', { onclick: () => history.back() }, '‹ Back'), fsBtn, h('a.btn', { href: `/api/files/${id}` }, '⬇ Download drawing'))),
+    h('div.page-head', h('h1', `🧊 ${name}`), h('div.actions', h('button.btn', { onclick: () => goBack('#/dashboard') }, '‹ Back'), fsBtn, h('a.btn', { href: `/api/files/${id}` }, '⬇ Download drawing'))),
     wrap);
 
   let plan;

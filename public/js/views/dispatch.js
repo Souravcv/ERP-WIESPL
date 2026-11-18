@@ -1,6 +1,6 @@
 // Work order window: upload the client's work order, see each section's material, what is sent and what is pending,
 // and dispatch (the delivery challan is created automatically).
-import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, reservedRetry } from '../ui.js';
+import { h, api, state, toast, fail, modal, badge, fmtDate, today, refOptions, clearRefCache, reservedRetry, backLink } from '../ui.js';
 import { canView, canWrite, WO_DEPARTMENTS, ROLE_DEPARTMENT } from '../schema.js';
 import { itemPicker, attachments } from './form.js';
 
@@ -251,7 +251,7 @@ export async function boqView(root, boqId) {
   search.oninput = draw;
   const all = stats(rows);
   root.replaceChildren(
-    h('div.page-head', h('a.btn.small', { href: '#/list/boqs' }, '‹ Work Orders'),
+    h('div.page-head', backLink('#/list/boqs', '‹ Work Orders'),
       h('h1', `📑 ${boq.boq_no} · ${boq.title}`), badge(boq.status),
       h('div.actions',
         canEdit ? h('button.btn', { onclick: () => addFile().catch(fail) }, '📥 Add work order file') : null,
