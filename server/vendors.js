@@ -127,6 +127,86 @@ export function scarFromIqc(move, status, remarks, user) {
     description: `IQC ${status.toLowerCase()}: ${qty} ${move.uom || ''} rejected. ${remarks || ''}`.trim(), status: 'Open', raised_by: user.name }, user, { system: true });
 }
 
+// On-time in-full (OTIF) per vendor per month. Each GRN (one GRN number against one PO) is measured against the first
+// date the vendor promised — the PO line's promised_first, else the PO's first_promised, else its delivery date — and
+// the quantity ordered on the PO line. A GRN is OTIF when every line it brings came on or before that date and the PO
+// line was complete after it (all GRNs on that line up to this one, against the quantity ordered). GRN lines with no
+// date or no PO line to compare with are not measured; GRNs with nothing measured are counted as "no promised date".
+export const OTIF_TARGET = 85;
+const monthsBack = (n, end = today()) => {
+  let y = Number(end.slice(0, 4)), m = Number(end.slice(5, 7));
+  const out = [];
+  for (let i = 0; i < n; i++) { out.unshift(`${y}-${String(m).padStart(2, '0')}`); if (--m === 0) { m = 12; y--; } }
+  return out;
+};
+const pctOf = (a, n) => (n ? Math.round(a / n * 100) : null);
+export function otif(q = {}) {
+  const months = monthsBack(Math.max(1, Math.min(24, Number(q.months) || 12)), q.to || today());
+  const from = `${months[0]}-01`, to = q.to || today();
+  // every GRN line against a PO up to the end of the window (earlier ones count towards "complete")
+  const moves = db.prepare(`SELECT m.id, m.date, m.doc_no, m.qty, m.item_id, m.po_line, m.po_id, p.vendor_id FROM stock_moves m JOIN purchase_orders p ON p.id = m.po_id
+    WHERE m.type = 'INWARD' AND p.vendor_id IS NOT NULL AND m.date <= ? ORDER BY m.date, m.id`).all(to);
+  const pos = new Map();
+  const poOf = id => {
+    if (!pos.has(id)) {
+      const p = db.prepare('SELECT id, first_promised, delivery_date, lines FROM purchase_orders WHERE id = ?').get(id);
+      let lines = [];
+      try { lines = Array.isArray(p.lines) ? p.lines : JSON.parse(p.lines || '[]'); } catch { lines = []; }
+      pos.set(id, { ...p, lines: Array.isArray(lines) ? lines : [], got: new Map() });
+    }
+    return pos.get(id);
+  };
+  const grns = new Map(); // `${po}|${doc}` → the GRN's verdict
+  for (const m of moves) {
+    const po = poOf(m.po_id);
+    let i = Number.isInteger(m.po_line) && po.lines[m.po_line] ? m.po_line : -1;
+    if (i < 0 && m.item_id) i = po.lines.findIndex(l => l.item_id && Number(l.item_id) === Number(m.item_id));
+    const got = (po.got.get(i) || 0) + (Number(m.qty) || 0);
+    if (i >= 0) po.got.set(i, got);
+    if (m.date < from) continue;
+    const key = `${m.po_id}|${m.doc_no || m.id}`;
+    if (!grns.has(key)) grns.set(key, { vendor_id: m.vendor_id, month: m.date.slice(0, 7), lines: 0, late: 0, short: 0 });
+    const g = grns.get(key);
+    const l = po.lines[i];
+    const due = (l && l.promised_first) || po.first_promised || po.delivery_date || null;
+    const ordered = l ? Number(l.qty) || 0 : 0;
+    if (!due || !(ordered > 0)) continue;
+    g.lines++;
+    if (m.date > due) g.late++;
+    if (got < ordered - 1e-6) g.short++;
+  }
+  const vendors = new Map();
+  for (const g of grns.values()) {
+    if (!vendors.has(g.vendor_id)) vendors.set(g.vendor_id, { vendor_id: g.vendor_id, grns: 0, ot: 0, inf: 0, otif: 0, undated: 0, by: {} });
+    const v = vendors.get(g.vendor_id);
+    if (!g.lines) { v.undated++; continue; }
+    const b = v.by[g.month] || (v.by[g.month] = { n: 0, otif: 0 });
+    const ot = !g.late, inf = !g.short;
+    v.grns++; b.n++;
+    if (ot) v.ot++;
+    if (inf) v.inf++;
+    if (ot && inf) { v.otif++; b.otif++; }
+  }
+  const names = new Map(db.prepare('SELECT id, name, vendor_code, vendor_status FROM vendors').all().map(r => [r.id, r]));
+  const rows = [...vendors.values()].map(v => {
+    const n = names.get(v.vendor_id) || {};
+    const trend = months.map(mo => (v.by[mo] ? { month: mo, n: v.by[mo].n, otif: v.by[mo].otif, pct: pctOf(v.by[mo].otif, v.by[mo].n) } : { month: mo, n: 0, otif: 0, pct: null }));
+    const last = [...trend].reverse().find(t => t.n);
+    const pct = pctOf(v.otif, v.grns);
+    return { vendor_id: v.vendor_id, name: n.name || `Vendor ${v.vendor_id}`, vendor_code: n.vendor_code || '', vendor_status: n.vendor_status || '',
+      grns: v.grns, otif: v.otif, pct, on_time: pctOf(v.ot, v.grns), in_full: pctOf(v.inf, v.grns), undated: v.undated, trend,
+      last_month: last ? last.month : null, last_pct: last ? last.pct : null, below: pct != null && pct < OTIF_TARGET };
+  });
+  // worst first; vendors with nothing measured go last
+  rows.sort((a, b) => (a.pct == null) - (b.pct == null) || (a.pct ?? 0) - (b.pct ?? 0) || b.grns - a.grns || a.name.localeCompare(b.name));
+  const total = rows.reduce((a, r) => ({ grns: a.grns + r.grns, otif: a.otif + r.otif, undated: a.undated + r.undated }), { grns: 0, otif: 0, undated: 0 });
+  const overall = months.map(mo => {
+    const n = rows.reduce((a, r) => a + r.trend.find(t => t.month === mo).n, 0), ok = rows.reduce((a, r) => a + r.trend.find(t => t.month === mo).otif, 0);
+    return { month: mo, n, otif: ok, pct: pctOf(ok, n) };
+  });
+  return { target: OTIF_TARGET, from, to, months, rows, overall, total: { ...total, pct: pctOf(total.otif, total.grns) } };
+}
+
 // Every vendor with its code, status, rating and what the data says (approved vendor list + performance dashboard).
 export function performance(q = {}) {
   const from = q.from || `${Number(today().slice(0, 4)) - (today().slice(5, 7) < '04' ? 1 : 0)}-04-01`;
@@ -140,5 +220,8 @@ export function performance(q = {}) {
     Object.assign(r, { otd: s.delivery, quality: s.quality, due_review: !r.last_review || r.last_review < new Date(Date.now() - 183 * 864e5).toLocaleString('sv-SE').slice(0, 10),
       expired: r.valid_till && r.valid_till < today() });
   }
-  return { from, rows };
+  const o = otif({ months: q.months });
+  const byVendor = new Map(o.rows.map(r => [r.vendor_id, r]));
+  for (const r of rows) { const x = byVendor.get(r.id); r.otif = x ? x.pct : null; r.otif_below = !!(x && x.below); }
+  return { from, rows, otif: o };
 }
