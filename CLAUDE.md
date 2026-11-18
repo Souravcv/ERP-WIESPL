@@ -52,6 +52,29 @@ memory do not move between computers).
   check every DNS record is copied before changing nameservers, and let the owner do account sign-ups, passwords and the nameserver change.
 - Render (`render.yaml`, service ERP-WIESPL) is only a demo: the free plan loses data on restart.
 
+## This PC: dev copy, live copy, auto-update (Nov 2026)
+- Work in **`C:\Users\WIESPL\ERP-WIESPL-dev`** (this folder). The live CRM runs from `C:\Users\WIESPL\ERP-WIESPL` on port 3000 and pulls
+  GitHub `main` every 5 minutes by itself (log `C:\ProgramData\WIESPL-CRM\auto-update.log`: "Updating a -> b", backup, "Update done").
+  Never edit the live folder; live data (`C:\Users\WIESPL\ERP-WIESPL\data\wiespl.db`) is read-only for Claude.
+- Copy of live data for tests: `node --no-warnings C:/ProgramData/WIESPL-CRM/backup-db.mjs <live db> <tempdir>/wiespl.db`; delete the copy after.
+- Commit: `git -c user.name="Sourav Cv" -c user.email="souravcv321@gmail.com" commit -F <msgfile>`; add named files only (never the untracked
+  `PO import report.txt`, `Store vs Excel differences.xlsx`).
+- **Push only when the owner says so.** Before: `git fetch` and look for incoming commits (another session may have pushed: rebase on it,
+  re-test). After: wait for "Update done" for the new hash in the log, then tell the owner to press Ctrl+F5.
+- Keep it cheap: batch several changes per push; test with small node scripts that import the server modules against a data copy
+  rather than clicking through the browser; one browser look at the end for screens.
+- Python 3.13 (not on PATH): `C:\Users\WIESPL\AppData\Local\Programs\Python\Python313\python.exe -I` (openpyxl, pandas, pypdf …) for reading Excel / PDF.
+
+## Modules added in Nov 2026 (server file · screen)
+- Order journey enquiry → handover, 6 phases / 41 steps, RACI, tasks, gate approvals, documents, site plan with crew, alerts,
+  dashboard, pilot page: `public/js/journey.js` (steps, RACI) · `server/journey.js` · `views/journey.js` (#/journey, /team, /raci, /dashboard, /guide).
+- Material tracker per project (needed-by / promised per PO line, PO ↔ project links): `server/materials.js` · `views/materials.js`.
+- PO follow-ups (expediting) + daily reminders: `server/pofollow.js`. TDS register + optional PO check (Off / Warn / Block): `server/tds.js`.
+- BOQ components ↔ store items (matching by name + size): `server/itemmatch.js` · `views/bompick.js`; work-order Excel reading in `server/dispatch.js` (parseSheet).
+- News (new hospitals all over India as leads, OT tech, rules; public feeds only): `server/news.js` · `views/news.js`.
+- Invoices: Normal / RA bill, RA numbered per project `RA3/2026-27/40`, normal `2026-27/41`; WIESPL print `invoiceDoc` in `views/print.js`.
+- Roles: heads (md, chief_engineer, finance_head, design_head, qc_head, project_head, sales_head, marketing) in `public/js/schema.js`.
+
 ## Working rules
 - Test on a copy of the data (`WIESPL_DATA_DIR=<temp copy> PORT=3002 node server/index.js`), never on the live `data/wiespl.db`.
 - Never type passwords or tokens for the owner; never delete data without a backup and consent.
