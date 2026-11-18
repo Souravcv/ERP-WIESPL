@@ -517,8 +517,7 @@ export async function printView(root, kind, id) {
     const c = await api(`/customers/${inv.customer_id}`);
     const so = inv.sales_order_id ? await api(`/sales_orders/${inv.sales_order_id}`) : null;
     title = inv.invoice_no || 'Draft invoice';
-    doc = taxDoc({ title: inv.type === 'Proforma Invoice' ? 'PROFORMA INVOICE' : 'TAX INVOICE', no: inv.invoice_no || 'DRAFT – not issued', date: inv.date, party: c, partyLabel: 'Bill to:',
-      refs: [['Sales Order', so?.so_no], ['Client PO', so?.client_po_no], ['Due date', fmtDate(inv.due_date)]], items: inv.lines || [], place: inv.place_of_supply, notes: inv.notes, s });
+    doc = invoiceDoc(inv, c, so, s);
   } else if (kind === 'creditnote') {
     const cn = await api(`/credit_notes/${id}`);
     const inv = await api(`/invoices/${cn.invoice_id}`);
@@ -590,4 +589,55 @@ export async function printView(root, kind, id) {
   } else throw new Error('Unknown document');
   document.title = title;
   root.replaceChildren(bar(title), doc);
+}
+
+// ---------------------------------------------------------------- the tax invoice, in WIESPL's format
+// Bill To / Ship To with GST no.; invoice no., date, Udyam (MSME) no., challan no., the client's work order no. and date;
+// the material by area (a line without qty and rate is an area heading: A Mj OT 1, B Mj OT 2 … numbered 1, 2 … under it);
+// basic total, CGST + SGST (or IGST) per rate, round off, grand total; the terms, signatory, client's seal, bank details.
+const INVOICE_TERMS = ['Supply of material as per attached Annexure.', 'Our responsibility ceases as soon as goods leave our premises.',
+  'Material stored at your premises is under your responsibility.', 'Material provided as per work order.', 'Rejected material should be returned with in 7 days.',
+  'Interest will be charges @ 24 % p.a. on bills not paid within 30 days.', 'Goods once sold will not be taken back under any circumstances.',
+  'Rates applied are inclusive of installation and finishing as per provided BOQ.', 'Subject to PUNE Jurisdiction.',
+  'Material provided will be under comprehensive warranty 12 month from the date of installation.'];
+function invoiceDoc(inv, c, so, s) {
+  const intra = (inv.place_of_supply || '').toLowerCase() === (s.state || 'Maharashtra').toLowerCase();
+  const items = (inv.lines || []).filter(l => l.description || Number(l.qty) || Number(l.rate));
+  const isHead = l => !(Number(l.qty) || 0) && !(Number(l.rate) || 0) && l.description;
+  const amt = l => round2((Number(l.qty) || 0) * (Number(l.rate) || 0));
+  // GST per rate
+  const byRate = new Map();
+  for (const l of items) if (!isHead(l)) { const r = Number(l.gst) || 0; byRate.set(r, round2((byRate.get(r) || 0) + amt(l))); }
+  const basic = round2([...byRate.values()].reduce((a, b) => a + b, 0));
+  const taxes = [...byRate].filter(([r]) => r > 0).flatMap(([r, base]) => (intra ? [[`CGST ${r / 2}%`, round2(base * r / 200)], [`SGST ${r / 2}%`, round2(base * r / 200)]] : [[`IGST ${r}%`, round2(base * r / 100)]]));
+  const exact = basic + taxes.reduce((a, [, v]) => a + v, 0), grand = Math.round(exact), roundOff = round2(grand - exact);
+  let letter = 0, sr = 0;
+  const rows = items.map(l => {
+    if (isHead(l)) { sr = 0; return h('tr.inv-head', h('td', h('b', String.fromCharCode(65 + letter++))), h('td', { colspan: 6 }, h('b', l.description))); }
+    return h('tr', h('td', ++sr), h('td.spec', l.description), h('td.nowrap', l.hsn || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td.num', inr(l.rate)), h('td.num', inr(amt(l))));
+  });
+  const party = (label, name, address, gstin) => h('div', h('b', label), h('div', { style: { paddingLeft: '14px' } }, h('b', name || ''), h('br'), ...multiline(address || ''), gstin ? [h('br'), `GST No : ${gstin}`] : null));
+  const info = [['Invoice No.', h('b', inv.invoice_no || 'DRAFT – not issued')], ['Date', fmtDate(inv.date)], ['Udyam Reg. No. (MSME)', s.udyam_no || 'Udyam-MH-26-0033790'],
+    ['Challan No', inv.challan_nos], ['Work Order Number', inv.wo_number || so?.client_po_no], ['Date', fmtDate(inv.wo_date || so?.client_po_date)], ['Place of supply', inv.place_of_supply]].filter(x => x[1]);
+  const terms = (Array.isArray(s.invoice_terms) && s.invoice_terms.length ? s.invoice_terms : INVOICE_TERMS);
+  const sum = (k, v, bold) => h('tr', h('td', { style: { textAlign: 'right' } }, bold ? h('b', k) : k), h('td.num', bold ? h('b', inr(v)) : inr(v)));
+  return h('div.doc', page(letterhead(s), h('h2', inv.type === 'Proforma Invoice' ? 'Proforma Invoice' : 'Tax Invoice'),
+    h('table', h('tbody', h('tr',
+      h('td', { style: { width: '55%', verticalAlign: 'top' } }, party('Bill To :-', c.name, c.address, c.gstin), h('div', { style: { marginTop: '8px' } }, party('Ship To : -', c.name, inv.ship_to || c.address, c.gstin))),
+      h('td', { style: { verticalAlign: 'top', padding: 0 } }, h('table.inv-info', h('tbody', info.map(([k, v]) => h('tr', h('th', k), h('td', v))))))))),
+    h('table', { style: { marginTop: '8px' } },
+      h('thead', h('tr', ['Sr. No.', 'Description of Goods', 'HSN/SAC CODE', 'Qty.', 'UOM', 'Rate', 'Amount'].map((x, i) => h('th' + (i === 3 || i >= 5 ? '.num' : ''), x)))),
+      h('tbody', rows),
+      h('tfoot', h('tr', h('td'), h('td', { colspan: 5 }, h('b', 'Total')), h('td.num', h('b', inr(basic)))))),
+    h('table', { style: { marginTop: '6px' } }, h('tbody', h('tr',
+      h('td', { style: { width: '58%', verticalAlign: 'top' } }, h('div', h('b', amountInWords(grand))), h('div', { style: { marginTop: '4px', fontSize: '11px' } }, 'E. & O.E.')),
+      h('td', { style: { padding: 0, verticalAlign: 'top' } }, h('table.inv-sum', h('tbody', sum('Basic Total', basic), taxes.map(([k, v]) => sum(k, v)), roundOff ? sum('Round off', roundOff) : null, sum('Grand Total', grand, true))))))),
+    h('table', { style: { marginTop: '6px' } }, h('tbody', h('tr',
+      h('td', { style: { width: '58%', verticalAlign: 'top', fontSize: '11px' } }, h('ol.inv-terms', terms.map(t => h('li', t)))),
+      h('td', { style: { verticalAlign: 'top' } }, sign(s, inv.issued_by))))),
+    h('table', { style: { marginTop: '6px' } }, h('tbody', h('tr',
+      h('td', { style: { width: '40%', height: '70px', verticalAlign: 'bottom' } }, h('b', "Client's Seal & Signature")),
+      h('td', { style: { verticalAlign: 'top', fontSize: '11px' } }, h('b', 'Bank Details :'), h('br'), ...multiline(String(s.bank_details || '').replace(/^"+|"+$/g, '').trim() || ['Western India Electromedical Systems Pvt Ltd.', 'Bank - Axis Bank Ltd., Branch - Chinchwad,', 'Account No. 103010200001007, IFSC code - UTIB0000103.'].join('\n')))))),
+    inv.notes ? h('div.spec', { style: { marginTop: '6px', fontSize: '11px' } }, inv.notes) : null,
+    footer()));
 }

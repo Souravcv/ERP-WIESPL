@@ -1002,3 +1002,10 @@ span.ai-chip { color: var(--text-2); }
 .nw-title:hover { text-decoration: underline; }
 .nw-snip { font-size: 13px; color: var(--muted, #64748b); }
 .nw-btns { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+
+/* tax invoice print */
+.inv-head td { background: #f3f4f6; }
+.inv-info th { text-align: left; width: 48%; font-weight: 600; }
+.inv-info, .inv-sum { width: 100%; margin: 0; }
+.inv-terms { margin: 0; padding-left: 18px; }
+.inv-terms li { margin: 1px 0; }

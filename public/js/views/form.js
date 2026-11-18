@@ -56,6 +56,8 @@ export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.
 let pickerId = 0;
 export function itemPicker(items, value, { readonly, onPick } = {}) {
   const id = 'items-dl-' + ++pickerId;
+  // a text box holds one line: a name written on several lines (item 1641 …) is shown and matched on one line
+  items = items.map(o => (/\s{2,}|[\r\n\t]/.test(o.label || '') ? { ...o, label: String(o.label).replace(/\s+/g, ' ').trim() } : o));
   const byLabel = new Map(items.map(o => [o.label, o.id]));
   const inp = h('input', { list: id, readOnly: readonly, placeholder: 'Item code or name…', style: { minWidth: '220px' } });
   inp.value = items.find(o => o.id === value)?.label || '';

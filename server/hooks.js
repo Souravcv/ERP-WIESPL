@@ -505,7 +505,16 @@ export function beforeSave(name, row, existing, user) {
       // A proforma is numbered when made; a tax invoice when it is issued (see receivables.issueInvoice), so drafts
       // leave no gaps in the GST invoice series.
       if (!existing && !row.invoice_no && type === 'Proforma Invoice') row.invoice_no = docNo('proforma', date, (n, fy) => `PI/${fy}/${n}`);
-      if (existing?.status === 'Draft' && row.status === 'Issued' && type === 'Tax Invoice' && !existing.invoice_no) row.invoice_no = docNo('invoice', date, (n, fy) => `${prefix()}/${fy}/${n}`);
+      if (existing?.status === 'Draft' && row.status === 'Issued' && type === 'Tax Invoice' && !existing.invoice_no) {
+        // an RA (running account) bill: the project's next RA no., then the year and the running invoice no. (RA3/2026-27/40)
+        if (String(row.bill_kind ?? existing.bill_kind ?? '').startsWith('RA')) {
+          const pid = row.project_id ?? existing.project_id;
+          if (!pid) throw Object.assign(new Error('An RA bill is for a project: choose the project first'), { status: 400 });
+          const ra = (db.prepare("SELECT MAX(ra_no) m FROM invoices WHERE project_id = ? AND ra_no IS NOT NULL AND status <> 'Cancelled' AND id <> ?").get(Number(pid), existing.id).m || 0) + 1;
+          row.ra_no = ra;
+          row.invoice_no = docNo('invoice', date, (n, fy) => `RA${ra}/20${fy}/${Number(n)}`);
+        } else row.invoice_no = docNo('invoice', date, (n, fy) => `20${fy}/${Number(n)}`); // a normal invoice: the year and the running no. (2026-27/41)
+      }
       const soId = row.sales_order_id ?? existing?.sales_order_id;
       if (!existing && soId) {
         const so = db.prepare('SELECT customer_id, retention_pct FROM sales_orders WHERE id = ?').get(Number(soId));

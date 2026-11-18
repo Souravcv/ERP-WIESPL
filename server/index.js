@@ -306,7 +306,7 @@ const DOC_SERIES = [
   { key: 'bom', label: 'BOQ', table: 'boms', col: 'bom_no', fmt: (n, fy) => `BOQ-${n}/20${fy}` },
   { key: 'submittal', label: 'Material / Drawing Approval', table: 'material_approvals', col: 'submittal_no', fmt: (n, fy) => `MAS/${fy}/${n}` },
   { key: 'proforma', label: 'Proforma Invoice', table: 'invoices', col: 'invoice_no', fmt: (n, fy) => `PI/${fy}/${n}` },
-  { key: 'invoice', label: 'Tax Invoice', table: 'invoices', col: 'invoice_no', where: "type = 'Tax Invoice'", fmt: (n, fy) => `${pfx()}/${fy}/${n}` },
+  { key: 'invoice', label: 'Tax Invoice (running no. of normal and RA bills)', table: 'invoices', col: 'invoice_no', where: "type = 'Tax Invoice'", fmt: (n, fy) => `20${fy}/${Number(n)}` },
   { key: 'receipt', label: 'Customer Receipt', table: 'payments', col: 'receipt_no', fmt: (n, fy) => `RCT-${n}/20${fy}` },
   { key: 'credit_note', label: 'Credit Note', table: 'credit_notes', col: 'cn_no', fmt: (n, fy) => `CN-${n}/20${fy}` },
   { key: 'debit_note', label: 'Debit Note', table: 'debit_notes', col: 'dn_no', fmt: (n, fy) => `DN-${n}/20${fy}` },
