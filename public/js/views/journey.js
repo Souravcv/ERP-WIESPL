@@ -3,6 +3,7 @@
 // when the CRM already records the fact.
 import { h, api, toast, fail, busy, modal, fmtDate, today } from '../ui.js';
 import { PHASES, STEPS, RACI } from '../journey.js';
+import { storePanel } from './materials.js';
 
 const KIND = { start: 'Start / milestone', gate: 'Approval or check', client: 'Client', vendor: 'Vendor', site: 'Site', end: 'Handover', step: 'Step' };
 
@@ -233,7 +234,7 @@ async function detail(root, id) {
       s.subs ? null : raciLines(d.roles, s.key),
       s.subs ? h('div.jr-subs', x.subs.map(p => h('div', { class: `jr-sub st-${p.status}` }, h('div.jr-steph', h('span', p.title), state(p, p.key, p.title)[0]), h('div.jr-who', p.who), raciLines(d.roles, p.key), ...state(p, p.key, p.title).slice(1))))
         : s.derived ? h('div.jr-fact', x.status === 'open' ? 'Ticks itself when all five release items are done' : 'All five release items are done')
-          : state(x, s.key, s.title).slice(1));
+          : [...state(x, s.key, s.title).slice(1), s.key === 's24' ? storePanel(d.store_check) : null]);
   };
   await draw();
 }

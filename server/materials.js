@@ -5,6 +5,7 @@ import { db, audit } from './db.js';
 import { getRow, HttpError } from './crud.js';
 import { canView, canWrite, hasFunction } from '../public/js/schema.js';
 import { stockCheck, isLocked } from './boqflow.js';
+import { stockOf } from './stock.js';
 import { lastFollowups } from './pofollow.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
@@ -78,7 +79,7 @@ export function projectMaterials(projectId, user) {
   rows.sort((a, b) => STATES.indexOf(a.state) - STATES.indexOf(b.state) || b.late_days - a.late_days || String(a.need_by || '9').localeCompare(String(b.need_by || '9')));
   const count = Object.fromEntries(STATES.map(s => [s, rows.filter(r => r.state === s).length]));
   return { project: { id: p.id, name: p.name, no: p.project_no || p.code }, needed_by: ros, today: t, rows, count, can_edit: mayEdit(user), to_link: unlinkedPos(pid),
-    ready: rows.length > 0 && rows.every(r => r.state === 'Received') };
+    ready: rows.length > 0 && rows.every(r => r.state === 'Received'), store: storeReadiness(pid) };
 }
 
 // the needed-by and promised dates of one PO line: tracking dates, kept even on an approved PO
@@ -147,4 +148,38 @@ export function trackedProjects(user) {
   const linked = new Map(db.prepare("SELECT project_id, COUNT(*) n FROM purchase_orders WHERE project_id IS NOT NULL AND status NOT IN ('Cancelled', 'Archived (old)') GROUP BY project_id").all().map(r => [r.project_id, r.n]));
   return { projects: db.prepare("SELECT id, COALESCE(NULLIF(project_no, ''), code) no, name, status FROM projects WHERE COALESCE(status, '') NOT IN ('Completed', 'Cancelled') ORDER BY id DESC").all()
     .map(p => ({ ...p, pos: linked.get(p.id) || 0, to_link: sug.get(p.id) || 0 })), unlinked: unlinkedPos().length };
+}
+
+// ---------------------------------------------------------------- store check before the one-time dispatch
+// Is every material of the project's Final BOQ(s) in the store, received AND passed by incoming QC? Only shows; it blocks nothing.
+// A line is ready when the store holds what it still needs (stock reserved for it) from lots that are not on IQC Pending / Hold
+// and not rejected. Else it is listed as missing with why: no store item, not ordered, on order, in store but QC pending, ...
+export function storeReadiness(projectId) {
+  const pid = Number(projectId);
+  const boms = db.prepare("SELECT id FROM boms WHERE project_id = ? AND status IN ('Final', 'In Progress')").all(pid).map(b => getRow('boms', b.id)).filter(isLocked);
+  if (!boms.length) return { has_boq: false, lines: 0, ready: 0, missing: [], complete: false };
+  // quantity of each item sitting in the store that is not usable yet: IQC pending / on hold, or rejected
+  const unusable = new Map();
+  for (const m of db.prepare("SELECT item_id, qty, qc_status, qc_rejected FROM stock_moves WHERE type = 'INWARD' AND item_id IS NOT NULL AND (qc_status IN ('Pending', 'Hold') OR COALESCE(qc_rejected, 0) > 0)").all()) {
+    const u = ['Pending', 'Hold'].includes(m.qc_status) ? Number(m.qty) || 0 : Number(m.qc_rejected) || 0;
+    unusable.set(m.item_id, { qty: (unusable.get(m.item_id)?.qty || 0) + u, hold: unusable.get(m.item_id)?.hold || m.qc_status === 'Hold', pending: unusable.get(m.item_id)?.pending || m.qc_status === 'Pending' });
+  }
+  const pool = new Map(); // QC-passed stock of an item still to give to this project's lines
+  const poolOf = id => { if (!pool.has(id)) pool.set(id, Math.max(0, stockOf(id) - (unusable.get(id)?.qty || 0))); return pool.get(id); };
+  const missing = []; let lines = 0, ready = 0;
+  for (const bom of boms) for (const r of stockCheck(bom.id).rows) {
+    if (!(r.still_needed > 0)) continue; // already sent
+    lines++;
+    let have = 0;
+    if (r.item_id && !r.in_house) { have = Math.min(r.reserved, poolOf(r.item_id)); pool.set(r.item_id, poolOf(r.item_id) - have); }
+    const short = Math.round((r.still_needed - have) * 1000) / 1000;
+    if (short <= 1e-9) { ready++; continue; }
+    const u = r.item_id && unusable.get(r.item_id);
+    const why = r.in_house ? 'Made in-house: not in the store yet' : !r.item_id ? 'No store item linked to this BOQ line'
+      : r.reserved > have && u?.hold ? 'In the store, but IQC is on Hold' : r.reserved > have && u?.pending ? 'In the store, but IQC (incoming QC) is pending'
+      : r.reserved > have && u ? 'In the store, but part was rejected by IQC'
+      : r.on_order > 0 ? 'Ordered, not received yet' : 'Not ordered';
+    missing.push({ bom_id: bom.id, bom_no: bom.bom_no, item: [r.component, r.dimensions].filter(Boolean).join(' '), uom: r.uom, needed: r.still_needed, in_store: Math.round(have * 1000) / 1000, short, why });
+  }
+  return { has_boq: true, lines, ready, missing, complete: lines > 0 && !missing.length, boqs: boms.map(b => b.bom_no) };
 }

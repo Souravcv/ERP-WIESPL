@@ -9,6 +9,7 @@ import { saveAttachment, deleteAttachment } from './roles.js';
 import { compute as computeSchedule, calendar } from './schedule.js';
 import { templateRows } from './scheduletemplates.js';
 import { notify, notifyDecision } from './notify.js';
+import { storeReadiness } from './materials.js';
 import { getSettings } from './db.js';
 
 export function migrateJourneys() {
@@ -139,7 +140,7 @@ export function view(id, user) {
   const j = load(id); closeAutoTasks(j, user);
   const w = work(j);
   const lab = (e, row, f) => (row ? { id: row.id, label: f(row) } : null);
-  return { ...summary(j), ...w, site: sitePlan(j), can_plan: !!j.project_id && canWrite('schedule_activities', user.role), dispatch: dispatchDate(j, w), can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, my_role: user.role, people: canAssign(user) ? people() : [], roles: roleMap(),
+  return { ...summary(j), ...w, store_check: j.project_id ? storeReadiness(j.project_id) : null, site: sitePlan(j), can_plan: !!j.project_id && canWrite('schedule_activities', user.role), dispatch: dispatchDate(j, w), can_edit: canEdit(user.role), can_assign: canAssign(user), me: user.name, my_role: user.role, people: canAssign(user) ? people() : [], roles: roleMap(),
     links: { enquiry: lab('enquiries', j.enquiry, e => `${e.enquiry_no || e.id} · ${e.hospital_name || e.client_name || ''}`), order: lab('sales_orders', j.order, o => `${o.so_no || o.id}${o.client_po_no ? ` · PO ${o.client_po_no}` : ''}`),
       project: lab('projects', j.project, p => `${p.project_no || p.code || p.id} · ${p.name || ''}`) } };
 }

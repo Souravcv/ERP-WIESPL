@@ -51,11 +51,26 @@ export async function materialsView(root, projectId) {
       h('div.actions', h('a.btn', { href: '#/materials' }, 'All projects'), h('a.btn', { href: `#/planner/${d.project.id}` }, '📅 Planner'))),
     h('div.card', h('div', h('b', 'Needed in the store by: '), d.needed_by.date ? fmtDate(d.needed_by.date) : '—', h('span.muted', ` (${d.needed_by.from})`)),
       h('div.mt-states', states.length ? states.map(([s, n]) => h('span', { class: `mt-state ${CLS[s]}`, title: HELP[s] }, `${s}: ${n}`)) : h('span.muted', 'Nothing to track yet: no BOQ shortage, requisition or PO for this project.')),
-      d.ready ? h('div.mt-ready', '✅ Everything is in the store: ready for the one-time dispatch') : null),
+      d.ready ? h('div.mt-ready', '✅ Everything is in the store: ready for the one-time dispatch') : null,
+      storePanel(d.store, { open: true })),
     toLink,
     d.rows.length ? h('div.card.flush.table-wrap', h('table.data.mt-table', h('thead', h('tr', ['Status', 'Material', 'Qty', 'Received', 'Order / PO', 'Vendor', 'Needed by', 'Promised', 'Late'].map(x => h('th', x)))),
       h('tbody', d.rows.map(r => h('tr', { class: CLS[r.state] === 'bad' ? 'mt-bad' : '' },
         h('td', h('span', { class: `mt-state ${CLS[r.state]}`, title: HELP[r.state] }, r.state), r.order_by && r.kind === 'boq' ? h('div', { class: r.late_days ? 'jr-late' : 'muted' }, `order by ${fmtDate(r.order_by)}`) : null),
         h('td', r.item), h('td.num', `${r.qty} ${r.uom || ''}`), h('td.num', r.kind === 'po' ? r.received : ''), h('td', ref(r), r.po_date ? h('div.muted', fmtDate(r.po_date)) : null, r.follow ? h('div.mt-follow', { title: r.follow.note || '' }, `📞 ${fmtDate(r.follow.date)} ${r.follow.vendor_status || ''}${r.follow.next_on ? ` · next ${fmtDate(r.follow.next_on)}` : ''}`) : null),
         h('td', r.vendor || ''), h('td', dateCell(r, 'need_by')), h('td', dateCell(r, 'promised')), h('td.num', r.late_days ? h('b.jr-late', `${r.late_days} d`) : '')))))) : null);
+}
+
+// "Is everything in the store?" before the one-time dispatch: every BOQ material received and QC passed, and what is missing.
+// Shows only; nothing is blocked. Used on the material tracker and on the journey step "Freeze panel design, make the dispatch checklist".
+export function storePanel(s, { open = false } = {}) {
+  if (!s) return null;
+  if (!s.has_boq) return h('div.mt-store', h('b', '🏬 Store check before dispatch: '), h('span.muted', 'no Final BOQ for this project yet, so there is nothing to check.'));
+  const head = s.complete ? h('b.mt-ready', `✅ Store check: all ${s.lines} BOQ lines are in the store and QC passed`)
+    : h('b.jr-late', `🏬 Store check: ${s.ready} of ${s.lines} BOQ lines are in the store and QC passed, ${s.missing.length} missing`);
+  const table = s.missing.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', ['Material', 'BOQ', 'Needed', 'In store (QC passed)', 'Missing', 'Why'].map(x => h('th', x)))),
+    h('tbody', s.missing.map(m => h('tr', h('td', m.item), h('td', h('a', { href: `#/bom/${m.bom_id}` }, m.bom_no || 'BOQ')), h('td.num', `${m.needed} ${m.uom || ''}`), h('td.num', m.in_store),
+      h('td.num', h('b.jr-late', m.short)), h('td', m.why)))))) : null;
+  return h('div.mt-store', s.missing.length ? h('details', { open }, h('summary', head), table) : head,
+    h('div.muted', 'For information only: nothing is blocked. Dispatch can still go ahead.'));
 }

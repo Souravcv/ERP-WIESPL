@@ -1012,3 +1012,5 @@ span.ai-chip { color: var(--text-2); }
 
 /* role editor: screens & visibility */
 .role-screens { border: 1px solid var(--border, #e5e7eb); background: var(--bg, #f8fafc); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; }
+.mt-store { margin-top: 8px; padding: 8px 10px; border-radius: 6px; background: #f8fafc; border: 1px solid #e2e8f0; }
+.mt-store summary { cursor: pointer; }
