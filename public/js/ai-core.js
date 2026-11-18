@@ -28,7 +28,8 @@ export function md(text) {
 // ---- asking: onEvent gets {type: conversation | status | token | reset | sources | done | error, ...}
 export async function ask({ text, conversation, signal, onEvent }) {
   const res = await fetch('/api/ai/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, signal,
-    body: JSON.stringify({ text, ...(conversation ? { conversation } : {}) }) });
+    // the screen it is asked on ("summarise this enquiry") and the screen language (Marathi → answers in Marathi where the model can)
+    body: JSON.stringify({ text, ...(conversation ? { conversation } : {}), screen: location.hash, lang: (() => { try { return localStorage.getItem('wiespl-lang') || 'en'; } catch { return 'en'; } })() }) });
   if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(j.error || `Request failed (${res.status})`); }
   const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
   for (;;) {
@@ -75,12 +76,33 @@ export function liveAnswer() {
 
 // ---- ideas to start with, only for what this person's role can see
 const IDEAS = [
+  ['🗓️ My work', [[null, 'What should I do today?'], [null, 'Which approvals are waiting for me?'], ['purchase_orders', 'Which POs are late?'], [null, 'What is late?']]],
   ['📈 Sales', [['enquiries', 'Show the enquiries from this month'], ['enquiries', 'How many enquiries per state this year?'], ['quotations', 'Show the latest 5 quotations'], ['enquiries', 'Which enquiries are still New?']]],
   ['🏗️ Projects & service', [['projects', 'Which projects are active now?'], ['service_tickets', 'Show the open complaints'], ['invoices', 'Which invoices are not paid yet?']]],
   ['📦 Purchase & store', [['items', 'Which items are low in stock?'], ['purchase_orders', 'Show the purchase orders from this month'], ['purchase_orders', 'Purchase order value per vendor this year'], ['vendors', 'Which vendors are approved?']]],
   ['👥 HR', [['holidays', 'Which holidays are coming up?'], ['holidays', 'How many days off for Diwali?'], ['leave_requests', 'Show the pending leave requests'], ['attendance', 'Attendance summary for this month']]],
   ['📚 WIESPL products & norms', [[null, 'What door types does WIESPL make?'], [null, 'What is a hermetic sliding door?'], [null, 'NABH air changes per hour for an operation theatre'], [null, 'What does a laminar air flow (LAF) do?']]],
 ];
+// questions for the screen the person is on: a record (summary, a message drafted from it) or a list
+const RECORD_IDEAS = {
+  enquiries: ['Summarise this enquiry', 'Draft a follow-up message to the client for this enquiry'],
+  quotations: ['Summarise this quotation', 'Draft a follow-up message to the client for this quotation'],
+  purchase_orders: ['Summarise this PO', 'Draft a reminder to the vendor for this PO'],
+  projects: ['Summarise this project', 'Pending material for this project'],
+  service_tickets: ['Summarise this complaint', 'Draft a message to the client about this complaint'],
+  invoices: ['Summarise this invoice'],
+  customers: ['Summarise this client'], vendors: ['Summarise this vendor'],
+};
+const LIST_IDEAS = { purchase_orders: ['Which POs are late?'], enquiries: ['Show the enquiries from this month', 'Which enquiries are still New?'], items: ['Which items are low in stock?'], approvals: ['Which approvals are waiting for me?'], projects: ['Which projects are active now?'] };
+export function screenIdeas(hash = location.hash, role = state.user?.role) {
+  const rec = /^#\/(?:view|edit)\/(\w+)\/\d+/.exec(hash), list = /^#\/list\/(\w+)/.exec(hash);
+  if (rec && canView(rec[1], role)) return RECORD_IDEAS[rec[1]] || ['Summarise this record'];
+  if (/^#\/materials\/\d+/.test(hash)) return ['Pending material for this project', 'Summarise this project'];
+  if (/^#\/(materials|po-tracker)/.test(hash)) return ['Which POs are late?'];
+  if (/^#\/journey/.test(hash)) return ['What is late?', 'Which approvals are waiting for me?'];
+  if (list && canView(list[1], role)) return LIST_IDEAS[list[1]] || [];
+  return [];
+}
 export const ideas = (role = state.user?.role) => IDEAS.map(([group, qs]) => [group, qs.filter(([m]) => !m || canView(m, role)).map(([, q]) => q)]).filter(([, qs]) => qs.length);
 
 // ---- status of the AI (cached for a few seconds)

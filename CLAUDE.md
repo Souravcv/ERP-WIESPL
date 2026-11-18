@@ -73,6 +73,10 @@ memory do not move between computers).
 - BOQ components ↔ store items (matching by name + size): `server/itemmatch.js` · `views/bompick.js`; work-order Excel reading in `server/dispatch.js` (parseSheet).
 - News (new hospitals all over India as leads, OT tech, rules; public feeds only): `server/news.js` · `views/news.js`.
 - Invoices: Normal / RA bill, RA numbered per project `RA3/2026-27/40`, normal `2026-27/41`; WIESPL print `invoiceDoc` in `views/print.js`.
+- WIESPL AI (Qwen 2.5 3B on CPU, ~8 words/s written): `server/ai.js` (model, tools, documents, summaries / drafts of one record, reply language) +
+  `server/aiwork.js` (instant answers written by the CRM: my day = My tasks, approvals, POs to chase, project material, late journey steps).
+  Store prices only with `see_stock_value`. The panel sends the screen (`#/view/enquiries/2` → "summarise this enquiry"); ideas per screen in `ai-core.js`.
+  Test: a node script calling `ai.chat()` with a fake res, `WIESPL_AI_SHARED=1` (uses the live engine), `MSYS_NO_PATHCONV=1` in Git Bash for `#/…` values.
 - Roles: heads (md, chief_engineer, finance_head, design_head, qc_head, project_head, sales_head, marketing) in `public/js/schema.js`.
 
 ## Working rules

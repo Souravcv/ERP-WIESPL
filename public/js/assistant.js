@@ -1,7 +1,7 @@
 // 🤖 WIESPL AI, the quick chat panel on every screen (the full page is #/ai, views/ai.js). The conversation is kept on
 // the server like the page's, so "⤢" opens it there. Shared parts (asking, answers, voice, settings): ai-core.js.
 import { h, api, state, fail } from './ui.js';
-import { ask, messageEl, liveAnswer, ideas, aiStatus, statusText, aiSettings, micButton, say, hush } from './ai-core.js';
+import { ask, messageEl, liveAnswer, ideas, screenIdeas, aiStatus, statusText, aiSettings, micButton, say, hush } from './ai-core.js';
 
 const KEY = 'wiespl-ai-conversation';
 let panel, log, input, sendBtn, stopBtn, mic, speakBtn, statusLine, conv = null, busy = false, speak = false, ctl = null;
@@ -10,7 +10,8 @@ const keepId = id => { try { id ? sessionStorage.setItem(KEY, String(id)) : sess
 
 function render() {
   if (!conv?.messages?.length) {
-    const first = ideas().flatMap(([, qs]) => qs.slice(0, 1)).slice(0, 4);
+    // this screen's questions first, then the day's work, then one per topic
+    const first = [...new Set([...screenIdeas(), ...(ideas()[0]?.[1] || []).slice(0, 2), ...ideas().flatMap(([, qs]) => qs.slice(0, 1))])].slice(0, 5);
     log.replaceChildren(h('div.ai-hello',
       h('b', `Hello ${state.user?.name?.split(' ')[0] || ''} 👋`),
       h('p', 'Ask about enquiries, customers, projects, stock, POs or service, or about WIESPL products and NABH norms. I only see what your role can see, and everything stays on WIESPL’s own computers.'),
@@ -71,6 +72,7 @@ export async function initAssistant() {
     panel.classList.toggle('open', on);
     if (on) { input.focus(); refresh(); load(); }
   }
+  window.addEventListener('hashchange', () => { if (!conv?.messages?.length && !busy) render(); }); // the new screen's questions
   window.addEventListener('logged-out', () => { ctl?.abort(); conv = null; keepId(null); panel.classList.remove('open'); });
 }
 async function refresh() {

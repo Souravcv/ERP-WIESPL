@@ -15,10 +15,11 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { db, getSettings, setSettings, DATA_DIR, audit } from './db.js';
-import { ENTITIES, canView, WORKER_ROLES, STOCK_SQL } from '../public/js/schema.js';
+import { ENTITIES, canView, WORKER_ROLES, STOCK_SQL, hasFunction } from '../public/js/schema.js';
 import { listRows, getRow, HttpError, options } from './crud.js';
 import { PART_UI, DOOR_TYPES, FLOOR_TYPES } from '../public/js/parts.js';
 import { VIDEOS } from '../public/js/explainers.js';
+import { workAnswer } from './aiwork.js';
 import { NABH_SOURCE, otNorms } from '../public/js/nabh.js';
 
 export const DOCS_DIR = path.join(DATA_DIR, 'ai-docs');
@@ -250,12 +251,15 @@ async function searchDocs(query, k = 5) {
 // ---------------------------------------------------------------- what the model may do: read-only tools
 const HIDE = /sign|stamp|password|pass_hash|token/i;               // never shown, to anyone
 const MONEY = /rate|price|value|cost|amount|salary|margin|total/i; // not for the least-access roles
+// Store prices, rates and stock value: only for roles with the function see_stock_value, as on the screens and in Excel (server/index.js)
+const STOCK_VALUE_MODULES = new Set(['items', 'stock_moves', 'lots', 'iqc', 'stock_drafts']);
+const hidesValue = (module, f, role) => STOCK_VALUE_MODULES.has(module) && /rate|price|value|cost/i.test(`${f.key} ${f.label || ''}`) && !hasFunction(role, 'see_stock_value');
 function cleanRow(module, row, role, full = false) {
   const ent = ENTITIES[module], out = { id: row.id }, worker = WORKER_ROLES.includes(role);
   const keys = full ? ent.fields.filter(f => f.type !== 'section').map(f => f.key) : [...new Set(['date', ...(ent.list || []), ent.statusField].filter(Boolean))];
   for (const key of keys) {
     const f = ent.fields.find(x => x.key === key); if (!f || f.type === 'json' || f.type === 'image' || f.type === 'file' || HIDE.test(key)) continue;
-    if (worker && (f.type === 'money' || MONEY.test(key))) continue;
+    if ((worker && (f.type === 'money' || MONEY.test(key))) || hidesValue(module, f, role)) continue;
     let v = f.type === 'ref' ? row[key + '_label'] ?? row[key] : row[key];
     if (v == null || v === '') continue;
     if (Array.isArray(v)) v = v.join(', ');
@@ -321,12 +325,12 @@ async function runTool(name, args, user, sources) {
   }
   if (name === 'describe_module') {
     const ent = mustSee(a.module, role);
-    return { module: a.module, label: ent.label, fields: ent.fields.filter(f => f.type !== 'section' && !HIDE.test(f.key) && f.type !== 'json').map(f => ({ key: f.key, label: f.label, type: f.type, ...(f.options ? { choices: f.options.filter(Boolean).slice(0, 25) } : {}), ...(f.ref ? { refers_to: f.ref } : {}) })) };
+    return { module: a.module, label: ent.label, fields: ent.fields.filter(f => f.type !== 'section' && !HIDE.test(f.key) && f.type !== 'json' && !hidesValue(a.module, f, role)).map(f => ({ key: f.key, label: f.label, type: f.type, ...(f.options ? { choices: f.options.filter(Boolean).slice(0, 25) } : {}), ...(f.ref ? { refers_to: f.ref } : {}) })) };
   }
   if (name === 'find_records') {
     const ent = mustSee(a.module, role), q = { limit: Math.min(Number(a.limit) || 10, 25) };
     if (a.text) q.q = String(a.text);
-    for (const [k, v] of Object.entries(a.filters || {})) if (ent.fields.some(f => f.key === k && !f.computed)) q[k] = v;
+    for (const [k, v] of Object.entries(a.filters || {})) if (ent.fields.some(f => f.key === k && !f.computed && !hidesValue(a.module, f, role))) q[k] = v;
     if (a.from) q.from = a.from; if (a.to) q.to = a.to;
     const rows = listRows(a.module, q);
     rows.forEach(r => sources.push({ module: a.module, id: r.id, label: `${ent.singular || ent.label} #${r.id}` }));
@@ -335,7 +339,9 @@ async function runTool(name, args, user, sources) {
   if (name === 'get_record') {
     mustSee(a.module, role);
     const row = getRow(a.module, a.id); sources.push({ module: a.module, id: row.id, label: `${ENTITIES[a.module].singular || ENTITIES[a.module].label} #${row.id}` });
-    return cleanRow(a.module, row, role, true);
+    const out = cleanRow(a.module, row, role, true);
+    if (STOCK_VALUE_MODULES.has(a.module) && !hasFunction(role, 'see_stock_value')) out.note = 'Rates, prices and stock value are hidden from this role: if asked, say the user cannot see them.';
+    return out;
   }
   if (name === 'summarize') {
     const ent = mustSee(a.module, role), stored = k => ent.fields.find(f => f.key === k && !f.computed && f.type !== 'section');
@@ -345,9 +351,10 @@ async function runTool(name, args, user, sources) {
     else { const f = stored(a.group_by); if (!f || HIDE.test(f.key)) throw new Error(`"${a.group_by}" is not a field of ${a.module}. Fields: month, ${ent.fields.filter(f => !f.computed && f.type !== 'section' && f.type !== 'json' && !HIDE.test(f.key)).map(f => f.key).join(', ')}`); groupSql = f.type === 'ref' ? `(SELECT ${ENTITIES[f.ref].display.replaceAll('{t}', 'g')} FROM ${f.ref} g WHERE g.id = t.${f.key})` : `t.${f.key}`; }
     let sumSql = '';
     const sf = a.sum_field && stored(a.sum_field); if (sf && !['number', 'money'].includes(sf.type)) a.sum_field = ''; if (a.sum_field && !sf) a.sum_field = '';
-    if (a.sum_field) { const f = sf; if (WORKER_ROLES.includes(role) && (f.type === 'money' || MONEY.test(f.key))) throw new Error('Your role cannot see amounts'); sumSql = `, ROUND(SUM(t.${f.key}), 2) AS total`; }
+    if (a.group_by !== 'month' && hidesValue(a.module, stored(a.group_by), role)) throw new Error('Your role cannot see prices or stock value');
+    if (a.sum_field) { const f = sf; if ((WORKER_ROLES.includes(role) && (f.type === 'money' || MONEY.test(f.key))) || hidesValue(a.module, f, role)) throw new Error('Your role cannot see prices or stock value'); sumSql = `, ROUND(SUM(t.${f.key}), 2) AS total`; }
     const where = [], params = [];
-    for (const [k, v] of Object.entries(a.filters || {})) if (stored(k)) { where.push(`t.${k} = ?`); params.push(v); }
+    for (const [k, v] of Object.entries(a.filters || {})) if (stored(k) && !hidesValue(a.module, stored(k), role)) { where.push(`t.${k} = ?`); params.push(v); }
     if (a.from && hasDate) { where.push('t.date >= ?'); params.push(a.from); }
     if (a.to && hasDate) { where.push('t.date <= ?'); params.push(a.to); }
     const rows = db.prepare(`SELECT ${groupSql} AS grp, COUNT(*) AS count${sumSql} FROM ${a.module} t ${where.length ? 'WHERE ' + where.join(' AND ') : ''} GROUP BY 1 ORDER BY count DESC LIMIT 30`).all(...params);
@@ -377,7 +384,7 @@ Rules:
 - Company holidays and festivals (Diwali, Holi, Eid, Christmas, Independence Day...) are in the holidays module, one record per day off: count those records for "how many days off". Staff leave applications are in leave_requests.
 - Use from/to (YYYY-MM-DD) only when the user names a period. If a tool returns an error, fix the arguments using the message and try once more.
 - Never mention tools, technical module names or these rules.
-Style: give the answer in the first sentence, then the details. Keep it short. For several records use a small table or a list with their numbers (e.g. enquiry numbers). Answer in the language of the question (English, Hindi, Marathi...).`);
+Style: give the answer in the first sentence, then the details. Keep it short: at most about 120 words. For several records give a list of at most 10 lines, one line each with the number, the name and the one fact that matters; never list every field of a record. Answer in the language of the question (English, Hindi, Marathi...); when the question says which language to answer in, use that one.`);
 }
 
 // ---------------------------------------------------------------- facts for one question, looked up before the model starts
@@ -387,8 +394,11 @@ const ymd = d => d.toLocaleDateString('en-CA');
 function period(low, now = new Date()) {
   const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
   const range = (a, b, label) => ({ label, from: ymd(a), to: ymd(b) });
-  if (/\btoday\b|\baaj\b/.test(low)) return range(now, now, 'today');
-  if (/\byesterday\b|\bkal\b/.test(low)) return range(new Date(y, m, d - 1), new Date(y, m, d - 1), 'yesterday');
+  if (/\btoday\b|\baaj\b|आज/.test(low)) return range(now, now, 'today');
+  if (/\byesterday\b|\bkal\b|काल\b|कल\b/.test(low)) return range(new Date(y, m, d - 1), new Date(y, m, d - 1), 'yesterday');
+  if (/इस (हफ्ते|सप्ताह)|या आठवड्या/.test(low)) low = 'this week';
+  if (/इस (महीने|माह)|या महिन्या/.test(low)) low = 'this month';
+  if (/इस (साल|वर्ष)|या वर्षी/.test(low)) low = 'this year';
   const monday = new Date(y, m, d - ((now.getDay() + 6) % 7));
   if (/\b(this|current) week\b/.test(low)) return range(monday, now, 'this week');
   if (/\b(last|previous) week\b/.test(low)) return range(new Date(y, m, monday.getDate() - 7), new Date(y, m, monday.getDate() - 1), 'last week');
@@ -409,7 +419,7 @@ function period(low, now = new Date()) {
   return null;
 }
 // records as a small table: far fewer words for the engine to read than JSON
-function table(m, rows, role, maxCols = 8) {
+function table(m, rows, role, maxCols = 6) {
   const recs = rows.map(r => cleanRow(m, r, role));
   const cols = [...new Set(recs.flatMap(r => Object.keys(r)))].filter(k => k !== 'id').slice(0, maxCols);
   const cell = v => String(v ?? '').replace(/\s+/g, ' ').replace(/\|/g, '/').slice(0, 90);
@@ -507,11 +517,84 @@ async function questionContext(user, text, sources) {
     }
   }
   for (const h of docs) { facts.push(`From WIESPL's document "${h.title}":\n${h.chunk.slice(0, 900)}`); sources.push({ doc: h.source, label: h.title }); }
+  if (/\b(rate|rates|price|prices|cost|costs|value|valuation|worth)\b|किंमत|कीमत|दर\b/i.test(low) && !hasFunction(role, 'see_stock_value'))
+    facts.unshift(`${user.name}'s role cannot see store prices, rates or stock value. If the question asks for one of those, say so plainly and give nothing else for it.`);
   let body = facts.join('\n\n');
   if (body.length > 5000) body = body.slice(0, 5000) + '\n…';
   const now = new Date();
   return `Today: ${now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} (${ymd(now)}). Asked by: ${user.name} (role ${role}).\n` +
     (body ? `Facts the CRM looked up for this question:\n${body}` : 'The CRM found no facts for this question by itself.') + `\n\nQuestion: ${text}`;
+}
+
+// ---------------------------------------------------------------- one record: a summary of it, or a message drafted from it
+// "summarise enquiry E-12", "draft a reminder for PO 2026-27/104", "summarise this project" (on its screen). The CRM finds
+// the record and the records linked to it (follow-ups, quotations, POs... only modules this role may see) and asks the
+// model for a short summary or message, so it has nothing to look up.
+const REC_WORDS = [['purchase_orders', /\b(po|p\.o\.|purchase orders?)\b/i], ['quotations', /\bquot(e|es|ation|ations)\b/i], ['enquiries', /\b(enquir|inquir)\w*/i],
+  ['projects', /\bprojects?\b/i], ['service_tickets', /\b(complaints?|tickets?|service calls?)\b/i], ['invoices', /\binvoices?\b/i], ['sales_orders', /\bsales orders?\b/i],
+  ['vendors', /\b(vendors?|suppliers?)\b/i], ['customers', /\b(customers?|clients?)\b/i]].filter(([m]) => ENTITIES[m]);
+const SUMMARY = /\b(summar\w*|overview|brief me|status of|update on|history of|tell me about)\b|सारांश|थोडक्यात|सार/i;
+const DRAFT = /\b(draft|write|compose|prepare|make)\b.{0,40}\b(message|msg|mail|email|whatsapp|reminder|follow[- ]?up|letter|note|reply)\b|\b(reminder|follow[- ]?up) (message|mail|email|note)\b|संदेश|मेसेज|मैसेज/i;
+const TASK_WORDS = /^(summar\w*|overview|brief|status|update|history|tell|about|draft|write|compose|prepare|make|message|msg|mail|email|whatsapp|reminder|follow|followup|follow-up|letter|note|reply|vendor|client|customer|send|polite|short|hindi|marathi|english)$/i;
+function findRecord(text, screen, role) {
+  const onScreen = /^#\/view\/(\w+)\/(\d+)/.exec(screen || '') || (/^#\/materials\/(\d+)/.exec(screen || '') && ['', 'projects', /^#\/materials\/(\d+)/.exec(screen)[1]]);
+  const named = REC_WORDS.find(([, re]) => re.test(text))?.[0];
+  const module = named || (onScreen && ENTITIES[onScreen[1]] ? onScreen[1] : null);
+  if (!module) return null;
+  if (!canView(module, role)) return { module, denied: true };
+  const ent = ENTITIES[module], get = id => { try { return getRow(module, Number(id)); } catch { return null; } };
+  const words = (String(text).match(/[\p{L}\p{N}][\p{L}\p{N}./_-]*/gu) || []).filter(w => !STOP.has(w.toLowerCase()) && !TASK_WORDS.test(w) && !REC_WORDS.some(([, re]) => re.test(w)) && !/^(this|these|current|here|it|for|of|the|a|an|to|on|with|in|please)$/i.test(w));
+  const ids = words.filter(w => /\d/.test(w)), names = words.filter(w => !/\d/.test(w) && w.length > 2);
+  if (onScreen?.[1] === module && (/\b(this|current|here)\b/i.test(text) || !ids.length && !names.length)) { const r = get(onScreen[2]); if (r) return { module, row: r }; }
+  for (const w of ids) { try { const r = listRows(module, { q: w, limit: 1 })[0]; if (r) return { module, row: getRow(module, r.id) }; } catch { /* next */ } if (/^\d+$/.test(w)) { const r = get(w); if (r) return { module, row: r }; } }
+  if (names.length) { try { const r = listRows(module, { q: names.join(' '), limit: 1 })[0] || names.map(w => listRows(module, { q: w, limit: 1 })[0]).find(Boolean); if (r) return { module, row: getRow(module, r.id) }; } catch { /* none */ } }
+  if (onScreen?.[1] === module) { const r = get(onScreen[2]); if (r) return { module, row: r }; }
+  return { module, row: null, ent };
+}
+function recordFacts(module, row, role, sources) {
+  const ent = ENTITIES[module], name = ent.singular || ent.label;
+  const rec = cleanRow(module, row, role, true);
+  let out = `${name} #${row.id}:\n` + Object.entries(rec).filter(([k]) => k !== 'id').map(([k, v]) => `${k}: ${String(v).replace(/\s+/g, ' ').slice(0, 200)}`).join('\n').slice(0, 1800);
+  sources.push({ module, id: row.id, label: `${name} #${row.id}` });
+  if (module === 'purchase_orders') { // what the vendor still has to send (quantities only)
+    let ls = row.lines; try { if (typeof ls === 'string') ls = JSON.parse(ls); } catch { ls = []; }
+    const pend = (Array.isArray(ls) ? ls : []).filter(l => Number(l.qty) > 0 && (Number(l.received) || 0) < Number(l.qty)).slice(0, 12);
+    if (pend.length) out += `\nStill to be delivered:\n` + pend.map(l => `- ${String(l.description || l.item_id_label || l.spec || 'item').split('\n')[0].slice(0, 70)}: ${Number(l.qty) - (Number(l.received) || 0)} ${l.uom || ''}${l.promised ? ` (promised ${l.promised})` : ''}`).join('\n');
+  }
+  let n = 0; // records linked to it: follow-ups, quotations, POs, tickets...
+  for (const m of viewable(role)) {
+    if (n >= 4 || m === module || NO_WORD_SEARCH.has(m)) continue;
+    const f = ENTITIES[m].fields.find(x => x.type === 'ref' && x.ref === module && !x.computed); if (!f) continue;
+    let rows = []; try { rows = listRows(m, { [f.key]: row.id, limit: 4 }).filter(r => Number(r[f.key]) === Number(row.id)); } catch { continue; }
+    if (!rows.length) continue;
+    n++; out += `\n\nLinked ${ENTITIES[m].label} (newest first):\n${table(m, rows, role, 5)}`;
+  }
+  return out.slice(0, 4000);
+}
+function replyLang(text, lang) {
+  const t = String(text);
+  const asked = /\b(?:in|into)\s+(hindi|marathi|english)\b/i.exec(t)?.[1];
+  if (asked) return asked[0].toUpperCase() + asked.slice(1).toLowerCase();
+  if (/[ऀ-ॿ]/.test(t)) return /(आहे|आहेत|काय|कोणत|मला|माझ|झाल|किती|नाही|साठी|करायच|द्या|सांग)/.test(t) ? 'Marathi' : 'Hindi';
+  if (/\b(kya|hai|kitne|kitna|mujhe|batao|kaun|kaise|chahiye)\b/i.test(t)) return 'Hindi';
+  if (/\b(kay|aahe|ahe|kiti|sanga|mala|kuthe)\b/i.test(t)) return 'Marathi';
+  return lang === 'mr' ? 'Marathi' : null;
+}
+async function focusContext(user, text, screen, sources) {
+  const draft = DRAFT.test(text), summary = !draft && SUMMARY.test(text);
+  if (!draft && !summary) return null;
+  const hit = findRecord(text, screen, user.role); if (!hit) return null;
+  if (hit.denied) return { direct: `Your role cannot see ${ENTITIES[hit.module].label}.` };
+  const ent = ENTITIES[hit.module], name = (ent.singular || ent.label).toLowerCase();
+  if (!hit.row) return { direct: `Which ${name}? Give its number or name, e.g. "${draft ? 'draft a reminder for' : 'summarise'} ${name} 12", or open it and ask "${draft ? 'draft a message for' : 'summarise'} this ${name}".` };
+  const facts = recordFacts(hit.module, hit.row, user.role, sources);
+  const to = hit.module === 'purchase_orders' || hit.module === 'vendors' ? 'vendor' : 'client';
+  const what = /remind/i.test(text) || hit.module === 'purchase_orders' ? (hit.module === 'purchase_orders' ? 'a polite reminder to deliver the pending items, asking for the dispatch date' : 'a polite reminder') : 'a polite follow-up';
+  const task = draft
+    ? `Task: write ${what} as a short ${/\b(e-?mail|mail|letter)\b/i.test(text) ? 'email' : 'WhatsApp message'} from ${user.name}, WIESPL, to the ${to} about this ${name}. Mention its number and the key facts${to === 'vendor' ? ' (the items and quantities still due; no amounts or payment terms)' : ''}. At most 90 words. Write only the message, no notes.`
+    : `Task: summarise this ${name} for a colleague in at most 5 short bullet points: what it is and for whom, where it stands now, what is pending or late, and the next step. Use only these facts.`;
+  const now = new Date();
+  return { prompt: `Today: ${now.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })} (${ymd(now)}). Asked by: ${user.name} (role ${user.role}).\nThe facts are complete: do not use tools.\n${facts}\n\n${task}\n\nQuestion: ${text}` };
 }
 
 // ---------------------------------------------------------------- conversations: each person's own, kept on the server
@@ -539,6 +622,7 @@ export function deleteConversation(user, id) {
 // The browser sends {text, conversation?}; the server keeps the conversation. (An older panel sends {messages}.)
 export async function chat(req, res) {
   const user = req.user, cfg = aiConfig(), b = req.body || {}, legacy = Array.isArray(b.messages);
+  const screen = String(b.screen || '').slice(0, 120), lang = String(b.lang || '').slice(0, 5);
   let conv = null, text, past;
   if (legacy) {
     const all = b.messages.slice(-12).filter(m => m && ['user', 'assistant'].includes(m.role) && typeof m.content === 'string').map(m => ({ role: m.role, content: m.content.slice(0, 4000) }));
@@ -561,15 +645,30 @@ export async function chat(req, res) {
   }
   const t0 = Date.now(), sources = [];
   send({ type: 'status', text: 'Looking in the CRM…' });
-  const question = await questionContext(user, text, sources);
+  let quick = null, focus = null, question = '';
+  try {
+    // the day's work (My tasks, approvals, POs to chase, material, late steps): written by the CRM at once
+    quick = await workAnswer(user, text, screen, sources);
+    // a summary of one record, or a message drafted from it: the record and its linked records go with the question
+    if (!quick) { focus = await focusContext(user, text, screen, sources); if (focus?.direct) quick = focus.direct; }
+  } catch (e) { console.error('AI: quick answer failed', e.message); quick = null; focus = null; }
+  if (!quick) {
+    question = focus?.prompt || await questionContext(user, text, sources);
+    // The small model on the office PC reads Hindi and Marathi well but writes them poorly: it answers those questions in
+    // simple English unless the person asks for the language in words ("in Marathi"), or the admin set a bigger model.
+    const l = replyLang(text, lang), asked = /\b(?:in|into)\s+(hindi|marathi)\b|(हिंदी|हिन्दी|मराठी)\s*(में|मध्ये|त)/i.test(text);
+    if (l && l !== 'English' && (asked || !/3b|1\.5b|0\.5b/i.test(cfg.model))) question += `\n(Answer in ${l}${focus ? '' : '; keep record numbers and names as they are'}.)`;
+    else if (l && l !== 'English') question += '\n(Answer in simple English.)';
+  }
   if (process.env.AI_DEBUG) console.log('[ai question]', question.slice(0, 700).replace(/\n/g, ' | '));
   const messages = [{ role: 'system', content: systemPrompt() }, ...past, { role: 'user', content: question }];
   const tools = TOOLS.map(t => ({ type: 'function', function: t }));
   const LABEL = { search_everything: 'Searching the CRM', describe_module: 'Reading the module', find_records: 'Looking up records', get_record: 'Opening a record', summarize: 'Counting', search_documents: 'Searching WIESPL documents' };
   let answer = '', failed = '', items = [];
   try {
-    send({ type: 'status', text: 'Thinking…' });
-    for (let round = 0; round < 5; round++) {
+    if (quick) { answer = quick; send({ type: 'token', text: quick }); }
+    else send({ type: 'status', text: focus ? 'Writing…' : 'Thinking…' });
+    for (let round = 0; !quick && round < 5; round++) {
       const { content, calls } = await streamRound(cfg, messages, tools, abort.signal, t => send({ type: 'token', text: t }));
       answer = content;
       if (isOllama()) messages.push({ role: 'assistant', content, ...(calls.length ? { tool_calls: calls.map(c => ({ function: { name: c.name, arguments: c.args } })) } : {}) });
@@ -611,8 +710,8 @@ export async function chat(req, res) {
 async function streamRound(cfg, messages, tools, signal, onText) {
   const ollama = isOllama();
   const res = ollama
-    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.3, top_p: 0.8, top_k: 20, num_ctx: 8192, num_predict: 900 } }, signal)
-    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.3, top_p: 0.8, top_k: 20, max_tokens: 900, cache_prompt: true }, signal);
+    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.3, top_p: 0.8, top_k: 20, num_ctx: 8192, num_predict: 600 } }, signal)
+    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.3, top_p: 0.8, top_k: 20, max_tokens: 600, cache_prompt: true }, signal);
   let content = '', buf = ''; const calls = [], parts = [];
   const reader = res.body.getReader(), dec = new TextDecoder();
   for (;;) {
