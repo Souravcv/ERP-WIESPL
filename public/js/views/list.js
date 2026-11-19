@@ -120,6 +120,8 @@ export async function listView(root, entity) {
   if (!ent) throw new Error('Unknown module');
   const fm = fieldMap(entity);
   const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  // Approvals have their own screen (waiting for me / pending / decided, by document type); ?table=1 is the plain table.
+  if (entity === 'approvals' && !params.get('table')) { const { approvalsView } = await import('./approvals.js'); return approvalsView(root); }
   const q = h('input.grow', { placeholder: `Search ${ent.label.toLowerCase()}…`, type: 'search', value: params.get('q') || '' });
   const statusSel = ent.statusField
     ? h('select', h('option', { value: '' }, ent.hiddenStatus ? `All (without “${ent.hiddenStatus}”)` : 'All statuses'), fm[ent.statusField].options.map(o => h('option', { value: o }, o)))
