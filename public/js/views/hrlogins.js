@@ -1,6 +1,8 @@
 // App logins (HR → App logins): make the logins for everyone who has none, all at once, and print the temporary passwords
 // to hand out. They are shown once; each person sets their own password at the first sign-in.
 import { h, api, toast, busy, modal, fail } from '../ui.js';
+import { slipPages, SLIP_LANGS } from './slipguide.js';
+import { guideLang } from './attendguide.js';
 
 const FULL_ACCESS = ['admin', 'manager'];
 
@@ -76,9 +78,12 @@ function showCreated(box, created, roleLabel) {
   const done = () => { window.removeEventListener('beforeunload', guard); location.hash = '#/list/employees'; };
   const sheet = () => h('table', h('thead', h('tr', h('th', 'Code'), h('th', 'Name'), h('th', 'Username'), h('th', 'Temporary password'), h('th', 'Role'))),
     h('tbody', created.map(c => h('tr', h('td', c.emp_code || ''), h('td', c.name), h('td', h('b', c.username)), h('td', h('b', { style: { fontFamily: 'monospace', fontSize: '15px' } }, c.password)), h('td', roleLabel(c.role))))));
-  const print = () => {
+  // the list on one sheet, or one slip per person (two per A4) with the picture guide for clocking in / out
+  const lang = h('select', { 'aria-label': 'Language of the slips' }, SLIP_LANGS.map(([k, l]) => h('option', { value: k, selected: k === guideLang() }, l)));
+  const print = (slips = false) => {
     const pr = document.querySelector('.print-root');
-    pr.replaceChildren(h('div.doc', h('div.page', h('h2', 'CRM and attendance app logins'), h('p', `${address ? `Address: ${address}. ` : ''}Each person sets a new password at the first sign-in. Keep this sheet private and destroy it after handing out.`), sheet())));
+    pr.replaceChildren(slips ? slipPages(created, { address, lang: lang.value, roleLabel })
+      : h('div.doc', h('div.page', h('h2', 'CRM and attendance app logins'), h('p', `${address ? `Address: ${address}. ` : ''}Each person sets a new password at the first sign-in. Keep this sheet private and destroy it after handing out.`), sheet())));
     pr.classList.remove('hidden');
     const clear = () => { pr.classList.add('hidden'); pr.replaceChildren(); window.removeEventListener('afterprint', clear); };
     window.addEventListener('afterprint', clear);
@@ -86,7 +91,8 @@ function showCreated(box, created, roleLabel) {
   };
   box.replaceChildren(
     h('p', { style: { color: 'var(--warn)' } }, `${created.length} login${created.length === 1 ? '' : 's'} ready. These passwords are shown only this once: print them now (Print → Save as PDF for a PDF). Each person sets a new password at the first sign-in. An administrator can set a new one under Admin → Users.`),
-    h('div.toolbar', h('button.btn.primary', { type: 'button', onclick: print }, '🖨 Print'), h('button.btn', { type: 'button', onclick: copy }, '📋 Copy all'), h('button.btn', { type: 'button', onclick: done }, 'Done, I have them')),
+    h('div.toolbar', h('button.btn.primary', { type: 'button', onclick: () => print(true) }, '🖨 Print slips with attendance guide (2 per page)'), h('span.muted', 'Language'), lang,
+      h('button.btn', { type: 'button', onclick: () => print(false) }, '🖨 Print list'), h('button.btn', { type: 'button', onclick: copy }, '📋 Copy all'), h('button.btn', { type: 'button', onclick: done }, 'Done, I have them')),
     address ? h('p', `Address: ${address}`) : null,
     h('div.table-wrap', sheet()));
   box.querySelector('table').classList.add('data');
