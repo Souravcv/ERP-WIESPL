@@ -13,28 +13,29 @@ export async function aiView(view, id) {
   // ---- the parts of the page
   const list = h('div.aip-list'), find = h('input.aip-find', { type: 'search', placeholder: 'Search your chats…', oninput: () => showList() });
   const side = h('aside.aip-side',
-    h('button.btn.primary.aip-new', { type: 'button', onclick: () => go(null) }, '＋ New chat'), find, list,
-    h('div.aip-note', '🔒 Runs on WIESPL’s own computer. Nothing leaves the company, and your chats are only yours.'));
-  const title = h('h2.aip-title', 'WIESPL AI'), pill = h('span.aip-pill', '…');
+    h('div.aip-brand', h('div.aip-orb'), h('div', h('b', 'WIESPL AI'), h('small', 'Your private CRM assistant'))),
+    h('button.btn.primary.aip-new', { type: 'button', onclick: () => go(null) }, '＋  New chat'), find, list,
+    h('div.aip-note', h('span', '🔒'), h('span', 'Runs on WIESPL’s own computer. Nothing leaves the company, and your chats are only yours.')));
+  const title = h('h2.aip-title', 'New chat'), pill = h('span.aip-pill', '…'), headOrb = h('div.aip-orb.sm');
   const speakBtn = h('button.btn.small', { type: 'button', title: 'Read every answer aloud', onclick: () => { speak = !speak; speakBtn.classList.toggle('on', speak); if (!speak) hush(); } }, '🔊');
   const log = h('div.aip-log');
   const input = h('textarea.aip-input', { rows: 1, placeholder: 'Ask WIESPL AI anything…   (Enter to send · Shift+Enter for a new line)',
     oninput: () => grow(), onkeydown: e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(input.value); } if (e.key === 'Escape') stop(); } });
-  const sendBtn = h('button.btn.primary', { type: 'button', onclick: () => send(input.value) }, 'Send');
+  const sendBtn = h('button.btn.aip-send', { type: 'button', title: 'Send (Enter)', 'aria-label': 'Send', disabled: true, onclick: () => send(input.value) }, '➤');
   const stopBtn = h('button.btn.aip-stop.hidden', { type: 'button', title: 'Stop the answer (Esc)', onclick: () => stop() }, '■ Stop');
   const mic = micButton(text => send(text)); mic.classList.add('hidden');
   const main = h('section.aip-main',
     h('header.aip-head',
       h('button.btn.small.aip-menu', { type: 'button', title: 'Your chats', onclick: () => side.classList.toggle('open') }, '☰'),
-      h('div.aip-titles', title, pill), h('span.grow'),
+      headOrb, h('div.aip-titles', title, pill), h('span.grow'),
       h('button.btn.small', { type: 'button', title: 'Rename this chat', onclick: () => rename() }, '✏️'),
       speakBtn,
       admin ? h('button.btn.small', { type: 'button', title: 'AI settings and documents', onclick: () => aiSettings().then(refreshStatus).catch(fail) }, '⚙') : null),
     log,
-    h('div.aip-compose', mic, input, stopBtn, sendBtn),
+    h('div.aip-compose', h('div.aip-box', mic, input, stopBtn, sendBtn)),
     h('div.aip-fine', 'WIESPL AI can make mistakes. Check important numbers in the records it links to.'));
   view.replaceChildren(h('div.aip', side, main));
-  const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; };
+  const grow = () => { input.style.height = 'auto'; input.style.height = Math.min(input.scrollHeight, 200) + 'px'; sendBtn.disabled = !input.value.trim(); };
 
   // ---- the list of conversations
   async function loadList() { try { chats = await api('/ai/conversations'); } catch { chats = []; } showList(); }
@@ -57,15 +58,23 @@ export async function aiView(view, id) {
   async function openChat(cid) {
     conv = null;
     if (cid) { try { conv = await api('/ai/conversations/' + cid); } catch (e) { fail(e); history.replaceState(history.state, '', '#/ai'); } }
-    title.textContent = conv?.title || 'WIESPL AI';
+    title.textContent = conv?.title || 'New chat';
     showList(); render(); input.focus();
   }
   function render() {
     if (!conv?.messages?.length) {
+      const hour = new Date().getHours(), greet = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
       log.replaceChildren(h('div.aip-welcome',
-        h('div.aip-hero', h('div.aip-logo', '🤖'), h('h1', `Hello ${state.user?.name?.split(' ')[0] || ''}, what would you like to know?`),
-          h('p', 'Ask about enquiries, quotations, projects, stock, purchase, HR, or about WIESPL’s products and NABH norms. I only see what your role can see.')),
-        h('div.aip-ideas', ideas().map(([group, qs]) => h('div.aip-idea-group', h('b', group), qs.map(q => h('button.aip-idea', { type: 'button', onclick: () => send(q) }, q)))))));
+        h('div.aip-hero', h('div.aip-orb.lg'),
+          h('h1', `${greet}, `, h('span.aip-grad', state.user?.name?.split(' ')[0] || 'there')),
+          h('h1', 'What would you like to know?'),
+          h('p', 'Ask about enquiries, quotations, projects, stock, purchase or HR, or about WIESPL’s products and NABH norms. I only see what your role can see.'),
+          h('div.aip-feats', h('span', '🔒 Private, on WIESPL’s computer'), h('span', '⚡ Live CRM data'), h('span', '📚 WIESPL documents'), h('span', '🌐 Ask in any language'))),
+        h('div.aip-ideas', ideas().map(([group, qs]) => {
+          const [icon, ...name] = group.split(' ');
+          return h('div.aip-idea-group', h('div.aip-gh', h('span.aip-gi', icon), h('b', name.join(' '))),
+            qs.map(q => h('button.aip-idea', { type: 'button', onclick: () => send(q) }, h('span', q))));
+        }))));
       return;
     }
     log.replaceChildren(...conv.messages.map(messageEl)); log.scrollTop = log.scrollHeight;
@@ -74,7 +83,7 @@ export async function aiView(view, id) {
   // ---- asking
   async function send(text) {
     text = String(text || '').trim(); if (!text || busyNow) return;
-    busyNow = true; input.value = ''; grow(); sendBtn.classList.add('hidden'); stopBtn.classList.remove('hidden');
+    busyNow = true; input.value = ''; grow(); sendBtn.classList.add('hidden'); stopBtn.classList.remove('hidden'); headOrb.classList.add('busy');
     if (!conv) { conv = { id: null, title: text.slice(0, 80), messages: [] }; title.textContent = conv.title; }
     conv.messages.push({ role: 'user', content: text }); render();
     const live = liveAnswer(); log.append(live.el); log.scrollTop = log.scrollHeight;
@@ -94,7 +103,7 @@ export async function aiView(view, id) {
       else { const m = { role: 'assistant', content: '⚠️ ' + (e.message || e), error: true }; conv.messages.push(m); live.el.replaceWith(messageEl(m)); }
     } finally {
       if (abortCtl === ctl) abortCtl = null;
-      busyNow = false; stopBtn.classList.add('hidden'); sendBtn.classList.remove('hidden');
+      busyNow = false; stopBtn.classList.add('hidden'); sendBtn.classList.remove('hidden'); headOrb.classList.remove('busy');
       log.scrollTop = log.scrollHeight; if (document.activeElement !== find) input.focus();
       loadList();
     }
@@ -109,7 +118,7 @@ export async function aiView(view, id) {
   // ---- the AI's state
   async function refreshStatus() {
     const s = await aiStatus(true), ok = s.ok && s.chatModel !== false;
-    pill.textContent = (ok ? '🟢 ' : '🔴 ') + statusText(s) + (admin && s.model ? ` · ${s.model.replace(/\.gguf$/i, '')}` : '');
+    pill.textContent = statusText(s) + (admin && s.model ? ` · ${s.model.replace(/\.gguf$/i, '')}` : '');
     pill.classList.toggle('bad', !ok);
     mic.classList.toggle('hidden', !s.voice || !window.MediaRecorder);
     if (!ok && location.hash.startsWith('#/ai')) setTimeout(() => { if (document.body.contains(pill)) refreshStatus(); }, 10000);

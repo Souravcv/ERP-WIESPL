@@ -318,6 +318,7 @@ const DOC_SERIES = [
   { key: 'onboarding', label: 'Onboarding File', table: 'onboardings', col: 'onb_no', fmt: (n, fy) => `ONB-${n}/20${fy}` },
   { key: 'probation', label: 'Probation Review', table: 'probation_reviews', col: 'review_no', fmt: (n, fy) => `PRV-${n}/20${fy}` },
   { key: 'separation', label: 'Exit / Full & Final', table: 'separations', col: 'sep_no', fmt: (n, fy) => `EXIT-${n}/20${fy}` },
+  { key: 'salary', label: 'Salary Revision', table: 'salaries', col: 'sal_no', fmt: (n, fy) => `SAL-${n}/20${fy}` },
   { key: 'requisition', label: 'Material Requisition', table: 'requisitions', col: 'req_no', fmt: (n, fy) => `REQ-${n}/20${fy}` },
   { key: 'po', label: 'Purchase Order', table: 'purchase_orders', col: 'po_no', fmt: (n, fy) => `${n}/20${fy}` },
   { key: 'so', label: 'Sales Order', table: 'sales_orders', col: 'so_no', fmt: (n, fy) => `${pfx()}/SO/${fy}/${n}` },

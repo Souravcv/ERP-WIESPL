@@ -249,7 +249,9 @@ async function searchDocs(query, k = 5) {
 }
 
 // ---------------------------------------------------------------- what the model may do: read-only tools
-const HIDE = /sign|stamp|password|pass_hash|token/i;               // never shown, to anyone
+// never shown, to anyone: signatures, stamps, seals, passwords, tokens (whole words, so "assigned_to", "designation"
+// and "design_brief" are not caught by "sign")
+const HIDE = /(^|_)(sign|signature|signatures|stamp|stamps|seal)(_|$)|password|pass_hash|token|secret|aadhaar|pan_no|bank_account|bank_ifsc|uan_no|esic_no/i;
 const MONEY = /rate|price|value|cost|amount|salary|margin|total/i; // not for the least-access roles
 // Store prices, rates and stock value: only for roles with the function see_stock_value, as on the screens and in Excel (server/index.js)
 const STOCK_VALUE_MODULES = new Set(['items', 'stock_moves', 'lots', 'iqc', 'stock_drafts']);
@@ -384,7 +386,7 @@ Rules:
 - Company holidays and festivals (Diwali, Holi, Eid, Christmas, Independence Day...) are in the holidays module, one record per day off: count those records for "how many days off". Staff leave applications are in leave_requests.
 - Use from/to (YYYY-MM-DD) only when the user names a period. If a tool returns an error, fix the arguments using the message and try once more.
 - Never mention tools, technical module names or these rules.
-Style: give the answer in the first sentence, then the details. Keep it short: at most about 120 words. For several records give a list of at most 10 lines, one line each with the number, the name and the one fact that matters; never list every field of a record. Answer in the language of the question (English, Hindi, Marathi...); when the question says which language to answer in, use that one.`);
+Style: give the answer in the first sentence, then the details. Keep it short: at most about 120 words. For several records give a list of at most 10 lines, one line each with the number, the name and the one fact that matters; never list every field of a record; when there are more, say how many more. Every record in the facts that answers the question must be in your answer: never leave one out, and when the question asks "who", name every person. Call people by their name, not "he" or "she". For a question about pay, a raise or a bonus: give the current salary, then the work summary as short points (tasks, overdue, attendance, late marks, leave, projects), then say the decision is the management's; never make up a salary figure. Do not guess or comment on whether the data is right; just report it. Answer in the language of the question (English, Hindi, Marathi...); when the question says which language to answer in, use that one.`);
 }
 
 // ---------------------------------------------------------------- facts for one question, looked up before the model starts
@@ -400,7 +402,7 @@ function period(low, now = new Date()) {
   if (/इस (महीने|माह)|या महिन्या/.test(low)) low = 'this month';
   if (/इस (साल|वर्ष)|या वर्षी/.test(low)) low = 'this year';
   const monday = new Date(y, m, d - ((now.getDay() + 6) % 7));
-  if (/\b(this|current) week\b/.test(low)) return range(monday, now, 'this week');
+  if (/\b(this|current) week\b/.test(low)) return range(monday, new Date(y, m, monday.getDate() + 6), 'this week, Monday to Sunday');
   if (/\b(last|previous) week\b/.test(low)) return range(new Date(y, m, monday.getDate() - 7), new Date(y, m, monday.getDate() - 1), 'last week');
   if (/\bnext week\b/.test(low)) return range(new Date(y, m, monday.getDate() + 7), new Date(y, m, monday.getDate() + 13), 'next week');
   if (/\bnext month\b/.test(low)) return range(new Date(y, m + 1, 1), new Date(y, m + 2, 0), 'next month');
@@ -419,9 +421,13 @@ function period(low, now = new Date()) {
   return null;
 }
 // records as a small table: far fewer words for the engine to read than JSON
-function table(m, rows, role, maxCols = 6) {
+function table(m, rows, role, maxCols = 6, keep = []) {
   const recs = rows.map(r => cleanRow(m, r, role));
-  const cols = [...new Set(recs.flatMap(r => Object.keys(r)))].filter(k => k !== 'id').slice(0, maxCols);
+  const all = [...new Set(recs.flatMap(r => Object.keys(r)))].filter(k => k !== 'id');
+  const ent = ENTITIES[m], st = ent.statusField && (ent.fields.find(f => f.key === ent.statusField)?.label || ent.statusField);
+  // the status always kept, and the columns the question filtered on ("late" -> Timing)
+  const must = [st, ...keep.map(k => ent.fields.find(f => f.key === k)?.label || k)].filter(c => c && all.includes(c));
+  const cols = [...all.slice(0, 2).filter(c => !must.includes(c)), ...must, ...all.slice(2).filter(k => !must.includes(k))].slice(0, Math.max(maxCols, must.length + 2));
   const cell = v => String(v ?? '').replace(/\s+/g, ' ').replace(/\|/g, '/').slice(0, 90);
   return [`id | ${cols.join(' | ')}`, ...recs.map(r => `${r.id} | ${cols.map(c => cell(r[c])).join(' | ')}`)].join('\n');
 }
@@ -432,6 +438,11 @@ function groupField(m, low) {
   if (/\bmonth(ly|-wise| wise)\b|\bper month\b|\bby month\b|\beach month\b/.test(low) && ENTITIES[m].fields.some(f => f.key === 'date')) return { key: 'month', label: 'Month' };
   const words = groupWords(low);
   const fields = ENTITIES[m].fields.filter(f => !f.computed && f.type !== 'section' && f.type !== 'json' && !HIDE.test(f.key));
+  // "per person", "by employee", "each staff member": the person the record is given to
+  if (words.some(w => /^(person|people|employee|staff|member|user|engineer|assignee|owner|head)s?\b/.test(w))) {
+    const f = fields.find(f => f.type === 'person') || fields.find(f => f.type === 'ref' && ['employees', 'users'].includes(f.ref));
+    if (f) return { key: f.key, label: f.label || f.key };
+  }
   for (const w of words) {
     const s = w.replace(/s$/, ''), norm = v => String(v || '').toLowerCase().replace(/_id$/, '').replace(/_/g, ' ');
     const f = fields.find(f => norm(f.key) === s || norm(f.label) === s) || fields.find(f => norm(f.label).includes(s) || s.includes(norm(f.key)));
@@ -440,11 +451,107 @@ function groupField(m, low) {
   return null;
 }
 const STOP = new Set(('about what which show from with have will much many there their this that these those give tell list open latest last first month months year years today please when where does want know need all any some your mine also into than then them they were been being could would should shall days day how who why the and for are you get got can our has had not but its was let ' +
-  'wiespl make makes made type types kind kinds find search record records detail details info information details me my we us is am be do did an of to in on at by it as or if so no yes new old current previous week weeks number numbers count total per each every between under over more less most top recent recently hour hours minute minutes time times change changes coming upcoming next pending approved active status').split(' '));
+  'wiespl make makes made type types kind kinds find search record records detail details info information details me my we us is am be do did an of to in on at by it as or if so no yes new old current previous week weeks number numbers count total per each every between under over more less most top recent recently hour hours minute minutes time times change changes coming upcoming next pending approved active status ' +
+  'work works working worked doing done should him her his hers she he give given want wants engagement much salary amount').split(' '));
 const NO_WORD_SEARCH = new Set(['boq_items', 'bom_items', 'schedule_baselines']); // line items: too many, too alike
 const DOC_MIN = 0.7; // how close a document passage must be to the question to be handed over (related ones score 0.75+)
+// The staff's names (employees and CRM users), so "Swapnil's tasks" can be narrowed to Swapnil. Looked up fresh each
+// question (a few dozen rows). A name word must be 3+ letters and not a common word.
+function people() {
+  const map = new Map();
+  const add = (name, k, id) => { const n = String(name || '').trim().toLowerCase(); if (!n) return; const p = map.get(n) || { name: n, words: [n, ...n.split(/\s+/).filter(w => w.length >= 3 && !STOP.has(w) && /^[a-z]+$/.test(w))] }; p[k] = id; map.set(n, p); };
+  try { for (const e of db.prepare('SELECT id, name FROM employees').all()) add(e.name, 'emp', e.id); } catch { /* no employees table */ }
+  try { for (const u of db.prepare('SELECT id, name FROM users').all()) add(u.name, 'user', u.id); } catch { /* no users table */ }
+  return [...map.values()].map(p => ({ ...p, words: [...new Set(p.words)].map(w => w.replace(/[^a-z0-9 ]/g, '.')) }));
+}
+// A question about how someone works, or what to pay them
+const PERF = /\b(perform\w*|work done|his work|her work|productiv\w*|apprais\w*|report card|review of|how (is|has|was|did) \w+( \w+)? (doing|working|work|performed|done)|salary|salaries|ctc|raise|increment|bonus|incentive|hike|promot\w*|engagement|pay (him|her)|worth)\b/;
+// One person's work in the period (default: the last 30 days): tasks, attendance, leave, tickets, enquiries, projects,
+// and their current salary. Counted here, so the model only has to report it.
+function workSummary(user, who, when, sources) {
+  const role = user.role, t = ymd(new Date()), d30 = new Date(); d30.setDate(d30.getDate() - 30);
+  const from = when?.from || ymd(d30), to = when?.to || t, label = when?.label || 'the last 30 days';
+  const names = who.map(p => p.name), ph = names.map(() => '?').join(','), emp = who.find(p => p.emp)?.emp;
+  const one = (sql, ...a) => { try { return db.prepare(sql).get(...a) || {}; } catch { return {}; } };
+  const all = (sql, ...a) => { try { return db.prepare(sql).all(...a); } catch { return []; } };
+  const n = v => Number(v) || 0;
+  const e = emp ? one('SELECT name, emp_code, designation, department, joining_date, status FROM employees WHERE id = ?', emp) : {};
+  const out = [`Work summary of ${e.name || names[0]}${e.emp_code ? ` (${e.emp_code})` : ''}, ${label} (${from} to ${to}), counted by the CRM:`];
+  if (e.name) out.push(`- Job: ${[e.designation, e.department].filter(Boolean).join(', ') || 'not recorded'}; joined ${e.joining_date || 'date not recorded'}; status ${e.status || ''}`);
+  if (emp && canView('salaries', role)) {
+    const s = one("SELECT sal_no, effective_from, monthly_gross, annual_ctc, increment_pct, reason FROM salaries WHERE employee_id = ? AND effective_from <= ? ORDER BY effective_from DESC, id DESC LIMIT 1", emp, t);
+    out.push(s.monthly_gross ? `- Current salary: ₹${n(s.monthly_gross).toLocaleString('en-IN')} a month gross, CTC ₹${n(s.annual_ctc).toLocaleString('en-IN')} a year, from ${s.effective_from} (${s.reason || 'revision'}${s.increment_pct ? `, +${s.increment_pct}%` : ''}; ${s.sal_no})` : '- Current salary: not in the Salary Register yet');
+    if (s.sal_no) sources.push({ module: 'salaries', label: 'Salary Register' });
+  }
+  if (canView('work_tasks', role)) {
+    const a = one(`SELECT COUNT(*) total, SUM(status = 'Done') done, SUM(status = 'Done' AND substr(completed_at, 1, 10) <= due_date) on_time FROM work_tasks WHERE lower(trim(assigned_to)) IN (${ph}) AND due_date BETWEEN ? AND ?`, ...names, from, to);
+    const b = one(`SELECT SUM(status NOT IN ('Done', 'Cancelled')) open, SUM(status NOT IN ('Done', 'Cancelled') AND due_date < ?) overdue FROM work_tasks WHERE lower(trim(assigned_to)) IN (${ph})`, t, ...names);
+    const late = all(`SELECT task_no, title, due_date FROM work_tasks WHERE lower(trim(assigned_to)) IN (${ph}) AND status NOT IN ('Done', 'Cancelled') AND due_date < ? ORDER BY due_date LIMIT 5`, ...names, t);
+    out.push(`- Tasks due in the period: ${n(a.total)}, done ${n(a.done)}${a.done ? ` (${n(a.on_time)} on time)` : ''}. Open now: ${n(b.open)}, overdue ${n(b.overdue)}${late.length ? ': ' + late.map(r => `${r.task_no} "${r.title}" due ${r.due_date}`).join('; ') : ''}`);
+    sources.push({ module: 'work_tasks', label: 'Task Scheduler' });
+  }
+  if (emp && canView('attendance', role)) {
+    const a = one(`SELECT COUNT(*) days, SUM(status IN ('Present', 'Working')) present, SUM(status = 'Half Day') half, SUM(status = 'Absent') absent, SUM(status = 'On Leave') leave, SUM(timing LIKE 'Late%') late, ROUND(AVG(NULLIF(net_hours, 0)), 1) hrs FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ?`, emp, from, to);
+    out.push(a.days ? `- Attendance: ${n(a.present)} days present, ${n(a.half)} half days, ${n(a.absent)} absent, ${n(a.leave)} on leave; ${n(a.late)} late marks; ${a.hrs || 0} working hours a day on average` : '- Attendance: no attendance records in the period');
+    if (a.days) sources.push({ module: 'attendance', label: 'Attendance Register' });
+  }
+  if (emp && canView('leave_requests', role)) {
+    const a = one("SELECT COUNT(*) n, SUM(days) days FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?", emp, to, from);
+    out.push(`- Approved leave in the period: ${n(a.n)} request${n(a.n) === 1 ? '' : 's'}, ${n(a.days)} day${n(a.days) === 1 ? '' : 's'}`);
+  }
+  if (canView('service_tickets', role)) {
+    const a = one(`SELECT COUNT(*) total, SUM(status IN ('Resolved', 'Closed')) closed FROM service_tickets WHERE lower(trim(assigned_to)) IN (${ph}) AND date BETWEEN ? AND ?`, ...names, from, to);
+    if (a.total) { out.push(`- Service tickets given in the period: ${n(a.total)}, resolved / closed ${n(a.closed)}`); sources.push({ module: 'service_tickets', label: 'Complaint Register' }); }
+  }
+  if (canView('enquiries', role)) {
+    const a = one(`SELECT COUNT(*) total, SUM(status = 'Won') won, SUM(CASE WHEN status = 'Won' THEN expected_value END) won_value FROM enquiries WHERE lower(trim(enquiry_by)) IN (${ph}) AND date BETWEEN ? AND ?`, ...names, from, to);
+    if (a.total) { out.push(`- Enquiries brought in the period: ${n(a.total)}, won ${n(a.won)}${a.won_value ? ` (₹${n(a.won_value).toLocaleString('en-IN')})` : ''}`); sources.push({ module: 'enquiries', label: 'Enquiry Register' }); }
+  }
+  if (canView('projects', role)) {
+    const ps = all(`SELECT code, name, stage, progress FROM projects WHERE lower(trim(engineer)) IN (${ph}) AND status = 'Active'`, ...names);
+    if (ps.length) { out.push(`- Engineer on running projects: ${ps.map(p => `${p.code} ${p.name} (${p.stage || ''}, ${n(p.progress)}%)`).join('; ')}`); sources.push({ module: 'projects', label: 'Projects / Execution' }); }
+  }
+  out.push('(Pay decisions are the management\'s: report these facts; do not invent a salary figure the facts do not give.)');
+  return out.join('\n');
+}
+const ALIASES = [
+  [/\b(salary|salaries|ctc|wages?|pay ?scale|gross pay)\b/, 'salaries'],
+  [/\b(on leave|leaves?|day off|days off|time off)\b/, 'leave_requests'],
+  [/\b(late|late mark|absent|present|attendance|came|punch(ed)?|check(ed)?[ -]?in|half[ -]day)\b/, 'attendance'],
+  [/\b(complaints?|tickets?|breakdowns?)\b/, 'service_tickets'],
+  [/\b(pos?|p\.o\.?)\b/, 'purchase_orders'],
+  [/\b(staff|team|engineers?|people|who works)\b/, 'employees'],
+  [/\b(leads?|prospects?)\b/, 'enquiries'],
+];
+// Spelling slips in module names ("empoly list", "enqiury", "vender"): swap a near-miss word for the module word it was
+// meant to be, so the CRM search still finds the module. Only words of 5+ letters, same first letter, 1 slip (2 when long).
+let VOCAB;
+function slips(a, b) { // Damerau-Levenshtein distance (a swap of two neighbours counts as one slip)
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array(b.length).fill(0)]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) {
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1);
+  }
+  return d[a.length][b.length];
+}
+function fixSpelling(low) {
+  VOCAB ||= [...new Set(Object.entries(ENTITIES).flatMap(([m, e]) => [m, e.label, e.singular].filter(Boolean).join(' ').toLowerCase().split(/[^a-z]+/)).filter(w => w.length >= 5))];
+  return low.replace(/[a-z]{5,}/g, w => {
+    if (STOP.has(w) || VOCAB.includes(w) || VOCAB.some(v => v.startsWith(w))) return w;
+    let best = null, bestD = 9;
+    for (const v of VOCAB) {
+      if (v[0] !== w[0]) continue;
+      const max = w.length >= 8 ? 2 : 1;
+      // whole word ("vender" -> "vendor"), or the start of it ("empoly" -> "employ"ee)
+      const dd = Math.min(slips(w, v), v.length > w.length ? slips(w, v.slice(0, w.length)) + 0.5 : 9);
+      if (dd <= max + 0.5 && dd < bestD) { best = v; bestD = dd; }
+    }
+    return best || w;
+  });
+}
 async function questionContext(user, text, sources) {
-  const role = user.role, low = String(text).toLowerCase(), when = period(low), can = viewable(role), facts = [];
+  const role = user.role, low = fixSpelling(String(text).toLowerCase()), when = period(low), can = viewable(role), facts = [];
   // 1. low stock, worked out from the stock moves
   const lowStock = /\blow\b.{0,12}\bstock\b|\bstock\b.{0,20}\blow\b|re-?order|out of stock|short(age)? of|running out|below (the )?(minimum|min|reorder)/.test(low) && can.includes('items');
   if (lowStock) {
@@ -457,20 +564,68 @@ async function questionContext(user, text, sources) {
   // "PO value per vendor": vendors is how to group the purchase orders, not what is asked about
   const dims = groupWords(low).map(w => w.replace(/s$/, ''));
   if (named.length > 1) named = named.filter(m => !dims.some(w => [m, ENTITIES[m].label, ENTITIES[m].singular].filter(Boolean).some(n => n.toLowerCase().replace(/s$/, '').startsWith(w))));
+  // everyday words for a module, when no module is named outright ("who is on leave", "who came late", "complaints")
+  if (!named.length) for (const [re, m] of ALIASES) if (re.test(low) && can.includes(m) && !named.includes(m)) named.push(m);
   named = named.slice(0, 2);
+  let summedDept = false;
   for (const m of named) {
-    const ent = ENTITIES[m], dated = !!when && ent.fields.some(f => f.key === 'date');
-    // "approved vendors", "pending leave requests", "open complaints": only those with that status
+    const ent = ENTITIES[m], span = ent.fields.some(f => f.key === 'from_date') && ent.fields.some(f => f.key === 'to_date');
+    const dated = !!when && (span || ent.fields.some(f => f.key === 'date'));
+    // What the question narrows the records to: a choice of any choice-field ("approved vendors", "urgent tasks",
+    // "site work"), maybe with "not" ("not done"); "pending / open / unfinished" (not finished yet); "overdue / late"
+    // (past the due date and not finished); and the period ("this month", "coming up")
+    const FINISHED = /^(done|cancelled|canceled|closed|completed|paid|resolved|received|won|lost|rejected|left|reversed)$/i;
     const sf = ent.statusField && ent.fields.find(f => f.key === ent.statusField);
-    const status = sf?.options?.filter(Boolean).find(o => { const l = String(o).toLowerCase(), first = l.split(/[\s(]/)[0]; return new RegExp(`\\b${l.replace(/[^a-z0-9 ]/g, '.')}\\b`).test(low) || (first.length >= 4 && new RegExp(`\\b${first}\\b`).test(low)); });
-    const where = [...(dated ? ['date >= ?', 'date <= ?'] : []), ...(status ? [`${sf.key} = ?`] : [])], params = [...(dated ? [when.from, when.to] : []), ...(status ? [status] : [])];
+    const conds = [], said = [], keep = [];
+    for (const f of ent.fields.filter(f => f.type === 'select' && !f.computed && f.options?.length)) {
+      for (const o of f.options.filter(Boolean)) {
+        const l = String(o).toLowerCase(), esc = l.replace(/[^a-z0-9 ]/g, '.'), first = l.split(/[\s(/]/)[0];
+        if (!(new RegExp(`\\b${esc}\\b`).test(low) || (f === sf && first.length >= 4 && !STOP.has(first) && new RegExp(`\\b${first}\\b`).test(low)))) continue;
+        const neg = new RegExp(`\\b(not|non|un)[ -]?(${esc}|${first})\\b`).test(low);
+        conds.push(r => (String(r[f.key] ?? '') === o) !== neg);
+        keep.push(f.key); said.push(`${f.label || f.key} ${neg ? 'not ' : ''}"${o}"`);
+        break; // one choice per field
+      }
+    }
+    const today = ymd(new Date());
+    const overdue = /\boverdue\b|\blate\b|past (the )?due|delayed|missed/.test(low) && ent.fields.some(f => f.key === 'due_date' && !f.computed);
+    const open = !overdue && sf && !said.some(s => s.startsWith(sf.label || sf.key)) && /\b(pending|open|unfinished|incomplete|remaining|not (yet )?(done|finished|completed|closed))\b/.test(low);
+    if (overdue) { conds.push(r => r.due_date && r.due_date < today && !FINISHED.test(String((sf && r[sf.key]) || ''))); said.push(`overdue (due before today ${today} and not finished)`); }
+    if (open) { conds.push(r => !FINISHED.test(String(r[sf.key] || ''))); said.push('not finished yet'); }
+    // a person the question names ("Swapnil's tasks", "Priya's leave"): only their records
+    const who = people().filter(p => p.words.some(w => new RegExp(`\\b${w}\\b`).test(low)));
+    const pf = ent.fields.filter(f => !f.computed && (f.type === 'person' || (f.type === 'ref' && ['employees', 'users'].includes(f.ref))));
+    if (who.length && pf.length) {
+      conds.push(r => pf.some(f => who.some(p => f.type === 'person' ? String(r[f.key] || '').toLowerCase() === p.name : (f.ref === 'employees' ? p.emp : p.user) === r[f.key])));
+      said.push(`for ${who.map(p => p.name).join(' / ')}`);
+    }
+    if (m === 'attendance' && /\blate\b/.test(low)) { conds.push(r => /late/i.test(r.timing || '')); keep.push('timing'); said.push('Timing "Late mark"'); }
+    if (m === 'attendance' && /\babsent\b/.test(low)) { conds.push(r => r.status === 'Absent'); said.push('Status "Absent"'); }
+    if (dated && span) { conds.push(r => r.from_date <= when.to && (r.to_date || r.from_date) >= when.from); keep.push('from_date', 'to_date'); said.push(`on any day from ${when.from} to ${when.to} (${when.label})`); }
+    else if (dated) { conds.push(r => r.date >= when.from && r.date <= when.to); said.push(`dated ${when.from} to ${when.to} (${when.label})`); }
     let rows = [], total = 0;
     try {
-      rows = listRows(m, { ...(dated ? { from: when.from, to: when.to } : {}), ...(status ? { [sf.key]: status } : {}), limit: dated || status ? 25 : 12 });
-      total = db.prepare(`SELECT COUNT(*) AS n FROM ${m}${where.length ? ' WHERE ' + where.join(' AND ') : ''}`).get(...params).n;
+      if (conds.length) { rows = listRows(m, { limit: 5000 }).filter(r => conds.every(c => c(r))); total = rows.length; rows = rows.slice(0, 15); }
+      else { rows = listRows(m, { limit: 12 }); total = db.prepare(`SELECT COUNT(*) AS n FROM ${m}`).get().n; }
     } catch { continue; }
+    // salary per department / designation: those are on the employee, so counted here from each one's current salary
+    if (m === 'salaries' && /\b(department|designation|team|role)s?\b/.test(low)) {
+      const by = /designation|role/.test(low) ? 'designation' : 'department';
+      const rows2 = db.prepare(`SELECT COALESCE(e.${by}, '(not set)') k, COUNT(*) n, SUM(s.monthly_gross) g, SUM(s.annual_ctc) c FROM salaries s JOIN employees e ON e.id = s.employee_id WHERE s.status = 'Current' AND COALESCE(e.status, 'Active') <> 'Left' GROUP BY 1 ORDER BY g DESC`).all();
+      const inr = v => '₹' + (Number(v) || 0).toLocaleString('en-IN');
+      facts.push(`Current salaries per ${by}, worked out by the CRM:\n${by} | Employees | Monthly gross total | Annual CTC total\n` + rows2.map(r => `${r.k} | ${r.n} | ${inr(r.g)} | ${inr(r.c)}`).join('\n') +
+        `\nTotal: ${rows2.reduce((s, r) => s + r.n, 0)} employees, ${inr(rows2.reduce((s, r) => s + r.g, 0))} a month, ${inr(rows2.reduce((s, r) => s + r.c, 0))} a year`);
+      sources.push({ module: m, label: ent.label }); summedDept = true;
+      continue;
+    }
     const g = groupField(m, low);
-    if (!g) facts.push(`${ent.label}${status ? ` with status "${status}"` : ''}${dated ? ` dated ${when.from} to ${when.to} (${when.label})` : ''}: ${total} record${total === 1 ? '' : 's'}${rows.length < total ? `; the newest ${rows.length}` : ''}${rows.length ? ':\n' + table(m, rows, role) : '.'}`);
+    // "who ...?": name the people in the records outright, so none of them is left out of the answer
+    if (!g && /\bwho\b/.test(low) && rows.length && pf.length) {
+      const count = new Map();
+      for (const r of rows) for (const f of pf) { const n = f.type === 'person' ? r[f.key] : r[f.key + '_label']; if (n && !/assigned_by|approved_by|prepared_by|verified_by/.test(f.key)) { count.set(n, (count.get(n) || 0) + 1); break; } }
+      if (count.size) facts.push(`People in these ${ent.label} records (${count.size}): ${[...count].map(([n, c]) => `${n} (${c} record${c === 1 ? '' : 's'})`).join(', ')}`);
+    }
+    if (!g) facts.push(`${ent.label}${said.length ? ' that are: ' + said.join('; ') : ''}: ${total} record${total === 1 ? '' : 's'}${rows.length < total ? `; the newest ${rows.length} (${total - rows.length} more not shown)` : rows.length > 1 ? ' (all of them, no more)' : ''}${rows.length ? ':\n' + table(m, rows, role, 7, keep) : '.'}`);
     // "per state", "by vendor", "state-wise", "each salesperson": counted (and summed) right here
     if (g) {
       const money = /value|amount|worth|total|₹|\brs\b|rupee|sum/.test(low) && ent.fields.find(f => !f.computed && ['money', 'number'].includes(f.type) && /grand_total|^total|amount|value/.test(f.key));
@@ -485,6 +640,12 @@ async function questionContext(user, text, sources) {
     }
     sources.push({ module: m, label: ent.label });
   }
+  // 2b. "How has Sourav performed?", "what raise for Swapnil?": one person's work, counted by the CRM (HR-level users only)
+  let summed = false;
+  if (PERF.test(low) && (role === 'admin' || hasFunction(role, 'hr_manage') || canView('salaries', role))) {
+    const who = people().filter(p => p.words.some(w => new RegExp(`\\b${w}\\b`).test(low)));
+    if (who.length) { facts.push(workSummary(user, who, when, sources)); summed = true; }
+  }
   // 3. records that match the specific words of the question ("Diwali", "Sourav", "Kerala"); a word found all over the CRM says nothing
   // (the module's own name and its field names, e.g. "state" in "enquiries per state", are not things to look for)
   const nameWords = named.flatMap(m => [m, ENTITIES[m].label, ENTITIES[m].singular || '', ...ENTITIES[m].fields.flatMap(f => [f.key.replace(/_id$/, ''), f.label || ''])].map(n => n.toLowerCase()));
@@ -493,19 +654,24 @@ async function questionContext(user, text, sources) {
   // WIESPL's own documents, for questions about products, norms and how things work (looked up first: when a
   // document clearly answers, records that merely share a word, e.g. "operation", would only be noise)
   let docs = [];
-  if (!named.length && !lowStock) {
+  if (!named.length && !lowStock && !summed) {
     try {
       docs = (await searchDocs(text, 3)).filter(h => h.score >= DOC_MIN);
       if (process.env.AI_DEBUG) console.log('[ai docs]', docs.map(h => `${h.title} ${h.score.toFixed(2)}`).join(', ') || 'none close enough');
     } catch { /* the search engine is still starting: the model can still use the tools */ }
   }
   const seen = new Set();
-  if (docs.some(h => h.score >= 0.72)) words.length = 0;
-  for (const w of words) {
+  if (summed || summedDept || docs.some(h => h.score >= 0.72)) words.length = 0;
+  // two words side by side first ("electrical engineer", "door hardware"): far more telling than each word alone
+  const order = low.match(/[\p{L}\p{N}][\p{L}\p{N}./-]{2,}/gu) || [];
+  const pairs = words.length ? order.slice(1).map((w, i) => [order[i], w]).filter(p => p.every(w => words.includes(w))).map(p => p.join(' ')) : [];
+  const covered = new Set();
+  for (const w of [...pairs, ...words]) {
+    if (covered.has(w)) continue;
     const found = [];
     for (const m of can) {
       if (NO_WORD_SEARCH.has(m) || !ENTITIES[m].search?.length) continue;
-      let rows = []; try { rows = listRows(m, { q: w, limit: 6 }); } catch { continue; }
+      let rows = []; try { rows = listRows(m, { q: w, limit: 4 }); } catch { continue; }
       rows = rows.filter(r => !seen.has(`${m}:${r.id}`));
       if (rows.length) found.push({ m, rows });
     }
@@ -515,6 +681,7 @@ async function questionContext(user, text, sources) {
       rows.forEach(r => { seen.add(`${m}:${r.id}`); sources.push({ module: m, id: r.id, label: `${ENTITIES[m].singular || ENTITIES[m].label} #${r.id}` }); });
       facts.push(`${ENTITIES[m].label} with "${w}":\n${table(m, rows, role)}`);
     }
+    if (w.includes(' ')) w.split(' ').forEach(x => covered.add(x)); // found as a pair: no need for each word alone
   }
   for (const h of docs) { facts.push(`From WIESPL's document "${h.title}":\n${h.chunk.slice(0, 900)}`); sources.push({ doc: h.source, label: h.title }); }
   if (/\b(rate|rates|price|prices|cost|costs|value|valuation|worth)\b|किंमत|कीमत|दर\b/i.test(low) && !hasFunction(role, 'see_stock_value'))
@@ -710,8 +877,8 @@ export async function chat(req, res) {
 async function streamRound(cfg, messages, tools, signal, onText) {
   const ollama = isOllama();
   const res = ollama
-    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.3, top_p: 0.8, top_k: 20, num_ctx: 8192, num_predict: 600 } }, signal)
-    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.3, top_p: 0.8, top_k: 20, max_tokens: 600, cache_prompt: true }, signal);
+    ? await post(cfg.url, '/api/chat', { model: cfg.model, messages, tools, stream: true, options: { temperature: 0.3, top_p: 0.8, top_k: 20, num_ctx: 8192, num_predict: 700 } }, signal)
+    : await post(cfg.url, '/v1/chat/completions', { messages, tools, stream: true, temperature: 0.3, top_p: 0.8, top_k: 20, max_tokens: 700, cache_prompt: true }, signal);
   let content = '', buf = ''; const calls = [], parts = [];
   const reader = res.body.getReader(), dec = new TextDecoder();
   for (;;) {

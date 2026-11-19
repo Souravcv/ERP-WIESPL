@@ -1,7 +1,7 @@
 // HR dashboard: who is working where today, the month register (one code per day, with the HR Policy's late marks and
 // sandwich rule), leave balances, and the days HR has to review.
 import { h, api, fmtDate, today, toast, fail, modal, busy, state } from '../ui.js';
-import { hasFunction } from '../schema.js';
+import { hasFunction, canView } from '../schema.js';
 import { inr } from '../calc.js';
 
 const TABS = [['today', '🕘 Today'], ['month', '📅 Month register'], ['balances', '🌴 Leave balances'], ['people', '🧑‍💼 Joining & exits'], ['review', '🔎 To review']];
@@ -16,7 +16,7 @@ export async function hrView(root, tab = 'today') {
   const head = h('div.page-head', h('h1', '👥 HR & Attendance'), h('div.actions',
     h('a.btn', { href: '#/list/employees' }, '🧑‍💼 Employees'), h('a.btn', { href: '#/list/work_locations' }, '📍 Work locations'),
     h('a.btn', { href: '#/list/site_assignments' }, '🗓️ Site assignments'), h('a.btn', { href: '#/list/leave_requests' }, '🌴 Leave'), h('a.btn', { href: '#/list/holidays' }, '🎉 Holidays'),
-    h('a.btn', { href: '#/list/onboardings' }, '🧾 Onboarding'), h('a.btn', { href: '#/list/probation_reviews' }, '📋 Probation'), h('a.btn', { href: '#/list/asset_issues' }, '💻 Assets'), h('a.btn', { href: '#/list/separations' }, '🚪 Exits')));
+    h('a.btn', { href: '#/list/onboardings' }, '🧾 Onboarding'), h('a.btn', { href: '#/list/probation_reviews' }, '📋 Probation'), h('a.btn', { href: '#/list/asset_issues' }, '💻 Assets'), h('a.btn', { href: '#/list/separations' }, '🚪 Exits'), canView('salaries', state.user.role) ? h('a.btn', { href: '#/list/salaries' }, '💰 Salaries') : null));
   const tabs = h('div.tabs', [...TABS, ...(hasFunction(state.user.role, 'hr_manage') ? [['map', '🗺 Live map'], ['logins', '🔑 App logins']] : [])].map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { location.hash = `#/hr/${k}`; } }, l)));
   const box = h('div', h('div.muted', 'Loading…'));
   root.replaceChildren(head, tabs, box);

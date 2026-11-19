@@ -424,6 +424,18 @@ export function beforeSave(name, row, existing, user) {
       if (!existing && !row.sep_no) row.sep_no = docNo('separation', date, (n, fy) => `EXIT-${n}/20${fy}`);
       prepSeparation(row, existing);
       break;
+    case 'salaries': {
+      if (!existing && !row.sal_no) row.sal_no = docNo('salary', row.effective_from || date, (n, fy) => `SAL-${n}/20${fy}`);
+      const v = k => Number(k in row ? row[k] : existing?.[k]) || 0;
+      if (!v('monthly_gross') && (v('basic') || v('hra') || v('allowances'))) row.monthly_gross = v('basic') + v('hra') + v('allowances');
+      row.annual_ctc = Math.round(12 * (v('monthly_gross') + v('employer_pf')) + v('annual_bonus')) || null;
+      const emp = row.employee_id ?? existing?.employee_id, from = row.effective_from ?? existing?.effective_from;
+      const prev = db.prepare('SELECT monthly_gross FROM salaries WHERE employee_id = ? AND effective_from < ? AND id <> ? ORDER BY effective_from DESC LIMIT 1').get(emp, from, existing?.id || 0);
+      row.previous_gross = prev?.monthly_gross || null;
+      row.increment_pct = prev?.monthly_gross && v('monthly_gross') ? Math.round((v('monthly_gross') / prev.monthly_gross - 1) * 1000) / 10 : null;
+      row.status = from > today() ? 'Planned' : 'Current';
+      break;
+    }
     case 'leave_requests':
       if (!existing && !row.leave_no) row.leave_no = docNo('leave', date, (n, fy) => `LV-${n}/20${fy}`);
       prepLeave(row, existing, user);
@@ -767,6 +779,13 @@ export function refreshBillNotes(poId) {
 
 // `deleted` is passed when a row was removed (id is null then).
 export function afterSave(name, id, user, deleted) {
+  if (name === 'salaries') { // the newest revision already in force is "Current", the ones before it "Old"
+    const emp = deleted ? deleted.employee_id : db.prepare('SELECT employee_id FROM salaries WHERE id = ?').get(id)?.employee_id;
+    if (emp) {
+      const t = today(), cur = db.prepare('SELECT id FROM salaries WHERE employee_id = ? AND effective_from <= ? ORDER BY effective_from DESC, id DESC LIMIT 1').get(emp, t)?.id;
+      db.prepare("UPDATE salaries SET status = CASE WHEN effective_from > ? THEN 'Planned' WHEN id = ? THEN 'Current' ELSE 'Old' END WHERE employee_id = ?").run(t, cur ?? 0, emp);
+    }
+  }
   if (['vendor_bills', 'debit_notes', 'stock_moves'].includes(name)) {
     const poId = deleted ? deleted.po_id : db.prepare(`SELECT po_id FROM ${name} WHERE id = ?`).get(id)?.po_id;
     if (poId) refreshBillNotes(poId);
