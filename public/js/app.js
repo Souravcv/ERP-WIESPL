@@ -250,6 +250,8 @@ async function start() {
   initAssistant();
   refreshPending();
   startNotifications();
+  // location checks on every screen while clocked in (web only; the Android app has its own)
+  import('./views/attend.js').then(m => m.backgroundChecks()).catch(() => {});
   if (state.user.must_change) await changePassword(true);
   if (!location.hash || location.hash === '#/login') redirect('#/dashboard');
   else route();

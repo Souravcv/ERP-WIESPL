@@ -2,6 +2,7 @@
 // (automatic while the app is open, and a photo check every few hours), leave requests, my month.
 import { h, api, toast, fail, fmtDate, today, busy, modal } from '../ui.js';
 import { LEAVE_TYPES, OUT_REASONS } from '../schema.js';
+import { attendGuide, msg } from './attendguide.js';
 
 let timer = null, wakeLock = null;
 const stop = () => { clearInterval(timer); timer = null; try { wakeLock?.release(); } catch { /* none */ } wakeLock = null; };
@@ -48,6 +49,33 @@ function selfie() {
   });
 }
 
+// Location checks while clocked in, on every CRM screen (not only this one) as long as the CRM is open in front: a
+// web page cannot run with the phone locked or the browser closed (the Android app can; see the guide for iPhone).
+const shared = { working: false, every: 15, last: 0 };
+async function checkNow() {
+  shared.last = Date.now();
+  return api('/hr/check', { method: 'POST', body: await locate() });
+}
+let bgStarted = false;
+export async function backgroundChecks() {
+  if (app || bgStarted) return;
+  bgStarted = true;
+  const refresh = async () => {
+    try { const me = await api('/hr/me'); shared.working = !!(me.attendance?.check_in && !me.attendance?.check_out); shared.every = me.rules.pingMinutes || 15; }
+    catch { shared.working = false; }
+  };
+  const tick = async () => {
+    if (!shared.working || document.visibilityState !== 'visible' || location.hash.startsWith('#/attend')) return;
+    if (Date.now() - shared.last < shared.every * 60e3) return;
+    try { await checkNow(); } catch (e) { if (/not clocked in/i.test(e.message)) shared.working = false; }
+  };
+  await refresh();
+  if (shared.working) shared.last = Date.now() - shared.every * 60e3;   // check soon after opening the CRM
+  setInterval(tick, 60e3);
+  setInterval(refresh, 30 * 60e3);
+  document.addEventListener('visibilitychange', tick);
+}
+
 const dist = m => (m == null ? '' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
 const maps = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
 const hm = s => String(s || '').slice(11, 16) || String(s || '').slice(0, 5);
@@ -62,6 +90,7 @@ export async function attendView(root) {
   }
   const a = me.attendance, R = me.rules;
   const working = a?.check_in && !a?.check_out;
+  Object.assign(shared, { working: !!working, every: R.pingMinutes || 15 });
   const card = h('div.card');
   const status = h('div', { style: { fontSize: '15px' } });
   const reload = () => attendView(root);
@@ -69,13 +98,11 @@ export async function attendView(root) {
   if (me.out_wait_ms > 0) setTimeout(() => { if (location.hash.startsWith('#/attend')) reload(); }, me.out_wait_ms + 1000);
 
   // Automatic location checks while this screen is open and the day is running.
-  const lastAuto = { at: Date.now() };
   async function autoCheck(force = false) {
     if (!working || document.visibilityState !== 'visible') return;
-    if (!force && Date.now() - lastAuto.at < R.pingMinutes * 60e3) return;
-    lastAuto.at = Date.now();
+    if (!force && Date.now() - shared.last < R.pingMinutes * 60e3) return;
     try {
-      const r = await api('/hr/check', { method: 'POST', body: await locate() });
+      const r = await checkNow();
       if (r.site) { toast(`📍 You are now at ${r.site}: your day moved there`); reload(); return; }
       status.textContent = `Location recorded at ${r.at || new Date().toTimeString().slice(0, 5)}`;
       status.style.color = 'var(--good)';
@@ -122,6 +149,17 @@ export async function attendView(root) {
     return api(path, { method: 'POST', body: { ...pos, ...extra, photo } });
   };
 
+  const nowHm = new Date().toTimeString().slice(0, 5), LT = me.leave_today;
+  const banner = (text, sub, color) => h('div', { class: 'no-i18n', style: { margin: '10px 0', padding: '12px 14px', borderRadius: '12px', border: `2px solid ${color}`, background: 'var(--bg)' } },
+    h('div', { style: { fontSize: '18px', fontWeight: 700, color } }, text), sub ? h('div', { style: { fontSize: '15px', marginTop: '4px' } }, sub) : null);
+  const offToday = me.holiday || me.weekly_off || (LT && !LT.part);
+  const startAt = LT?.part ? LT.come_by : me.employee.shift_start;
+  const banners = [
+    LT?.part ? banner(msg(LT.half ? 'half' : 'short', LT.come_by, LT.go_from), null, 'var(--info, #1f6feb)') : null,
+    !a?.check_in && a?.status !== 'On Leave' && !offToday && startAt && nowHm >= startAt ? banner(msg('clockIn'), msg('clockInSub', startAt), 'var(--bad)') : null,
+    working && !(me.out_wait_ms > 0) && nowHm >= (me.out_from || (LT?.part ? LT.go_from : me.employee.shift_end) || '99') ? banner(msg('clockOut'), msg('clockOutSub'), 'var(--bad)') : null,
+  ];
+
   const nextPhoto = (() => {
     if (!working || !needPhoto) return null;
     const last = a.last_check && a.photo_checks ? a.last_check : hm(a.check_in);
@@ -132,6 +170,7 @@ export async function attendView(root) {
     h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } },
       h('div', h('b', me.employee.name), h('div.muted', `${me.employee.code || ''} · shift ${me.employee.shift_start || ''}–${me.employee.shift_end || ''}`)),
       h('div', { style: { textAlign: 'right' } }, h('b', fmtDate(me.today)), me.holiday ? h('div', { style: { color: 'var(--warn)' } }, `Holiday: ${me.holiday}`) : me.weekly_off ? h('div.muted', 'Weekly off') : null)),
+    ...banners,
     h('div', { style: { margin: '14px 0', padding: '12px', borderRadius: '10px', background: 'var(--bg)' } },
       !a?.check_in ? h('div', { style: { fontSize: '18px', fontWeight: 600 } }, a?.status === 'On Leave' ? `On leave today${a.note ? ' – ' + a.note : ''}` : 'Not clocked in yet')
         : h('div', h('div', { style: { fontSize: '18px', fontWeight: 600 } }, working ? `Working since ${hm(a.check_in)}` : `Clocked out at ${hm(a.check_out)} · ${a.hours} h`),
@@ -169,7 +208,7 @@ export async function attendView(root) {
       }) }, needPhoto ? '📸 Clock out (selfie + location)' : '📍 Clock out')) : null,
     h('p.muted', { style: { fontSize: '12px', marginTop: '10px' } }, app
       ? `Your location is taken when you clock in / out, press a check, and from clock-in to clock-out every ${R.pingMinutes} min and when you leave the site, also with the phone locked (a notification shows while it is shared). ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h.` : ''}`
-      : `Your location is taken only when you clock in / out, press a check, or while this screen is open during your working day (every ${R.pingMinutes} min). ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h. ` : ''}Add this page to the home screen to open it like an app.`));
+      : `Your location is taken when you clock in and clock out, when you press a check, and every ${R.pingMinutes} min while you are clocked in and the CRM is open on the phone (any screen). With the phone locked or the browser closed nothing is sent: open the CRM now and then. ${needPhoto ? `Field staff: a photo presence check about every ${R.checkEvery} h. ` : ''}Add this page to the home screen to open it like an app.`));
 
   const sites = h('div.card', h('h2', '📍 Where you can clock in today'), me.sites.length ? h('table.data', h('tbody', me.sites.map(s => h('tr', h('td', s.name, h('div.muted', { style: { fontSize: '11px' } }, `${s.kind} · within ${s.radius_m || 200} m`)), h('td', h('a', { href: maps(s.lat, s.lng), target: '_blank' }, 'Map')))))) : h('p.muted', 'No site is set for you today: ask HR / the service coordinator to assign your site.'));
 
@@ -177,11 +216,21 @@ export async function attendView(root) {
   const B = me.balance;
   const lf = h('input', { type: 'date', value: today() }), lto = h('input', { type: 'date', value: today() });
   const half = h('input', { type: 'checkbox', style: { width: 'auto' } }), why = h('input', { placeholder: 'Reason' });
+  const halfLbl = h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, half, 'Half day');
+  // a short leave is 1½ h (no half-day tick); a half day is one date, taken from the leave type chosen (PL, comp-off …)
+  const syncHalf = () => {
+    const isShort = lt.value.startsWith('Short leave');
+    halfLbl.style.display = isShort ? 'none' : '';
+    if (isShort) half.checked = false;
+    if (half.checked || isShort) lto.value = lf.value;
+    lto.disabled = half.checked || isShort;
+  };
+  lt.onchange = syncHalf; half.onchange = syncHalf; lf.addEventListener('change', syncHalf);
   const leave = h('div.card', h('h2', '🌴 Leave'),
     B ? h('div.kpis', { style: { marginBottom: '10px' } }, ...[['PL available', B.pl_available, B.employment_type === 'Confirmed' ? `${B.pl_credit} credited this year` : 'after confirmation'],
       ['Comp-off', B.comp_off_left, 'take this month'], ['Short leaves', `${B.short_leaves} / ${B.short_max}`, 'this month'], ['Late marks', `${B.late_marks} / ${B.late_free}`, 'free this month']]
       .map(([l, v, s]) => h('div.kpi', h('div.label', l), h('div.value', String(v)), h('div.sub', s)))) : null,
-    h('div.form-grid', h('label', 'Type', lt), h('label', 'From', lf), h('label', 'To', lto), h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, half, 'Half day'), h('label.span-2', 'Reason', why)),
+    h('div.form-grid', h('label', 'Type', lt), h('label', 'From', lf), h('label', 'To', lto), halfLbl, h('label.span-2', 'Reason', why)),
     h('button.btn.primary', { style: { marginTop: '8px' }, onclick: busy(async () => {
       try { const r = await api('/hr/leave', { method: 'POST', body: { type: lt.value, from_date: lf.value, to_date: lto.value, half_day: half.checked ? 'Yes' : 'No', reason: why.value } }); toast(`${r.leave_no} sent for approval`); reload(); } catch (e) { fail(e); }
     }) }, '📤 Apply for leave'),
@@ -190,6 +239,8 @@ export async function attendView(root) {
   const month = h('div.card', h('h2', '📅 This month'), me.month.length ? h('table.data', h('thead', h('tr', ['Date', 'Status', 'In', 'Out', 'Hours'].map(x => h('th', x)))),
     h('tbody', me.month.map(d => h('tr', h('td.nowrap', fmtDate(d.date)), h('td', d.status, d.timing && !['On time', ''].includes(d.timing) ? h('div.muted', { style: { fontSize: '11px' } }, d.timing) : null, d.review === 'To review' ? h('span.muted', ' (HR checking)') : null), h('td', hm(d.check_in)), h('td', hm(d.check_out)), h('td.num', d.hours || ''))))) : h('p.muted', 'Nothing yet this month'));
 
-  root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, sites, leave, month);
+  syncHalf();
+  // the guide opens by itself until the person has clocked in a few times
+  root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, attendGuide({ open: me.month.filter(d => d.check_in).length < 3 }), sites, leave, month);
   if (working && !app) autoCheck();
 }

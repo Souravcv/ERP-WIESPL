@@ -49,6 +49,7 @@ import * as materials from './materials.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
 import * as news from './news.js';
+import * as loginlog from './loginlog.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
@@ -109,13 +110,14 @@ api.post('/login', wrap((req, res) => {
   const key = `${String(username).toLowerCase()}|${req.ip}`;
   if (!loginAllowed(key)) throw new HttpError(429, 'Too many failed attempts. Try again in 15 minutes.');
   const u = db.prepare('SELECT * FROM users WHERE lower(username) = lower(?) AND active = 1').get(String(username).trim());
-  if (!u || !verifyPassword(password, u.pass_hash)) { loginFailed(key); throw new HttpError(401, 'Wrong username or password'); }
+  if (!u || !verifyPassword(password, u.pass_hash)) { loginFailed(key); loginlog.recordLogin(req, res, 'failed', { username: String(username).trim(), id: u?.id, name: u?.name }); throw new HttpError(401, 'Wrong username or password'); }
   loginSucceeded(key);
   createSession(res, u.id);
+  loginlog.recordLogin(req, res, 'login', u);
   audit(u.name, 'users', u.id, 'login');
   return { user: publicUser(u) };
 }));
-api.post('/logout', (req, res) => { destroySession(req, res); res.json({ ok: true }); });
+api.post('/logout', (req, res) => { const u = loginlog.sessionUser(req); if (u) loginlog.recordLogin(req, res, 'logout', u); destroySession(req, res); res.json({ ok: true }); });
 // Client enquiry form (enquire.html): no login.
 api.use('/public', publicRouter());
 
@@ -765,9 +767,10 @@ api.post('/ncrs/:id/act/:action', need('ncrs'), wrap(req => qa.ncrAction(req.par
 api.post('/production_reports/:id/reopen', need('production_reports'), wrap(req => prod.reopenReport(req.params.id, req.body, req.user)));
 
 // ---------------------------------------------------------------- attendance (phone) and HR
-const clientIp = req => String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null;
+// the proxy's own entry (the last one): the first entry of X-Forwarded-For is whatever the phone sent
+const clientIp = loginlog.clientIp;
 api.get('/hr/me', wrap(req => hr.myDay(req.user)));
-api.post('/hr/clock-in', wrap(req => hr.clockIn(req.user, req.body, clientIp(req))));
+api.post('/hr/clock-in', wrap((req, res) => hr.clockIn(req.user, req.body, clientIp(req), loginlog.deviceOf(req, res))));
 api.post('/hr/check', wrap(req => hr.check(req.user, req.body, clientIp(req))));
 api.post('/hr/going-out', wrap(req => hr.goingOut(req.user, req.body, clientIp(req))));
 api.post('/hr/back', wrap(req => hr.backAtSite(req.user, req.body, clientIp(req))));
@@ -780,6 +783,8 @@ api.get('/hr/month', wrap(req => { hrView(req); return hr.monthRegister(req.quer
 api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
 api.get('/hr/logins', need('employees'), wrap(() => hrf.loginChoices()));
 const hrManage = req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator can create logins'); };
+// Sign-in / sign-out log and shared-phone warnings (buddy punching)
+api.get('/hr/login-log', wrap(req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator see the login log'); return loginlog.loginReport(req.query.days); }));
 api.get('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.loginGaps(req.user); }));
 api.post('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.createLogins(req.body?.people, req.user); }));
 api.get('/hr/login-holders', wrap(req => { hrManage(req); return { people: hrf.loginHolders(req.user), allowed: req.user.role === 'admin' }; }));
@@ -1310,6 +1315,9 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 news.migrateNews();
+loginlog.migrateLoginLog();
+// "Please clock in / clock out" pop-ups at each person's shift times
+setInterval(() => { try { hr.shiftReminders(); } catch (e) { console.error('shift reminders', e.message); } }, 60 * 1000);
 setTimeout(() => news.refresh().catch(e => console.error('news', e.message)), 3 * 60 * 1000);
 setInterval(() => news.refresh().catch(e => console.error('news', e.message)), 6 * 60 * 60 * 1000);
 

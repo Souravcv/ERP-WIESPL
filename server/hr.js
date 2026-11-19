@@ -22,7 +22,43 @@ export function rules() {
   const s = getSettings();
   const n = (v, d) => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
   return { fullDay: n(s.hr_full_day_hours, 8), halfDay: n(s.hr_half_day_hours, 4), grace: n(s.hr_grace_minutes, 15), checkEvery: n(s.hr_check_every_hours, 3),
-    maxAccuracy: n(s.hr_max_accuracy_m, 150), pingMinutes: n(s.hr_auto_ping_minutes, 30) };
+    maxAccuracy: n(s.hr_max_accuracy_m, 150), pingMinutes: n(s.hr_auto_ping_minutes, 15) };
+}
+
+// The person's own shift (Employees → Shift Start / End; "2:00 PM" is read too), else the company day 09:30–18:00.
+// own = the shift differs from the company day: then its length is the working day (clock-out lock, full / half day),
+// otherwise the HR settings (hours + break) apply as before.
+const clock = t => {
+  const m = String(t || '').trim().match(/^(\d{1,2})[:.](\d{2})\s*(?:([ap])\.?\s*m\.?)?$/i);
+  if (!m) return null;
+  let hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (m[3]) { const pm = /p/i.test(m[3]); hh = hh === 12 ? (pm ? 12 : 0) : hh + (pm ? 12 : 0); }
+  return hh < 24 && mm < 60 ? hh * 60 + mm : null;
+};
+const hm = m => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.round(m) % 60).padStart(2, '0')}`;
+export function shiftOf(emp) {
+  const s = getSettings();
+  const brk = s.hr_break_minutes === '' || s.hr_break_minutes == null ? 30 : Number(s.hr_break_minutes) || 0;
+  const companyNeed = (Number(s.hr_required_hours) || 8) * 60 + brk;
+  let start = clock(emp?.shift_start), stop = clock(emp?.shift_end);
+  if (start == null) start = 570;
+  if (stop == null || stop <= start) stop = start === 570 ? 1080 : Math.min(start + companyNeed, 23 * 60 + 59);
+  const own = !(start === 570 && stop === 1080);
+  const need = own ? stop - start : companyNeed;                       // clock-in → clock-out, break included
+  const work = own ? need - (need >= 360 ? brk : 0) : null;             // working minutes of an own shift
+  return { start, stop, len: stop - start, own, need, work, from: hm(start), to: hm(stop) };
+}
+
+// Approved leave that touches a date (a short or half-day leave shortens the day; others free it).
+export const leavesOn = (empId, date) => db.prepare("SELECT type, half_day FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?").all(empId, date, date);
+const SHORT = 'Short leave (up to 1½ h)';
+const isHalf = l => l.half_day === 'Yes' && l.type !== SHORT;
+const partLeave = l => l.type === SHORT || isHalf(l);
+// Minutes of the day an approved short / half-day leave covers (late in or early out).
+function leaveAllowance(emp, date, lv = leavesOn(emp.id, date)) {
+  const sh = shiftOf(emp), P = policy();
+  return Math.max(0, ...lv.map(l => (l.type === SHORT ? P.shortLeaveMin : isHalf(l) ? Math.round(sh.need / 2) : 0)));
 }
 
 // Distance in metres between two points on the earth (Haversine).
@@ -157,7 +193,9 @@ export function evaluate(attId) {
   const a = getRow('attendance', attId);
   if (['On Leave', 'Holiday', 'Week Off'].includes(a.status) && !a.check_in) return a;
   const emp = getRow('employees', a.employee_id);
-  const R = rules();
+  const R = rules(), sh = shiftOf(emp);
+  // full / half day by hours: an own shorter shift needs its own hours
+  const fullDay = sh.own ? Math.min(R.fullDay, sh.work / 60) : R.fullDay, halfDay = sh.own ? Math.min(R.halfDay, fullDay / 2) : R.halfDay;
   const flags = new Set(String(a.flags || '').split('\n').filter(Boolean).filter(x => !/^(late|left early|few presence checks|no clock-out|short day|worked on a weekly off)/.test(x)));
   const pings = db.prepare('SELECT kind, at, inside, flags, note FROM attendance_pings WHERE attendance_id = ? ORDER BY id').all(a.id);
   for (const p of pings) if (p.flags) for (const x of p.flags.split('; ')) flags.add(x);
@@ -166,10 +204,14 @@ export function evaluate(attId) {
   if (a.check_in) {
     const end = a.check_out || (a.date < today() ? (pings.at(-1)?.at || null) : now());
     hours = end ? r1((Date.parse(String(end).replace(' ', 'T')) - Date.parse(String(a.check_in).replace(' ', 'T'))) / 3600e3) : 0;
-    const start = mins(emp.shift_start || '09:30'), stop = mins(emp.shift_end || '18:00');
+    const start = sh.start, stop = sh.stop;
     const lateIn = Math.max(0, mins(hhmm(a.check_in)) - start), earlyOut = a.check_out ? Math.max(0, stop - mins(hhmm(a.check_out))) : 0;
-    if (lateIn > R.grace) flags.add(`late (in at ${hhmm(a.check_in)})`);
-    if (earlyOut > R.grace) flags.add(`left early (out at ${hhmm(a.check_out)})`);
+    // an approved short / half-day leave covers that much late in + early out: no late flag for it
+    const covered = off ? 0 : leaveAllowance(emp, a.date);
+    if (lateIn + earlyOut - covered > R.grace) {
+      if (lateIn > R.grace) flags.add(`late (in at ${hhmm(a.check_in)})`);
+      if (earlyOut > R.grace) flags.add(`left early (out at ${hhmm(a.check_out)})`);
+    }
     if (!a.check_out && a.date < today()) flags.add('no clock-out');
     if (off) {
       timing = 'Worked on off day (comp-off)';
@@ -177,11 +219,10 @@ export function evaluate(attId) {
     } else {
       // HR Policy: up to 15 min is on time; 15 min–1½ h a late mark; up to 4 h half a day; beyond 4 h a day's leave or
       // salary. An approved short leave covers 1½ h, a half-day leave half the shift.
-      const P = policy();
-      const lv = db.prepare("SELECT type, half_day FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?").all(a.employee_id, a.date, a.date);
-      const allowance = Math.max(0, ...lv.map(l => (l.type === 'Short leave (up to 1½ h)' ? P.shortLeaveMin : l.half_day === 'Yes' ? (stop - start) / 2 : 0)));
-      short = Math.max(0, lateIn + earlyOut - allowance);
-      timing = short <= R.grace ? 'On time' : short <= P.shortLeaveMin ? 'Late mark' : short <= P.halfDayMin ? 'Half day (late / early)' : 'Full day cut (over 4 h late / early)';
+      // An own short shift: the "half day" limit is at most half of it.
+      const P = policy(), halfMin = sh.own ? Math.min(P.halfDayMin, Math.round(sh.need / 2)) : P.halfDayMin;
+      short = Math.max(0, lateIn + earlyOut - covered);
+      timing = short <= R.grace ? 'On time' : short <= Math.min(P.shortLeaveMin, halfMin) ? 'Late mark' : short <= halfMin ? 'Half day (late / early)' : 'Full day cut (over 4 h late / early)';
     }
     if (emp.field_staff === 'Yes' && hours >= R.checkEvery) {
       const need = Math.floor(hours / R.checkEvery), got = pings.filter(p => p.kind === 'Photo check').length;
@@ -190,11 +231,11 @@ export function evaluate(attId) {
   }
   const working = a.check_in && !a.check_out && a.date === today();
   // Less than a half day counts as absent; the flag sends it to HR, who can correct it.
-  const byHours = hours >= R.fullDay ? 'Present' : hours >= R.halfDay ? 'Half Day' : 'Absent';
+  const byHours = hours >= fullDay ? 'Present' : hours >= halfDay ? 'Half Day' : 'Absent';
   // A normal day is judged by the policy timing; a day without clock-out, or work on an off day, by its hours.
   const status = working ? 'Working' : !a.check_in || !a.check_out || off ? byHours
     : timing === 'Half day (late / early)' ? 'Half Day' : timing.startsWith('Full day cut') ? 'Absent' : 'Present';
-  if (a.check_in && hours < R.halfDay && !working) flags.add(`short day (${hours} h)`);
+  if (a.check_in && hours < halfDay && !working) flags.add(`short day (${hours} h)`);
   // Minutes away: from each check outside the fence to the next check (or the end of the day).
   // Outside periods (going out is not clocking out): hours stay clock-in to clock-out; HR sees each period with its reason.
   const end = a.check_out || (a.date < today() ? pings.at(-1)?.at : now());
@@ -219,7 +260,7 @@ export function evaluate(attId) {
 }
 
 // ---------------------------------------------------------------- the phone
-export function clockIn(user, body = {}, ip) {
+export function clockIn(user, body = {}, ip, device = null) {
   const emp = employeeOf(user);
   const t = today();
   const existing = db.prepare('SELECT id, check_in, status FROM attendance WHERE employee_id = ? AND date = ?').get(emp.id, t);
@@ -247,12 +288,28 @@ export function clockIn(user, body = {}, ip) {
   return tx(() => {
     const att = existing ? getRow('attendance', existing.id) : insertRow('attendance', { date: t, employee_id: emp.id }, user, { system: true });
     updateRow('attendance', att.id, { check_in: now(), location_id: f?.loc.id || null, mode: travel ? 'Travel / outstation' : 'Site / office', in_distance_m: f?.distance ?? null, in_ip: ip || null,
+      in_device: device?.label || null, in_device_id: device?.id || null,
       note: String(body.note || '').trim() || null, status: 'Working', review: '', site_moves: f ? `${now().slice(11, 16)} ${f.loc.name} (clock in)` : null }, user, { system: true });
     const photoId = savePhoto(att.id, 'Clock in', body.photo, user);
-    addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId, inFlags);
+    addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId, [...inFlags, ...sharedDevice(att.id, emp, device, user)]);
     audit(user.name, 'attendance', att.id, 'clock in', f ? `${f.loc.name} ${f.distance} m` : 'travel');
     return { attendance: forPhone(evaluate(att.id)), site: f?.loc.name || null };
   });
+}
+
+// Buddy punching: the same phone / browser already clocked in someone else today → both days go to HR review.
+function sharedDevice(attId, emp, device, user) {
+  if (!device?.id) return [];
+  const others = db.prepare("SELECT a.id, a.check_in, e.name FROM attendance a JOIN employees e ON e.id = a.employee_id WHERE a.date = ? AND a.in_device_id = ? AND a.employee_id <> ? AND a.check_in IS NOT NULL").all(today(), device.id, emp.id);
+  if (!others.length) return [];
+  for (const o of others) {
+    const flag = `same phone used to clock in ${emp.name} at ${now().slice(11, 16)}`;
+    const cur = getRow('attendance', o.id);
+    if (!String(cur.flags || '').includes(flag)) updateRow('attendance', o.id, { flags: [cur.flags, flag].filter(Boolean).join('\n'), review: cur.review === 'Approved' ? cur.review : 'To review' }, user, { system: true });
+  }
+  notify({ fn: 'hr_manage', kind: 'attendance', title: `📱 One phone, ${others.length + 1} people clocked in: ${[...others.map(o => o.name), emp.name].join(', ')}`,
+    body: `${device.label || 'same device'} · ${now().slice(11, 16)} · the days are sent to HR review`, link: '#/hr/loginlog' }, { name: 'Attendance' });
+  return [`same phone as ${others.map(o => `${o.name} (in at ${hhmm(o.check_in)})`).join(', ')}`];
 }
 
 function openDay(emp) {
@@ -367,14 +424,12 @@ export function backAtSite(user, body = {}, ip) {
 export function earliestOut(emp, att) {
   const s = getSettings();
   if (s.hr_clock_out_lock === 'No' || !att.check_in || isOffDay(emp, att.date)) return null;
-  const need = (Number(s.hr_required_hours) || 8) * 60 + (s.hr_break_minutes === '' || s.hr_break_minutes == null ? 30 : Number(s.hr_break_minutes) || 0);
-  const P = policy();
-  const lv = db.prepare("SELECT type, half_day FROM leave_requests WHERE employee_id = ? AND status = 'Approved' AND from_date <= ? AND to_date >= ?").all(att.employee_id, att.date, att.date);
-  const shorter = l => (l.type === 'Short leave (up to 1½ h)' ? P.shortLeaveMin : l.half_day === 'Yes' ? need / 2 : null);
-  if (lv.some(l => shorter(l) == null)) return null;
-  const from = Math.max(mins(hhmm(att.check_in)), mins(emp.shift_start || '09:30'));
-  const at = Math.min(from + need - Math.max(0, ...lv.map(shorter)), 23 * 60 + 30);
-  return `${String(Math.floor(at / 60)).padStart(2, '0')}:${String(at % 60).padStart(2, '0')}`;
+  // the person's own shift: e.g. 09:30–14:00 may clock out at 14:00 (it was always 8 h + break before)
+  const sh = shiftOf(emp);
+  const lv = leavesOn(emp.id, att.date);
+  if (lv.some(l => !partLeave(l))) return null;
+  const from = Math.max(mins(hhmm(att.check_in)), sh.start);
+  return hm(Math.min(from + sh.need - leaveAllowance(emp, att.date, lv), 23 * 60 + 30));
 }
 
 const clockOutWait = (emp, att) => {
@@ -403,7 +458,7 @@ export function clockOut(user, body = {}, ip) {
 }
 
 // The employee's own copy of a day: no distances, site-check results or HR notes.
-const HR_ONLY = ['flags', 'in_distance_m', 'out_distance_m', 'checks_inside', 'away_minutes', 'away_since', 'alert_at', 'in_ip', 'remarks', 'outings', 'deduct_minutes', 'net_hours'];
+const HR_ONLY = ['flags', 'in_device', 'in_device_id', 'in_distance_m', 'out_distance_m', 'checks_inside', 'away_minutes', 'away_since', 'alert_at', 'in_ip', 'remarks', 'outings', 'deduct_minutes', 'net_hours'];
 const forPhone = att => att && Object.fromEntries(Object.entries(att).filter(([k]) => !HR_ONLY.includes(k)));
 
 // What the phone shows: today, where the person may clock in, their month, their leave.
@@ -414,7 +469,12 @@ export function myDay(user) {
   const att = row ? getRow('attendance', row.id) : null;
   const month = db.prepare("SELECT date, status, check_in, check_out, hours, review, timing FROM attendance WHERE employee_id = ? AND date >= ? ORDER BY date DESC").all(emp.id, t.slice(0, 8) + '01');
   const leaves = db.prepare('SELECT id, leave_no, type, from_date, to_date, days, status, balance_note FROM leave_requests WHERE employee_id = ? ORDER BY id DESC LIMIT 10').all(emp.id);
-  return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, shift_start: emp.shift_start, shift_end: emp.shift_end },
+  const sh = shiftOf(emp), lvToday = leavesOn(emp.id, t);
+  const part = lvToday.length && lvToday.every(partLeave);
+  const cover = part ? leaveAllowance(emp, t, lvToday) : 0;
+  return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, shift_start: sh.from, shift_end: sh.to },
+    // an approved short / half-day leave today: the person still clocks in (later) or out (earlier)
+    leave_today: lvToday.length ? { type: lvToday[0].type, half: lvToday.some(isHalf), part: !!part, minutes: cover, come_by: part ? hm(sh.start + cover) : null, go_from: part ? hm(sh.stop - cover) : null } : null,
     today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
     // other active sites, also selectable at clock-in (HR sees when a site is not assigned)
     other_sites: activeSites().filter(l => !allowedSites(emp, t).some(a => a.id === l.id)).map(l => ({ id: l.id, name: l.name, kind: l.kind })),
@@ -436,8 +496,17 @@ export function applyLeave(user, body = {}) {
 export function markLeave(leaveId, user) {
   const lv = getRow('leave_requests', leaveId);
   const marked = db.prepare("SELECT id FROM attendance WHERE employee_id = ? AND status = 'On Leave' AND check_in IS NULL AND note LIKE ?").all(lv.employee_id, `%${lv.leave_no}%`);
+  const worked = () => db.prepare('SELECT id FROM attendance WHERE employee_id = ? AND date BETWEEN ? AND ? AND check_in IS NOT NULL').all(lv.employee_id, lv.from_date, lv.to_date);
   if (['Cancelled', 'Rejected'].includes(lv.status)) {
     for (const a of marked) db.prepare('DELETE FROM attendance WHERE id = ?').run(a.id);
+    for (const a of worked()) evaluate(a.id);   // the leave no longer covers late / early
+    return;
+  }
+  // A half day is half leave, half work: the day is not marked On Leave (that hid the clock-in button); the
+  // register shows HL until the person clocks in, then the worked half with the leave covering the rest.
+  if (lv.status === 'Approved' && isHalf(lv)) {
+    for (const a of marked) db.prepare('DELETE FROM attendance WHERE id = ?').run(a.id);
+    for (const a of worked()) evaluate(a.id);
     return;
   }
   if (lv.status !== 'Approved') return;
@@ -462,6 +531,48 @@ export function review(attId, body = {}, user) {
   const out = updateRow('attendance', attId, patch, user, { system: true });
   audit(user.name, 'attendance', Number(attId), `review ${decision}`, body.remarks || '');
   return out;
+}
+
+// Reminders at the person's own shift times, as a pop-up in the CRM (on the phone it shows when the CRM is open):
+// "Please clock in" at the shift start (later by an approved short / half-day leave) to anyone not clocked in, and
+// "Please clock out" once their hours are complete to anyone still clocked in. Once a day each; not on off days or
+// full-day leave; not more than 2 hours late (e.g. after a restart); only people who use attendance (clocked in during
+// the last 30 days, or joined in that time), so office logins that never clock in get no pop-ups. Runs every minute.
+const userOfEmp = emp => (emp.login ? db.prepare('SELECT name FROM users WHERE lower(username) = lower(?) AND active = 1').get(String(emp.login).trim()) : null);
+export function shiftReminders(at = now()) {
+  const t = at.slice(0, 10), nowMin = mins(at.slice(11, 16));
+  let sent = {};
+  try { const raw = getSettings().hr_shift_reminders; sent = (typeof raw === 'string' ? JSON.parse(raw) : raw) || {}; } catch { sent = {}; }
+  if (sent.date !== t) sent = { date: t, in: [], out: [] };
+  const before = JSON.stringify(sent);
+  const hol = db.prepare('SELECT 1 FROM holidays WHERE date = ?').get(t);
+  const since = addDays(t, -30);
+  const users = db.prepare("SELECT * FROM employees e WHERE COALESCE(status, 'Active') = 'Active' AND COALESCE(login, '') <> '' AND (joining_date >= ? OR EXISTS (SELECT 1 FROM attendance a WHERE a.employee_id = e.id AND a.check_in IS NOT NULL AND a.date >= ?))").all(since, since);
+  for (const emp of users) {
+    if (hol || isWeeklyOff(emp, t)) continue;
+    const u = userOfEmp(emp);
+    if (!u) continue;
+    const lv = leavesOn(emp.id, t);
+    if (lv.some(l => !partLeave(l))) continue;              // on leave for the whole day
+    const sh = shiftOf(emp), cover = leaveAllowance(emp, t, lv);
+    const a = db.prepare('SELECT * FROM attendance WHERE employee_id = ? AND date = ?').get(emp.id, t);
+    // clock in: at the shift start (+ the leave they have for coming late)
+    const inAt = sh.start + (lv.length ? cover : 0);
+    if (!a?.check_in && nowMin >= inAt && nowMin < inAt + 120 && !sent.in.includes(emp.id)) {
+      notify({ userNames: [u.name], kind: 'attendance', title: '⏰ Please clock in', body: `Your shift starts at ${hm(inAt)}. Open My Attendance and press “Clock in”.`, link: '#/attend' }, { name: 'Attendance' });
+      sent.in.push(emp.id);
+    }
+    // clock out: when the hours are complete (the clock-out button opens), else at the shift end
+    if (a?.check_in && !a.check_out && !sent.out.includes(emp.id)) {
+      const outAt = mins(earliestOut(emp, a) || hm(sh.stop));
+      if (nowMin >= outAt && nowMin < outAt + 120) {
+        notify({ userNames: [u.name], kind: 'attendance', title: '🏁 Please clock out', body: `Your work time is over (${hm(outAt)}). Before you leave, open My Attendance and press “Clock out”.`, link: '#/attend' }, { name: 'Attendance' });
+        sent.out.push(emp.id);
+      }
+    }
+  }
+  if (JSON.stringify(sent) !== before) db.prepare("INSERT INTO settings (key, value) VALUES ('hr_shift_reminders', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(JSON.stringify(sent)));
+  return sent;
 }
 
 // Days left open (no clock-out) are closed at night and flagged.

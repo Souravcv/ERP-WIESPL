@@ -86,6 +86,9 @@ export function checkLeave(lv, exceptId) {
     need(days <= max, `${lv.type} leave is up to ${max} days (asked ${days})`);
   };
   if (lv.type !== 'Short leave (up to 1½ h)' && lv.type !== 'Maternity' && !days) problems.push('Those dates are weekly offs / holidays');
+  // Half day: one date, and a leave type to take it from (a short leave is 1½ h, not half a day).
+  if (lv.half_day === 'Yes' && lv.type === 'Short leave (up to 1½ h)') problems.push('Choose either a short leave (1½ h) or a half day: for half a day choose the leave to use (PL, comp-off, leave without pay …) and tick Half day');
+  if (lv.half_day === 'Yes' && from !== to) problems.push('A half day is for one date: set To the same as From');
   switch (lv.type) {
     case 'Privilege Leave (PL)': {
       if (!confirmed) { problems.push(`PL starts after confirmation (${emp.name} is ${emp.employment_type || 'not marked confirmed'}): take comp-off or leave without pay`); break; }
@@ -196,6 +199,7 @@ export function monthRegister(ym) {
       const q = a?.review === 'To review' ? '?' : '';
       if (a?.check_in) {
         if (a.timing === 'Worked on off day (comp-off)') return 'W' + q;
+        if (lv && lv.half_day === 'Yes' && UNPAID_LEAVE.includes(lv.type) && a.status !== 'Absent') return 'H' + q;
         if (a.status === 'Half Day') return 'H' + q;
         if (a.status === 'Absent') return 'A' + q;
         return (a.timing === 'Late mark' ? 'P*' : 'P') + q;

@@ -32,13 +32,13 @@ export function createSession(res, userId) {
   const token = crypto.randomBytes(32).toString('base64url');
   const expires = new Date(Date.now() + SESSION_DAYS * 864e5);
   db.prepare('INSERT INTO sessions (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, userId, expires.toISOString());
-  res.setHeader('Set-Cookie', `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${secure(res.req)}`);
+  res.append('Set-Cookie', `${COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_DAYS * 86400}${secure(res.req)}`);
 }
 
 export function destroySession(req, res) {
   const token = readCookie(req, COOKIE);
   if (token) db.prepare('DELETE FROM sessions WHERE token = ?').run(token);
-  res.setHeader('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure(req)}`);
+  res.append('Set-Cookie', `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${secure(req)}`);
 }
 
 export const publicUser = u => u && ({ id: u.id, username: u.username, name: u.name, role: u.role, email: u.email, phone: u.phone, must_change: !!u.must_change, active: !!u.active });

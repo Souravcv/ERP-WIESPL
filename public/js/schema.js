@@ -1500,6 +1500,8 @@ export const ENTITIES = {
       { key: 'away_since', label: 'Away Since (alert sent)', type: 'text', readonly: true },
       { key: 'alert_at', label: 'Last Alert to HR', type: 'text', readonly: true },
       { key: 'in_ip', label: 'Network at Clock In', type: 'text', readonly: true },
+      { key: 'in_device', label: 'Phone / Browser at Clock In', type: 'text', readonly: true, hint: 'The same phone used to clock in two people is flagged (HR → Login log)' },
+      { key: 'in_device_id', label: 'Device ID at Clock In', type: 'text', readonly: true },
       { key: 'status', label: 'Status', type: 'select', options: ['Working', 'Present', 'Half Day', 'Absent', 'On Leave', 'Holiday', 'Week Off'], readonly: true },
       { key: 'flags', label: 'Flags', type: 'textarea', span: 2, readonly: true },
       { key: 'review', label: 'HR Review', type: 'select', options: ['', 'To review', 'Approved', 'Rejected'], readonly: true },
