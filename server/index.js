@@ -48,6 +48,7 @@ import * as journey from './journey.js';
 import * as materials from './materials.js';
 import * as projectStore from './projectstore.js';
 import * as policies from './policies.js';
+import * as scheduleXlsx from './scheduleexcel.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
 import * as news from './news.js';
@@ -597,6 +598,13 @@ api.post('/vendor_evaluations/:id/final', wrap(req => {
 }));
 api.get('/planner/portfolio', wrap(req => planner.portfolio(req.user)));
 api.get('/projects/:id/schedule', wrap(req => planner.plannerData(req.params.id, req.user)));
+// the schedule as a client-ready Excel (Master Gantt, milestones, zone-wise release, baseline vs current, checks)
+api.get('/projects/:id/schedule/export', wrap(async (req, res) => {
+  const { buffer, filename } = await scheduleXlsx.scheduleWorkbook(Number(req.params.id), req.user);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.end(Buffer.from(buffer));
+}));
 api.put('/projects/:id/schedule', wrap(req => planner.saveSchedule(req.params.id, req.body, req.user)));
 api.post('/projects/:id/schedule/template', wrap(req => planner.applyTemplate(req.params.id, req.body, req.user)));
 api.post('/projects/:id/schedule/baseline', wrap(req => planner.requestBaseline(req.params.id, req.body, req.user)));

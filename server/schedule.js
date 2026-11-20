@@ -51,7 +51,8 @@ export function parseAfter(text) {
 
 const rowsOf = projectId => db.prepare('SELECT * FROM schedule_activities WHERE project_id = ? ORDER BY COALESCE(sort, sr), sr, id').all(Number(projectId));
 const hasBaseline = projectId => !!db.prepare("SELECT 1 FROM schedule_baselines WHERE project_id = ? AND status = 'Approved'").get(Number(projectId));
-const weight = r => Math.max(Number(r.duration) || 0, r.kind === 'Milestone' ? 0 : 1);
+// Weighted progress: the weight % typed on the activity, else its duration.
+const weight = r => (Number(r.weight) > 0 ? Number(r.weight) : Math.max(Number(r.duration) || 0, r.kind === 'Milestone' ? 0 : 1));
 
 // Work out every date, float and the critical path; returns rows (with phase roll-ups) and the problems found.
 export function compute(projectId, { save = true } = {}) {
@@ -195,7 +196,7 @@ export function plannerData(projectId, user) {
   return out;
 }
 
-const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'crew', 'crew_note', 'works', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
+const EDITABLE = ['sr', 'kind', 'name', 'party', 'dept', 'responsible', 'crew', 'crew_note', 'zone', 'weight', 'evidence', 'works', 'duration', 'after', 'fixed_start', 'actual_start', 'actual_finish', 'qty', 'uom', 'qty_done', 'progress', 'status', 'delay_reason', 'remark', 'sort'];
 
 // Save the planner grid: changed / new rows and deleted ids; the whole schedule is then worked out again.
 export function saveSchedule(projectId, body, user) {

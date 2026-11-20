@@ -1,7 +1,7 @@
 // Project Planner: a project's schedule as a Gantt chart, worked out like MS Project (working days Mon–Sat,
 // "after" links, critical path, baseline vs forecast). Every change is saved at once and the dates are worked out
 // again by the server. WIESPL, client and vendor activities sit in the same chart, in their own colours.
-import { h, api, state, toast, fail, busy, modal, confirmBox, fmtDate, today, refOptions, badge } from '../ui.js';
+import { h, api, state, toast, fail, busy, modal, confirmBox, fmtDate, today, refOptions, badge, download } from '../ui.js';
 import { SCHEDULE_PARTIES, DELAY_REASONS, UOMS } from '../schema.js';
 import { itemPicker } from './form.js';
 
@@ -111,6 +111,7 @@ export async function plannerView(root, projectId) {
       d.canEdit && hasRows ? h('button.btn.small', { onclick: () => editRow(null, 'Activity') }, '+ Activity') : null,
       d.canEdit && hasRows ? h('button.btn.small', { onclick: busy(baseline) }, '📌 Freeze baseline') : null,
       hasRows ? h('a.btn.small', { href: `#/planner-print/${projectId}` }, '🖨 Print bar chart') : null,
+      hasRows ? h('button.btn.small', { title: 'Master Gantt with weekly bars, milestones & hold points, zone-wise release, baseline vs current and plan checks', onclick: () => download(`/api/projects/${projectId}/schedule/export`) }, '⬇ Excel (Gantt)') : null,
       h('a.btn.small', { href: `#/view/projects/${projectId}` }, '🏗️ Project'), h('a.btn.small', { href: '#/planner' }, '📊 All projects'));
   }
 
@@ -146,6 +147,8 @@ export async function plannerView(root, projectId) {
         L('Scope', sel('party', SCHEDULE_PARTIES)),
         L('Department', inp('dept', { list: 'pl-dept' }), null), h('datalist', { id: 'pl-dept' }, ['Sales', 'Engg', 'Purchase', 'Production', 'Store', 'Site', 'Accounts', 'Client', 'PMC'].map(x => h('option', { value: x }))),
         L('Responsible', inp('responsible', { list: 'pl-people' })),
+        L('Zone / room', inp('zone', { list: 'pl-zone', placeholder: 'OT1, OT1–OT5, All' })), h('datalist', { id: 'pl-zone' }, ['All', 'OT1', 'OT2', 'OT3', 'OT4', 'OT5', 'OT1–OT5', 'ICU', 'Terrace', 'Plant room'].map(x => h('option', { value: x }))),
+        L('Weight %', inp('weight', { type: 'number', min: 0, step: 'any' }), 'Blank = by duration'),
         L('Duration (working days)', inp('duration', { type: 'number', min: 0 }), 'Mon–Sat; 0 = milestone'),
         L('After (Sr. No.)', inp('after', { placeholder: '3, 5+2' }), '"5+2" = 2 days after 5 finishes; "4ss" = starts with 4'),
         L('Not before', inp('fixed_start', { type: 'date' })),
@@ -157,13 +160,14 @@ export async function plannerView(root, projectId) {
         L('Progress %', inp('progress', { type: 'number', min: 0, max: 100 }), 'When there is no quantity'),
         L('On hold', sel('status', ['', 'On hold'])),
         L('Delay reason', sel('delay_reason', DELAY_REASONS)),
+        h('label', { style: { gridColumn: '1 / -1' } }, 'Acceptance / evidence (milestones, hold points)', inp('evidence', { placeholder: 'e.g. signed concealed-works checklist; MGPS pressure test sheet' })),
         h('label', { style: { gridColumn: '1 / -1' } }, 'Remark', (f.remark = h('textarea', { rows: 2 }, r.remark || ''))),
         r.id ? h('div.muted', { style: { gridColumn: '1 / -1' } }, [`Plan ${fmtDate(r.plan_start)} – ${fmtDate(r.plan_finish)}`, r.base_finish ? `baseline ${fmtDate(r.base_start)} – ${fmtDate(r.base_finish)}` : null,
           r.total_float != null ? `float ${days(r.total_float)}` : null, r.late_days ? `${days(r.late_days)} late` : null].filter(Boolean).join(' · ')) : null]);
     if (f.status) f.status.value = r.status === 'On hold' ? 'On hold' : '';
     const collect = () => {
       const v = {};
-      for (const [k, el] of Object.entries(f)) v[k] = ['sr', 'duration', 'qty', 'qty_done', 'progress'].includes(k) ? (el.value === '' ? null : Number(el.value)) : el.value;
+      for (const [k, el] of Object.entries(f)) v[k] = ['sr', 'duration', 'qty', 'qty_done', 'progress', 'weight'].includes(k) ? (el.value === '' ? null : Number(el.value)) : el.value;
       if ('status' in v) v.status = v.status || (r.status === 'On hold' ? 'Not started' : undefined);
       if (v.status === undefined) delete v.status;
       if (v.kind === 'Milestone') v.duration = 0;
