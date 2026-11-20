@@ -8,6 +8,7 @@ import { getRow, updateRow, HttpError } from './crud.js';
 import { hasFunction, canView } from '../public/js/schema.js';
 import { round2 } from '../public/js/calc.js';
 import { scarFromIqc } from './vendors.js';
+import { checksFor, checkAnswers } from './iqc.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const now = () => new Date().toLocaleString('sv-SE').slice(0, 19);
@@ -165,7 +166,9 @@ export function inspect(body, user) {
       const rejected = status === 'Rejected' ? Number(m.qty) : status === 'Partly accepted' ? Number(body.rejected?.[id] ?? body.rejected_qty) : 0;
       if (status === 'Partly accepted' && !(rejected > 0 && rejected < Number(m.qty))) throw new HttpError(400, `${m.item_id_label}: enter the rejected quantity (more than 0, less than ${m.qty})`);
       if (!String(body.remarks || '').trim() && ['Rejected', 'Partly accepted', 'Hold'].includes(status)) throw new HttpError(400, 'Write why (the defect / reason)');
-      const after = updateRow('stock_moves', id, { qc_status: status, qc_rejected: rejected || null, qc_by: user.name, qc_at: now(), qc_remarks: String(body.remarks || '').trim() || null }, user, { system: true });
+      const it = db.prepare('SELECT category, iqc_norms FROM items WHERE id = ?').get(m.item_id) || {};
+      const answers = checkAnswers(status, checksFor(it.iqc_norms, it.category), body.checks?.[id] ?? body.checks?.all ?? null);
+      const after = updateRow('stock_moves', id, { qc_status: status, qc_rejected: rejected || null, qc_by: user.name, qc_at: now(), qc_remarks: String(body.remarks || '').trim() || null, qc_checks: answers ? JSON.stringify(answers) : null }, user, { system: true });
       scarFromIqc(after, status, String(body.remarks || '').trim(), user);
     }
     audit(user.name, 'stock_moves', ids[0], `IQC ${status}`, `${ids.length} GRN line(s)`);

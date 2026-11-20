@@ -14,6 +14,28 @@ const ASSIGNEE_KEYS = ['status', 'progress_note', 'checklist'];
 export const mayView = (task, user) => canAssign(user) || same(task.assigned_to, user.name) || same(task.assigned_by, user.name);
 export const visibleTasks = (rows, user) => (canAssign(user) ? rows : rows.filter(t => mayView(t, user)));
 
+// SMART (owner, 20 Nov 2026): a task given or added on the screen must be Specific, Measurable, Achievable, Relevant
+// and Time-bound. Tasks made by the CRM itself (order journey, CAPA, repeats) are not checked here.
+const VAGUE = /^(work|task|check|follow ?up|do it|misc|urgent|pending|see|look|call)$/i;
+const workDaysBetween = (a, b) => { let n = 0; for (let d = new Date(`${a}T00:00:00Z`); d <= new Date(`${b}T00:00:00Z`); d.setUTCDate(d.getUTCDate() + 1)) if (d.getUTCDay() !== 0) n++; return n; };
+export function smartCheck(row, existing = null) {
+  const v = k => (row[k] !== undefined ? row[k] : existing?.[k]);
+  const missing = [];
+  const title = String(v('title') || '').trim();
+  if (title.split(/\s+/).filter(w => w.length > 1).length < 3 || VAGUE.test(title)) missing.push('S – Specific: write what to do and for what in at least 3 words (e.g. "Submit AHU GA drawing for Lokmanya OT1")');
+  if (String(v('outcome') || '').trim().length < 8) missing.push('M – Measurable: fill "Done when" with the result that shows it is done');
+  const start = v('start_date') || new Date().toLocaleString('sv-SE').slice(0, 10), due = v('due_date');
+  const hours = Number(v('estimate_hours'));
+  if (!(hours > 0)) missing.push('A – Achievable: give the effort in hours');
+  else if (due && due >= start && hours > workDaysBetween(start, due) * 9) missing.push(`A – Achievable: ${hours} h does not fit between ${start} and ${due} (${workDaysBetween(start, due)} working day(s) of 9 h): move the due date or split the task`);
+  const linked = ['project_id', 'customer_id', 'ticket_id', 'location_id'].some(k => v(k));
+  if ((v('category') || 'General') === 'General' && !linked) missing.push('R – Relevant: choose the department / area, or link the project, customer or complaint');
+  if (!due) missing.push('T – Time-bound: give the due date');
+  else if (due < start) missing.push('T – Time-bound: the due date is before the start');
+  else if (!existing && due < new Date().toLocaleString('sv-SE').slice(0, 10)) missing.push('T – Time-bound: the due date is already past');
+  if (missing.length) throw new HttpError(400, `This task is not SMART yet:\n• ${missing.join('\n• ')}`);
+}
+
 // Before a change through the screen: who may change what.
 export function guardUpdate(task, body, user) {
   if (canAssign(user) || same(task.assigned_by, user.name)) return;

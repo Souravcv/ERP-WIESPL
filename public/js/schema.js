@@ -7,6 +7,8 @@ export const ROLES = ['admin', 'manager', 'md', 'chief_engineer', 'finance_head'
 // Least-access roles for the shop floor and site: own attendance and leave, own tasks, own performance.
 export const WORKER_ROLES = ['worker', 'helper', 'technician', 'wiring_engineer', 'panel_maker', 'incharge', 'driver', 'site_installation', 'electrical_wiring', 'software_engineer', 'network_engineer', 'electronics_engineer', 'production_welder', 'production_fitter', 'puff_machine_operator', 'bending_machine_operator', 'production_helper', 'production_driver', 'store_helper', 'mot_technician', 'mot_installer', 'hvac_technician', 'electrical_technician', 'senior_electrical_technician', 'bgm_electrical', 'security_incharge', 'house_keeping', 'factory_guruji', 'project_documentation'];
 // Departments a work order line belongs to (the work order is one master copy; each department sees its part).
+// The company's departments (employees, daily team work, tasks).
+export const COMPANY_DEPARTMENTS = ['Design', 'HVAC', 'Sales & Marketing', 'Electrical', 'R&D', 'Accounts', 'Purchase', 'Store', 'Project', 'Production', 'Site / Installation', 'Quality', 'Service', 'Admin / HR', 'Management'];
 export const WO_DEPARTMENTS = ['Design', 'Purchase', 'Production', 'Store', 'Logistics', 'Site / Installation', 'Electrical', 'Service'];
 // The department each built-in profile works for (its default view of a work order).
 export const ROLE_DEPARTMENT = { technical: 'Design', purchase: 'Purchase', purchase_head: 'Purchase', production: 'Production', store: 'Store', planning: 'Logistics', engineer: 'Site / Installation', service: 'Service', design_engineer: 'Design', production_manager: 'Production' };
@@ -1348,14 +1350,16 @@ export const ENTITIES = {
     statusField: 'status',
     fields: [
       { key: 'task_no', label: 'Task No', type: 'text', readonly: true, hint: 'Auto: TSK-001/2026-27' },
-      { key: 'title', label: 'Task', type: 'text', required: true, span: 2 },
+      { key: 'title', label: 'Task (Specific)', type: 'text', required: true, span: 2, hint: 'S – Specific: what to do and for what, e.g. "Submit AHU GA drawing for Lokmanya OT1"' },
+      { key: 'outcome', label: 'Done when (Measurable)', type: 'text', span: 2, hint: 'M – Measurable: the result that shows it is done, e.g. "drawing sent to the client by mail, 1 PDF"' },
       { key: 'description', label: 'Details', type: 'textarea', span: 2 },
       { key: 'assigned_to', label: 'Assigned To', type: 'person', pick: true, pickRight: 'task_assign', default: 'me', required: true, hint: 'Yourself, or anyone if you may assign tasks' },
+      { key: 'estimate_hours', label: 'Effort (hours, Achievable)', type: 'number', hint: 'A – Achievable: hours of work it needs; must fit between start and due date' },
       { key: 'assigned_by', label: 'Assigned By', type: 'text', readonly: true },
       { key: 'priority', label: 'Priority', type: 'select', options: ['Normal', 'High', 'Urgent', 'Low'], default: 'Normal' },
-      { key: 'category', label: 'Category', type: 'select', options: ['General', 'Site work', 'Service', 'Purchase', 'Store', 'Production', 'Accounts', 'Sales follow-up', 'Design / R&D', 'Office'], default: 'General' },
+      { key: 'category', label: 'Department / area (Relevant)', type: 'select', options: ['General', ...COMPANY_DEPARTMENTS, 'Site work', 'Sales follow-up', 'Design / R&D', 'Office'], default: 'General', hint: 'R – Relevant: the department it is for, or link a project / customer / complaint below' },
       { key: 'start_date', label: 'Start', type: 'date', default: 'today' },
-      { key: 'due_date', label: 'Due Date', type: 'date', default: 'today', required: true },
+      { key: 'due_date', label: 'Due Date (Time-bound)', type: 'date', default: 'today', required: true, hint: 'T – Time-bound: the date it must be done by' },
       { key: 'due_time', label: 'Due Time (HH:MM)', type: 'text' },
       { key: 'repeat', label: 'Repeat', type: 'select', options: ['No repeat', 'Daily', 'Weekly', 'Monthly'], default: 'No repeat', hint: 'The next task is made when this one is marked Done' },
       { key: 'repeat_until', label: 'Repeat Until', type: 'date' },
@@ -1388,7 +1392,7 @@ export const ENTITIES = {
       { key: 'name', label: 'Name', type: 'text', required: true },
       { key: 'login', label: 'CRM Login (username)', type: 'text', hint: 'Select the existing CRM user, or leave blank and choose a CRM role to make a new login. Phone attendance is booked to this employee' },
       { key: 'login_role', label: 'CRM Role (makes the login)', type: 'select', options: ['', ...Object.keys(ROLE_INFO).filter(r => !['admin', 'manager'].includes(r))], optionLabels: Object.fromEntries(Object.entries(ROLE_INFO).map(([k, v]) => [k, v.label])), hint: 'Choose a role: Save creates the login and shows a temporary password once. Administrator and GM logins: Admin → Users' },
-      { key: 'department', label: 'Department', type: 'select', options: ['Service', 'Site / Installation', 'Production', 'Panel Shop', 'Electrical / Wiring', 'Store', 'Purchase', 'Sales', 'Accounts', 'Design / Technical', 'R&D', 'Admin / HR', 'Management'], default: 'Service' },
+      { key: 'department', label: 'Department', type: 'select', options: ['', ...COMPANY_DEPARTMENTS] },
       { key: 'designation', label: 'Designation', type: 'text', suggest: ['Worker', 'Helper', 'Technician', 'Wiring Engineer', 'Panel Maker', 'Work In-charge', 'Supervisor'] },
       { key: 'mobile', label: 'Mobile', type: 'tel' },
       { key: 'email', label: 'Email', type: 'email' },
@@ -2190,6 +2194,7 @@ export const ENTITIES = {
       { key: 'stock', label: 'Current Stock', type: 'number', computed: STOCK_SQL },
       { key: 'stock_value', label: 'Stock Value (₹)', type: 'money', computed: `ROUND(${STOCK_SQL} * COALESCE({t}.rate, 0), 2)` },
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+      { key: 'iqc_norms', label: 'IQC checks for this item (one per line)', type: 'textarea', span: 2, hint: 'What incoming inspection checks, with the limits as written on the PO / TDS / drawing. Blank = the checks of its category (Settings → Incoming inspection)' },
     ],
   },
   // Anyone who needs material asks the store. The store checks the stock and splits each request: what is in stock goes
@@ -2693,6 +2698,7 @@ export const ENTITIES = {
       { key: 'qc_by', label: 'Inspected By', type: 'text', readonly: true, showIf: { type: ['INWARD'] } },
       { key: 'qc_at', label: 'Inspected At', type: 'text', readonly: true, showIf: { type: ['INWARD'] } },
       { key: 'qc_remarks', label: 'IQC Remarks', type: 'text', readonly: true, showIf: { type: ['INWARD'] } },
+      { key: 'qc_checks', label: 'IQC Checklist', type: 'json', hidden: true },
       { key: 'hsn', label: 'HSN Code', type: 'text', showIf: { type: ['INWARD'] } },
       { key: 'gst_rate', label: 'GST %', type: 'number', showIf: { type: ['INWARD'] } },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', showIf: { type: ['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP', 'JOB_OUT'] } },

@@ -15,6 +15,18 @@ const F = {
     works: ['Wall panel erection', 'Ceiling panel erection', 'Plenum / riser', 'Ducting & insulation', 'AHU installation', 'ODU & copper piping', 'Electrical cabling', 'Door installation',
       'Self-levelling', 'Vinyl flooring', 'Pendant installation', 'Testing & air balancing', 'Snag rectification', 'Unloading / shifting'],
   },
+  design: {
+    title: 'Design', link: 'project', linkLabel: 'Project', target: 'Planned', done: 'Done', rejected: 'Revisions', uom: 'Drawings',
+    works: ['Site measurement', 'GA / layout drawing', 'Shop / fabrication drawing', 'BOQ / bill of material', 'Drawing revision', 'Client approval follow-up', 'As-built drawing'],
+  },
+  hvac: {
+    title: 'HVAC', link: 'project', linkLabel: 'Project', target: 'Planned', done: 'Done', rejected: 'Rework', uom: 'Tasks',
+    works: ['Heat load calculation', 'AHU / ODU selection', 'Duct design & drawing', 'HVAC technical data sheet', 'Site supervision', 'Testing & air balancing', 'Validation support'],
+  },
+  project: {
+    title: 'Project', link: 'project', linkLabel: 'Project', target: 'Planned', done: 'Done', rejected: null, uom: 'Tasks',
+    works: ['Site visit / review', 'Client / PMC meeting', 'Schedule update', 'Material follow-up', 'Site team planning', 'RA bill / measurement', 'Handover documents'],
+  },
   quality: {
     title: 'Quality', link: 'project', linkLabel: 'Project', target: 'Planned', done: 'Inspected', rejected: 'Rejected / NCR', uom: 'Inspections',
     works: ['IQC (incoming)', 'In-process inspection', 'Final inspection', 'Site QC', 'NCR / CAPA follow-up', 'Calibration'],
@@ -41,7 +53,7 @@ const F = {
   },
   general: { title: 'General', link: null, target: 'Target', done: 'Done', rejected: null, uom: 'Nos', works: [] },
 };
-const MATCH = [[/prod/i, 'production'], [/electr|wiring/i, 'electrical'], [/site|install/i, 'site'], [/qualit|\bqc\b/i, 'quality'], [/r\s*&\s*d|research/i, 'rnd'],
+const MATCH = [[/prod/i, 'production'], [/design/i, 'design'], [/hvac/i, 'hvac'], [/^project/i, 'project'], [/electr|wiring/i, 'electrical'], [/site|install/i, 'site'], [/qualit|\bqc\b/i, 'quality'], [/r\s*&\s*d|research/i, 'rnd'],
   [/store/i, 'store'], [/purchas/i, 'purchase'], [/sales|marketing/i, 'sales'], [/account|finance/i, 'accounts']];
 export function workFormat(department) {
   const hit = MATCH.find(([re]) => re.test(String(department || '')));

@@ -1245,6 +1245,7 @@ api.post('/:entity', wrap(req => {
   if (req.params.entity === 'boms' && ['Design Review', 'Final'].includes(req.body?.status)) throw new HttpError(400, 'Save the BOQ as Draft; Design Review and Final are set with the buttons on the BOQ');
   if (req.params.entity === 'enquiries') enq.checkMandatory(req.body || {});
   if (req.params.entity === 'employees') hrf.checkLogin(req.body?.login);
+  if (req.params.entity === 'work_tasks') wt.smartCheck(req.body || {}); // tasks given / added on the screen follow SMART
   const row = insertRow(req.params.entity, req.body || {}, req.user);
   if (req.params.entity === 'employees') return hrf.ensureLogin(row, req.user);
   notify.notifyNew(req.params.entity, row, req.user);
@@ -1255,7 +1256,12 @@ api.put('/:entity/:id', wrap(req => {
   const { entity, id } = req.params;
   entityOr404(entity);
   if (!canWrite(entity, req.user.role)) throw new HttpError(403, 'You do not have permission to edit this');
-  if (entity === 'work_tasks') wt.guardUpdate(getRow('work_tasks', id), req.body, req.user);
+  if (entity === 'work_tasks') {
+    const cur = getRow('work_tasks', id);
+    wt.guardUpdate(cur, req.body, req.user);
+    // a SMART task stays SMART when its terms are edited (older tasks and status-only updates are not checked)
+    if (cur.outcome && ['title', 'outcome', 'due_date', 'start_date', 'estimate_hours', 'category'].some(k => k in (req.body || {}))) wt.smartCheck(req.body, cur);
+  }
   // the whole form is checked; small updates (customer link, profile questionnaire) are not
   if (entity === 'enquiries' && req.body && 'client_name' in req.body) enq.checkMandatory(req.body, getRow('enquiries', id));
   if (LOCKED[entity]) {
@@ -1353,6 +1359,8 @@ setInterval(() => {
 news.migrateNews();
 wf.migratePoSteps();
 iqc.seedRouting();
+iqc.seedChecks();
+perf.migrateDepartments();
 sf.migrateProductionLines();
 loginlog.migrateLoginLog();
 // "Please clock in / clock out" pop-ups at each person's shift times

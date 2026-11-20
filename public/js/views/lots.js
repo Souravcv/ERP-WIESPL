@@ -50,11 +50,21 @@ export async function lotsView(root) {
       const rej = {};
       const partly = status === 'Partly accepted' ? h('table.data', h('tbody', rows.filter(r => picked.has(r.id)).map(r => h('tr', h('td', `${r.doc_no} · ${r.item}`), h('td', `received ${r.qty} ${r.uom || r.item_uom || ''}`),
         h('td', h('input', { type: 'number', step: 'any', min: 0, placeholder: 'rejected qty', style: { width: '110px' }, oninput: e => { rej[r.id] = Number(e.target.value); } })))))) : null;
-      const ok = await modal(`IQC: ${status} (${picked.size} line${picked.size === 1 ? '' : 's'})`, h('div.grid', partly, h('label', 'Remarks', remarks),
+      // the IQC norms of each line: every check Pass / Fail / NA (Accepted: no Fail; Rejected / Partly accepted: a Fail)
+      const answers = {};
+      const lines = rows.filter(r => picked.has(r.id));
+      const sel = (r, c) => { const s2 = h('select', { style: { width: '90px' }, onchange: e => { (answers[r.id] ||= {})[c] = e.target.value; } }, ['', 'Pass', 'Fail', 'NA'].map(o => h('option', { value: o }, o || '—'))); return s2; };
+      const sels = [];
+      const checklist = h('div', { style: { maxHeight: '340px', overflow: 'auto', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 8px' } },
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' } }, h('b', 'IQC checks'),
+          h('button.btn.small', { type: 'button', onclick: () => { for (const [r, c, el] of sels) if (!el.value) { el.value = 'Pass'; (answers[r.id] ||= {})[c] = 'Pass'; } } }, '✔ Pass all not answered')),
+        lines.map(r => h('div', { style: { margin: '6px 0' } }, h('div', h('b', `${r.doc_no} · ${r.code} ${r.item}`), h('span.muted', ` · ${r.qty} ${r.uom || r.item_uom || ''}`)),
+          h('table.data', h('tbody', (r.checks || []).map(c => { const el = sel(r, c); sels.push([r, c, el]); return h('tr', h('td', c), h('td', { style: { width: '100px' } }, el)); }))))));
+      const ok = await modal(`IQC: ${status} (${picked.size} line${picked.size === 1 ? '' : 's'})`, h('div.grid', status === 'Hold' ? null : checklist, partly, h('label', 'Remarks', remarks),
         h('p.muted', status === 'Rejected' || status === 'Partly accepted' ? 'Rejected material is not issued and is not paid for (the 3-way check counts only the accepted quantity). Raise a debit note / return it to the vendor.' : status === 'Hold' ? 'On hold: the material stays in the store and is not issued until it is inspected.' : 'Accepted material can be issued.')),
         [{ label: 'Cancel', value: false }, { label: status, cls: status === 'Accepted' ? 'good' : 'danger solid', value: true }]);
       if (!ok) return;
-      await api('/iqc', { method: 'POST', body: { ids: [...picked], status, remarks: remarks.value, rejected: rej } });
+      await api('/iqc', { method: 'POST', body: { ids: [...picked], status, remarks: remarks.value, rejected: rej, checks: answers } });
       toast(`IQC recorded: ${status}. Print the IQC report from the GRN row.`); load();
     });
     // one heading row per GRN (tick all its lines, print its report), then its lines
@@ -69,13 +79,13 @@ export async function lotsView(root) {
       for (const r of g.rows) {
         const cb = mayQc ? h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: e => { e.target.checked ? picked.add(r.id) : picked.delete(r.id); } }) : null;
         if (cb) boxes.set(r.id, cb);
-        tbody.append(h('tr', h('td', cb || ''), h('td', { style: { color: r.age > 2 ? 'var(--bad)' : '' } }, `${r.age} d`), h('td.clip', `${r.code} · ${r.item}`), h('td', r.category || ''),
+        tbody.append(h('tr', h('td', cb || ''), h('td', { style: { color: r.age > 2 ? 'var(--bad)' : '' } }, `${r.age} d`), h('td.clip', { title: `IQC checks:\n• ${(r.checks || []).join('\n• ')}` }, `${r.code} · ${r.item}`, h('div.muted', { style: { fontSize: '11px' } }, `${(r.checks || []).length} checks`)), h('td', r.category || ''),
           h('td.num', `${r.qty} ${r.uom || r.item_uom || ''}`), h('td', r.batch_no || ''), h('td', r.rack || ''), h('td', r.inspector || h('span.muted', 'anyone')), h('td', r.invoice_no || ''),
           h('td', { style: { color: r.qc_status === 'Hold' ? 'var(--bad)' : 'var(--warn)' } }, r.qc_status), h('td')));
       }
     }
     out.replaceChildren(
-      h('p.muted', `${mine ? 'Lines for you to inspect (your material groups, and groups without an inspector).' : 'All lines waiting for inspection.'} Tick lines (or a whole GRN), then Accept, Partly accept, Reject or Hold. Who inspects which material: Settings → Incoming inspection (IQC).`),
+      h('p.muted', `${mine ? 'Lines for you to inspect.' : 'All lines waiting for inspection.'} Tick lines (or a whole GRN), then Accept, Partly accept, Reject or Hold, and answer each IQC check (Pass / Fail / NA) of the item. The checks come from the item (Item master → IQC checks) or its category; who inspects which material and the checks per category: Settings → Incoming inspection (IQC).`),
       rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data', h('thead', h('tr', h('th'), ...['Waiting', 'Item', 'Category', 'Qty', 'Batch / lot', 'Rack', 'Inspector', 'Invoice', 'Status', ''].map(x => h('th', x)))), tbody)))
         : h('div.card', h('div.empty', mine ? 'Nothing waiting for your inspection. 🎉' : 'No GRN line is waiting for inspection.')),
       rows.length && mayQc ? h('div.toolbar', h('button.btn.good', { onclick: decide('Accepted') }, '✔ Accept'), h('button.btn', { onclick: decide('Partly accepted') }, '◐ Partly accepted'),

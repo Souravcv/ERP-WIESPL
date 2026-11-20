@@ -506,7 +506,11 @@ function iqcDoc(r, s) {
         h('td', { style: cell }, l.batch_no || ''), h('td', { style: { ...cell, textAlign: 'right' } }, `${l.qty} ${l.uom || l.item_uom || ''}`),
         h('td', { style: { ...cell, textAlign: 'right' } }, l.accepted ?? ''), h('td', { style: { ...cell, textAlign: 'right' } }, l.qc_status === 'Rejected' ? l.qty : l.qc_rejected || ''),
         h('td', { style: { ...cell, fontWeight: 700, color: ['Rejected', 'Hold'].includes(l.qc_status) ? '#b00' : l.qc_status === 'Accepted' ? '#2e7d32' : '#555' } }, st(l)),
-        h('td', { style: cell }, l.qc_remarks || ''), h('td', { style: cell }, [l.qc_by || (l.inspector ? `(${l.inspector})` : ''), l.qc_at ? fmtDate(String(l.qc_at).slice(0, 10)) : ''].filter(Boolean).join(' · '))))),
+        h('td', { style: cell }, l.qc_remarks || ''), h('td', { style: cell }, [l.qc_by || (l.inspector ? `(${l.inspector})` : ''), l.qc_at ? fmtDate(String(l.qc_at).slice(0, 10)) : ''].filter(Boolean).join(' · ')))).flatMap((row, i) => {
+        const l = r.lines[i];
+        const list = l.qc_checks?.length ? l.qc_checks.map(c => `${c.result === 'Pass' ? '✔' : c.result === 'Fail' ? '✗' : '–'} ${c.check}`) : (l.norms || []).map(c => `☐ ${c}`);
+        return [row, list.length ? h('tr', h('td', { style: cell }), h('td', { style: { ...cell, fontSize: '10.5px', color: '#444' }, colSpan: 9 }, h('b', l.qc_checks?.length ? 'Checks: ' : 'Checks to do: '), list.join('   '))) : null];
+      })),
       h('tfoot', h('tr', h('td', { style: cell, colSpan: 4 }, h('b', 'Total')), h('td', { style: { ...cell, textAlign: 'right' } }, h('b', tot('qty'))), h('td', { style: { ...cell, textAlign: 'right' } }, h('b', tot('accepted'))),
         h('td', { style: { ...cell, textAlign: 'right' } }, h('b', Math.round(r.lines.reduce((a, l) => a + (l.qc_status === 'Rejected' ? Number(l.qty) : Number(l.qc_rejected) || 0), 0) * 1000) / 1000)), h('td', { style: cell, colSpan: 3 })))),
     h('p', { style: { fontSize: '10.5px', marginTop: '6px' } }, 'Rejected material is kept apart, is not issued and is not paid for; Purchase raises the debit note / return to the vendor (SCAR for repeated rejections).'),

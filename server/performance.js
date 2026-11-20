@@ -16,6 +16,21 @@ const num = v => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : 
 const addDays = (d, n) => { const x = new Date(`${d}T00:00:00`); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
 export const SCORE_PARTS = { output: 50, attendance: 30, quality: 20 };
 
+// The company's departments (20 Nov 2026): older names on employees and work rows take the new ones, once.
+export function migrateDepartments() {
+  if (db.prepare("SELECT 1 FROM settings WHERE key = 'departments_v1'").get()) return 0;
+  const MAP = { 'Electrical / Wiring': 'Electrical', Sales: 'Sales & Marketing', 'Design / Technical': 'Design', 'Panel Shop': 'Production' };
+  let n = 0;
+  tx(() => {
+    for (const [a, b] of Object.entries(MAP)) {
+      n += db.prepare('UPDATE employees SET department = ? WHERE department = ?').run(b, a).changes;
+      db.prepare('UPDATE work_logs SET department = ? WHERE department = ?').run(b, a);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('departments_v1', '\"1\"')").run();
+  });
+  return n;
+}
+
 const meOf = user => db.prepare("SELECT * FROM employees WHERE lower(trim(login)) = lower(?) AND COALESCE(status, 'Active') = 'Active'").get(user.username || '') || null;
 const notLinked = user => new HttpError(404, `Your login “${user.username}” is not linked to an employee. Ask HR to enter it as the CRM login on your employee record.`);
 

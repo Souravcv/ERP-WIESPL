@@ -27,6 +27,50 @@ export function seedRouting() {
   setSettings({ iqc_routing_v1: '1' });
 }
 
+// IQC norms (owner, 20 Nov 2026): what is checked on each material. The item's own checks (Item master → IQC checks),
+// else its category's (Settings → Incoming inspection: "Category | check; check; …"), else the general ones. The checks
+// name what to verify; the limits are the ones written on the PO / TDS / drawing (none are made up here).
+const GENERAL_CHECKS = ['Quantity as per challan / PO', 'Description, make and size as per PO', 'No physical damage, rust or dents'];
+const DEFAULT_CHECKS = [
+  'Electrical (BGM) | Make, model and rating as per PO / TDS; Quantity and packing as per challan; No damage, burn marks or loose parts; Test certificate / warranty card received; Function / continuity check where possible',
+  'R&D (Electronic) | Part number and make as per PO; Quantity as per challan; No damage to pins, PCB or housing; Datasheet / certificate received; Power-on / function check where possible',
+  'HVAC | Model, capacity and make as per PO / TDS; All accessories and fittings received; No dents, rust or damage to coil / casing; Test certificate / warranty received',
+  'Raw Materials | Grade / material as per PO; Thickness and size as per PO (measured); No rust, scratches or coating damage; Mill test certificate (MTC) received',
+  'Hardware | Size, type and finish as per PO; Quantity as per challan; No rust or damage',
+  'Bought-out | Make and model as per PO / TDS; Quantity as per challan; No physical damage; Warranty / certificate received',
+  'Finished Goods | Size and finish as per drawing; No dents, scratches or coating damage; Quantity as per challan',
+  'Packaging | Type and size as per PO; Quantity as per challan; No damage or moisture',
+  'Tools | Make and model as per PO; No damage; Works on trial',
+];
+export function seedChecks() {
+  const s = getSettings();
+  if (s.iqc_checks_v1) return;
+  if (!s.iqc_checks) setSettings({ iqc_checks: DEFAULT_CHECKS });
+  setSettings({ iqc_checks_v1: '1' });
+}
+function categoryChecks() {
+  const raw = getSettings().iqc_checks;
+  const lines = Array.isArray(raw) ? raw : String(raw || '').split('\n');
+  const map = new Map();
+  for (const l of lines) { const i = String(l).indexOf('|'); if (i > 0) map.set(norm(l.slice(0, i)), l.slice(i + 1).split(/[;\n]/).map(x => x.trim()).filter(Boolean)); }
+  return map;
+}
+export function checksFor(norms, category, cats = categoryChecks()) {
+  const own = String(norms || '').split('\n').map(x => x.trim()).filter(Boolean);
+  return own.length ? own : cats.get(norm(category)) || GENERAL_CHECKS;
+}
+// The answers given at inspection: every check Pass / Fail / NA; Accepted needs no Fail, Rejected / Partly accepted a Fail.
+export function checkAnswers(status, checks, answers) {
+  if (status === 'Hold') return answers && Object.keys(answers).length ? checks.map(c => ({ check: c, result: answers[c] || '' })) : null;
+  const out = checks.map(c => ({ check: c, result: (answers || {})[c] || '' }));
+  const open = out.filter(x => !['Pass', 'Fail', 'NA'].includes(x.result));
+  if (open.length) throw new HttpError(400, `Answer every IQC check (Pass / Fail / NA): ${open.map(x => x.check).join('; ')}`);
+  const fails = out.filter(x => x.result === 'Fail').length;
+  if (status === 'Accepted' && fails) throw new HttpError(400, 'A check failed: choose Partly accepted, Rejected or Hold, not Accepted');
+  if (['Rejected', 'Partly accepted'].includes(status) && !fails) throw new HttpError(400, `Mark the check that failed before choosing ${status}`);
+  return out;
+}
+
 const mayIqc = user => hasFunction(user.role, 'iqc_inspect') || canView('stock_moves', user.role);
 export const mayInspect = user => hasFunction(user.role, 'iqc_inspect');
 
@@ -35,11 +79,12 @@ export const mayInspect = user => hasFunction(user.role, 'iqc_inspect');
 export function pending(user, { mine = false } = {}) {
   if (!mayIqc(user)) throw new HttpError(403, 'No access to incoming inspection');
   const map = routing();
-  const rows = db.prepare(`SELECT m.id, m.date, m.doc_no, m.po_no, m.qty, m.uom, m.batch_no, COALESCE(m.rack, i.location) rack, m.qc_status, i.code, i.name item, i.uom item_uom, i.category,
+  const cats = categoryChecks();
+  const rows = db.prepare(`SELECT m.id, m.date, m.doc_no, m.po_no, m.qty, m.uom, m.batch_no, COALESCE(m.rack, i.location) rack, m.qc_status, i.code, i.name item, i.uom item_uom, i.category, i.iqc_norms,
       COALESCE(v.name, m.supplier) vendor, m.invoice_no, CAST(julianday('now', 'localtime') - julianday(m.date) AS INTEGER) age
     FROM stock_moves m JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id
     WHERE m.type = 'INWARD' AND m.qc_status IN ('Pending', 'Hold') ORDER BY m.date, m.doc_no, m.id`).all()
-    .map(r => ({ ...r, inspector: map.get(norm(r.category)) || null }));
+    .map(r => ({ ...r, inspector: map.get(norm(r.category)) || null, checks: checksFor(r.iqc_norms, r.category, cats) }));
   // A named inspector sees their own groups only; other inspectors see the groups nobody is named for.
   const named = [...map.values()].some(p => norm(p) === norm(user.name));
   return mine ? rows.filter(r => (r.inspector ? norm(r.inspector) === norm(user.name) : !named && mayInspect(user))) : rows;
@@ -86,14 +131,14 @@ export function notifyGrn(docNo, date, user) {
 // The IQC report of one GRN: what was received, accepted and rejected, by whom, with the remarks.
 export function report(docNo, date, user) {
   if (!mayIqc(user)) throw new HttpError(403, 'No access to incoming inspection');
-  const lines = db.prepare(`SELECT m.id, m.date, m.doc_no, m.po_no, m.invoice_no, m.invoice_date, m.qty, m.uom, m.batch_no, m.qc_status, m.qc_rejected, m.qc_by, m.qc_at, m.qc_remarks,
+  const lines = db.prepare(`SELECT m.id, m.date, m.doc_no, m.po_no, m.invoice_no, m.invoice_date, m.qty, m.uom, m.batch_no, m.qc_status, m.qc_rejected, m.qc_by, m.qc_at, m.qc_remarks, m.qc_checks, i.iqc_norms,
       i.code, i.name item, i.uom item_uom, i.category, COALESCE(v.name, m.supplier) vendor, p.name project
     FROM stock_moves m JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id
     WHERE m.type = 'INWARD' AND m.doc_no = ?${date ? ' AND m.date = ?' : ''} ORDER BY m.id`).all(...(date ? [docNo, date] : [docNo]));
   if (!lines.length) throw new HttpError(404, `GRN ${docNo} not found`);
   const map = routing();
   return { doc_no: docNo, date: lines[0].date, vendor: lines[0].vendor, po_no: lines[0].po_no, invoice_no: lines[0].invoice_no, invoice_date: lines[0].invoice_date,
-    lines: lines.map(l => ({ ...l, accepted: l.qc_status === 'Rejected' ? 0 : ['Accepted', 'Partly accepted'].includes(l.qc_status) ? Math.round((Number(l.qty) - (Number(l.qc_rejected) || 0)) * 1000) / 1000 : null, inspector: map.get(norm(l.category)) || null })),
+    lines: lines.map(l => ({ ...l, qc_checks: (() => { try { return JSON.parse(l.qc_checks || 'null'); } catch { return null; } })(), norms: checksFor(l.iqc_norms, l.category), accepted: l.qc_status === 'Rejected' ? 0 : ['Accepted', 'Partly accepted'].includes(l.qc_status) ? Math.round((Number(l.qty) - (Number(l.qc_rejected) || 0)) * 1000) / 1000 : null, inspector: map.get(norm(l.category)) || null })),
     inspectors: [...new Set(lines.map(l => l.qc_by).filter(Boolean))], open: lines.filter(l => ['Pending', 'Hold'].includes(l.qc_status)).length };
 }
 
