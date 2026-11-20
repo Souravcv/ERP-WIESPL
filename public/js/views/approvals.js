@@ -2,7 +2,7 @@
 // type with a pending count. A row says what it is, the step and who it waits for, who asked, how many days it has
 // waited and the amount; a click opens the approval, "Open ›" the document itself.
 import { h, api, state, badge, money, fmtDate, setHashQuery } from '../ui.js';
-import { ENTITIES, canView, hasFunction, APPROVAL_FLOWS, FUNCTIONS } from '../schema.js';
+import { ENTITIES, canView, hasFunction, APPROVAL_FLOWS, FUNCTIONS, EXTRA_STAGE } from '../schema.js';
 import { canApprove } from './form.js';
 import { recordHref } from './list.js';
 
@@ -32,6 +32,7 @@ const stepOf = (t, stage) => (APPROVAL_FLOWS[t] || []).find(s => s.stage === sta
 
 // Who the approval waits for: the step's right (or the journey roles) and the people who hold it.
 function waitsFor(a) {
+  if (a.stage === EXTRA_STAGE) return { right: 'extra approval asked by the GM', who: a.also_by || '' };
   const step = stepOf(a.doc_type, a.stage);
   const roles = a.doc_type === 'Order Journey' ? String(a.approver_role || '').split(',').filter(Boolean) : null;
   const holds = p => p.role && p.role !== 'admin' && (roles ? roles.includes(p.role) : step && hasFunction(p.role, step.fn));

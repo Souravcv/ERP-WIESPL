@@ -1,6 +1,6 @@
 // Store module: multi-line stock entries, stock summary (Smart Store formulas), PO tracking, opening stock.
 import { db, tx, nextSeq, audit } from './db.js';
-import { insertRow, updateRow, getRow, listRows, HttpError } from './crud.js';
+import { insertRow, updateRow, getRow, listRows, deleteRow, HttpError } from './crud.js';
 import { poInwardDues } from './hooks.js';
 import { notify } from './notify.js';
 import { MOVE_TYPES, STOCK_SQL } from '../public/js/schema.js';
@@ -551,6 +551,32 @@ export function editGrn(body, user) {
     }
     audit(user.name, 'stock_moves', moves[0].id, `GRN ${moves[0].doc_no} edited`, newPo ? `against PO ${newPo.po_no}` : 'no PO');
     return stockDoc({ type: 'INWARD', doc: body.doc, date: head.date || body.date });
+  });
+}
+
+// Delete stock movements (one line, or a whole slip from Stock Movements). A GRN line against a PO is taken off that
+// PO line's received quantity, so the PO is pending again for it.
+export function deleteMoves(ids, user) {
+  const list = [...new Set((ids || []).map(Number).filter(Boolean))];
+  if (!list.length) throw new HttpError(400, 'Nothing to delete');
+  const moves = list.map(id => db.prepare('SELECT * FROM stock_moves WHERE id = ?').get(id)).filter(Boolean);
+  if (moves.length !== list.length) throw new HttpError(404, 'A line is no longer there; reload the page');
+  return tx(() => {
+    const pos = new Map();
+    for (const m of moves.filter(x => x.type === 'INWARD' && x.po_id)) {
+      const po = pos.get(m.po_id) || getRow('purchase_orders', m.po_id);
+      pos.set(po.id, po);
+      const i = Number.isInteger(m.po_line) && po.lines[m.po_line] ? m.po_line : lineOf(po, m.item_id, null, false);
+      if (i >= 0) po.lines[i].received = round2(Math.max(0, (Number(po.lines[i].received) || 0) - Number(m.qty)));
+    }
+    for (const m of moves) deleteRow('stock_moves', m.id, user);
+    for (const po of pos.values()) {
+      const patch = { lines: po.lines };
+      if (['Approved', 'Sent', 'Partially Received', 'Closed'].includes(po.status)) patch.status = fullyIn(po) ? 'Closed' : anyIn(po) ? 'Partially Received' : 'Approved';
+      updateRow('purchase_orders', po.id, patch, user, { system: true });
+    }
+    audit(user.name, 'stock_moves', moves[0].id, 'deleted', `${moves.length} line(s) of ${moves[0].type} ${moves[0].doc_no || ''}`);
+    return { deleted: moves.length };
   });
 }
 

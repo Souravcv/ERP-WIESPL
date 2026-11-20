@@ -171,6 +171,8 @@ export async function stockEntryView(root) {
   const splitOf = l => (!l.project_id && poLineOf(l)?.split?.length > 1 ? poLineOf(l).split : null);
   const lineProject = l => l.project_id || (headPicked ? header.project_id : poLineOf(l)?.project_id || header.project_id) || null;
   const projectName = id => projects.find(x => x.id === Number(id))?.label || 'stock';
+  // Every slip can carry several projects: a project per line (blank = the one at the top). Not for a work order / BOQ (its own project).
+  const perLine = () => !(boq || bom);
   function lineProjectCell(l, i) {
     const split = splitOf(l);
     return h('td', { style: { minWidth: '200px' } },
@@ -212,7 +214,7 @@ export async function stockEntryView(root) {
   function headerFields() {
     const v = (k, el) => { el.value = header[k] ?? ''; el.oninput = el.onchange = () => { header[k] = el.value; }; return el; };
     const sv = (k, list) => { const w = suggest(list); v(k, w.firstChild); return w; };
-    const pick = (k, opts, label) => field(label, itemPicker(opts, header[k] ? Number(header[k]) : null, { onPick: id => { header[k] = id; } }));
+    const pick = (k, opts, label, hint) => field(label, itemPicker(opts, header[k] ? Number(header[k]) : null, { onPick: id => { header[k] = id; if (k === 'project_id') { headPicked = true; render(); } } }), hint);
     const date = v('date', h('input', { type: 'date' }));
     if (!header.date) { header.date = type === 'OPENING' ? `20${fyOf(today()).slice(0, 2)}-04-01` : today(); date.value = header.date; }
     const F = [field('Date *', date), type === 'OUTWARD' ? field(tabOf() === 'DC' ? 'Challan No' : 'Issue No', v('doc_no', h('input', { placeholder: 'Type it, or leave blank for the next number' })))
@@ -228,7 +230,7 @@ export async function stockEntryView(root) {
     if (type === 'INWARD') {
       // Choosing a PO reloads the slip with that PO's pending lines.
       F.push(field('Against PO', itemPicker(openPos, po?.id ?? null, { onPick: id => { location.hash = id ? `#/stock-entry?type=INWARD&po=${id}` : '#/stock-entry?type=INWARD'; } }), 'approved POs with material pending'));
-      F.push(field('Project', itemPicker(projects, header.project_id ? Number(header.project_id) : null, { onPick: id => { header.project_id = id; headPicked = true; render(); } }), po ? 'For all lines. If the PO is for several projects, choose on each line below; blank = stock' : 'Which project this material is for'));
+      F.push(field('Project', itemPicker(projects, header.project_id ? Number(header.project_id) : null, { onPick: id => { header.project_id = id; headPicked = true; render(); } }), 'For all lines. Material for several projects: choose the project on each line below (+ Another project splits a line); blank = stock'));
       if (po?.project_note) F.push(h('div.span-2', { style: { whiteSpace: 'pre-wrap', padding: '8px 10px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: '6px' } }, h('b', 'Projects written on this PO: '), po.project_note));
       F.push(pick('vendor_id', vendors, 'Supplier'), field('Supplier name (if not in list)', v('supplier', h('input'))),
         field('Supplier Invoice No', v('invoice_no', h('input'))), field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))));
@@ -263,7 +265,7 @@ export async function stockEntryView(root) {
       if (makeChallan) F.push(field('Challan type', cv('challan_type', h('select', ['Non-Returnable', 'Returnable'].map(x => h('option', x))))));
     }
     if (type === 'OUTWARD' && (bom || boq)) F.push(field('Project', h('input', { value: projects.find(x => x.id === Number(header.project_id))?.label || 'none', disabled: true }), `from the ${bom ? 'BOQ' : 'work order'}`));
-    else if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP'].includes(type)) F.push(pick('project_id', projects, 'Project'));
+    else if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP', 'ADJUST', 'OPENING', 'JOB_IN'].includes(type)) F.push(pick('project_id', projects, 'Project', 'For all lines; for several projects choose the project on each line below'));
     if (tabOf() !== 'DC' && ['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store', 'Production'])), field('To *', sv('to_location', ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'])));
@@ -307,7 +309,7 @@ export async function stockEntryView(root) {
         stockCell, h('td', qty), priced ? h('td', rate) : null, priced ? value : null,
         type === 'INWARD' ? h('td', h('input', { value: l.batch_no || '', placeholder: 'batch / lot', style: { width: '100px' }, oninput: e => { l.batch_no = e.target.value; } })) : null,
         type === 'INWARD' ? h('td', h('input', { value: l.rack ?? it?.location ?? '', placeholder: 'rack / bin', style: { width: '90px' }, oninput: e => { l.rack = e.target.value; } })) : null,
-        po && type === 'INWARD' ? lineProjectCell(l, i) : null,
+        perLine() ? lineProjectCell(l, i) : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
     });
@@ -315,7 +317,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), type === 'INWARD' ? h('th', 'HSN Code') : null, h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, po && type === 'INWARD' ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), type === 'INWARD' ? h('th', 'HSN Code') : null, h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, perLine() ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
@@ -326,7 +328,7 @@ export async function stockEntryView(root) {
 
   // Outward / transfer: saved as a draft (no stock change); someone allowed to post checks and posts it.
   async function saveDraft() {
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null })) };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null, ...(perLine() ? { project_id: lineProject(l) } : {}) })) };
     if (type !== 'OUTWARD') delete payload.doc_no;
     if (makeChallan && !boq && !bom) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
@@ -345,7 +347,7 @@ export async function stockEntryView(root) {
     if (type === 'RETURN' && !header.reason) throw new Error('Choose the reason for the return');
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(po && type === 'INWARD' && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(perLine() && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (type === 'JOB_OUT' && !header.vendor_id && !String(header.to_location || '').trim()) throw new Error('Choose the job work vendor (or type the name)');

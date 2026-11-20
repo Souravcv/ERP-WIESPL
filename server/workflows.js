@@ -1,7 +1,7 @@
 import { db, tx, getSettings, audit } from './db.js';
 import { insertRow, updateRow, getRow, HttpError } from './crud.js';
 import { round2 } from '../public/js/calc.js';
-import { APPROVAL_FLOWS, FUNCTIONS, hasFunction } from '../public/js/schema.js';
+import { APPROVAL_FLOWS, FUNCTIONS, hasFunction, EXTRA_STAGE } from '../public/js/schema.js';
 import { notify, notifyApprovalRequest, notifyDecision, notifyNew } from './notify.js';
 import { JOURNEY_DOC, mayDecide } from '../public/js/journey.js';
 import { approvalDecided as journeyDecided } from './journey.js';
@@ -39,6 +39,7 @@ const STAGED = ['tds_sheets', 'purchase_orders', 'vendor_payments', 'expenses', 
 
 export function canApprove(docType, stage, user, ap = null) {
   if (docType === JOURNEY_DOC) return !!ap && mayDecide(user.role, ap.approver_role);
+  if (stage === EXTRA_STAGE) return user.role === 'admin' || (!!ap?.also_by && ap.also_by === user.name);
   const step = (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
   return !!step && (hasFunction(user.role, step.fn) || (!!ap?.also_by && ap.also_by === user.name));
 }
@@ -80,13 +81,36 @@ export function submitForApproval(docType, id, user) {
     db.prepare("UPDATE approvals SET status = 'Rejected', comments = COALESCE(comments, 'Superseded by resubmission') WHERE doc_type = ? AND doc_id = ? AND status = 'Pending'").run(docType, Number(id));
     const step = openStep(docType, id, row, 0, user);
     const patch = { status: docType === 'Requisition' ? 'Submitted' : 'Pending Approval' };
-    if (d.entity === 'purchase_orders') Object.assign(patch, { approval_stage: step.stage, purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null, approved_by: null });
+    if (d.entity === 'purchase_orders') Object.assign(patch, { approval_stage: step.stage, purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null, approved_by: null, extra_approval: null });
     if (d.noLines) Object.assign(patch, { approval_stage: step.stage, approved_by: null });
     return updateRow(d.entity, id, patch, user, { system: true });
   });
 }
 
-export function decide(approvalId, decision, comments, user) {
+// POs used to have a Technical step; the ones waiting there move on to Commercial (once, at start-up).
+export function migratePoSteps() {
+  const n = db.prepare("UPDATE approvals SET stage = 'Commercial' WHERE doc_type = 'Purchase Order' AND stage = 'Technical Approval' AND status = 'Pending'").run().changes;
+  db.prepare("UPDATE purchase_orders SET approval_stage = 'Commercial' WHERE approval_stage = 'Technical Approval'").run();
+  return n;
+}
+
+// The GM approves a PO and asks one more person (with remarks): the PO waits for that person, who gives the last approval.
+function askExtra(ap, extra, comments, user) {
+  const name = String(extra?.name || '').trim();
+  const remarks = String(extra?.remarks || comments || '').trim();
+  if (!name) throw new HttpError(400, 'Choose who else should approve');
+  if (!remarks) throw new HttpError(400, 'Write the remarks: what that person should check');
+  const who = db.prepare('SELECT name FROM users WHERE name = ? AND active = 1').get(name);
+  if (!who) throw new HttpError(400, `${name} has no active login`);
+  const po = getRow('purchase_orders', ap.doc_id);
+  const step = APPROVAL_FLOWS['Purchase Order'].find(s => s.stage === ap.stage);
+  const nx = insertRow('approvals', { doc_type: ap.doc_type, doc_id: ap.doc_id, doc_ref: ap.doc_ref, stage: EXTRA_STAGE, title: `${ap.title} · asked by ${user.name}: ${remarks}`,
+    amount: ap.amount, requested_by: ap.requested_by || user.name, requested_at: stamp(), status: 'Pending', also_by: name, comments: null }, user, { system: true });
+  notify({ userNames: [name], kind: 'approval', title: `Approval needed: PO ${po.po_no || ''}`, body: `${user.name} asks you to approve it too: ${remarks}`, link: `#/view/approvals/${nx.id}` }, user);
+  updateRow('purchase_orders', ap.doc_id, { [step.field]: `${user.name} (${stamp()})`, approval_stage: EXTRA_STAGE, extra_approval: `Asked ${name} by ${user.name}: ${remarks}` }, user, { system: true });
+}
+
+export function decide(approvalId, decision, comments, user, extra = null) {
   if (!['Approved', 'Rejected'].includes(decision)) throw new HttpError(400, 'Decision must be Approved or Rejected');
   const ap = getRow('approvals', approvalId);
   if (ap.status !== 'Pending') throw new HttpError(400, `Already ${ap.status}`);
@@ -106,17 +130,23 @@ export function decide(approvalId, decision, comments, user) {
     if (ap.doc_type === JOURNEY_DOC) { journeyDecided(ap, decision, comments, user); return getRow('approvals', approvalId); }
     if (!d) return getRow('approvals', approvalId);
     const flow = APPROVAL_FLOWS[ap.doc_type];
-    const idx = Math.max(0, flow.findIndex(s => s.stage === ap.stage));
+    const isExtra = ap.stage === EXTRA_STAGE;
+    const idx = isExtra ? flow.length - 1 : Math.max(0, flow.findIndex(s => s.stage === ap.stage));
     const step = flow[idx];
+    if (decision === 'Approved' && extra?.name && ap.doc_type === 'Purchase Order' && !isExtra && idx === flow.length - 1) {
+      askExtra(ap, extra, comments, user);
+      return getRow('approvals', approvalId);
+    }
     if (decision === 'Rejected') {
       updateRow(d.entity, ap.doc_id, { status: 'Rejected', ...(STAGED.includes(d.entity) ? { approval_stage: null } : {}) }, user, { system: true });
       notifyDecision({ ...ap, comments }, decision, true, user);
       return getRow('approvals', approvalId);
     }
     const patch = {};
-    if (d.entity === 'purchase_orders') patch[step.field] = `${user.name} (${stamp()})`;
+    if (d.entity === 'purchase_orders' && !isExtra) patch[step.field] = `${user.name} (${stamp()})`;
+    if (d.entity === 'purchase_orders' && isExtra) patch.extra_approval = `${getRow(d.entity, ap.doc_id).extra_approval || ''} · approved by ${user.name} (${stamp()})`;
     if (d.noLines) patch.approved_by = [getRow(d.entity, ap.doc_id).approved_by, `${user.name} (${ap.stage}, ${stamp()})`].filter(Boolean).join(' · ');
-    const moreSteps = idx + 1 < flow.length && (!d.noLines || !['Payment', 'Expense'].includes(ap.doc_type) || gmNeeded(ap.doc_type, getRow(d.entity, ap.doc_id)));
+    const moreSteps = !isExtra && idx + 1 < flow.length && (!d.noLines || !['Payment', 'Expense'].includes(ap.doc_type) || gmNeeded(ap.doc_type, getRow(d.entity, ap.doc_id)));
     if (moreSteps) {
       const row = getRow(d.entity, ap.doc_id);
       // The next step is still the original requester's request, so the final decision reaches them.
@@ -247,7 +277,7 @@ export function revisePO(id, user) {
   return tx(() => {
     db.prepare("UPDATE approvals SET status = 'Rejected', comments = COALESCE(comments, 'Superseded by revision') WHERE doc_type = 'Purchase Order' AND doc_id = ? AND status = 'Pending'").run(Number(id));
     const out = updateRow('purchase_orders', po.id, { status: 'Draft', revision: (Number(po.revision) || 0) + 1, approval_stage: null, approved_by: null,
-      purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null }, user, { system: true });
+      purchase_approved_by: null, tech_approved_by: null, comm_approved_by: null, extra_approval: null }, user, { system: true });
     audit(user.name, 'purchase_orders', po.id, `revised to Rev. ${out.revision}`, `was ${po.status}, total ${po.total}`);
     return out;
   });

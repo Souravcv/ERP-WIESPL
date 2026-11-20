@@ -58,7 +58,7 @@ async function generateBomDialog(boqId) {
   recount();
   const ok = await modal(`Generate BOQ from ${p.work_order.boq_no}`, h('div.grid',
     p.existing.length ? h('p', { style: { color: 'var(--warn)' } }, `This work order already has: ${p.existing.map(b => `${b.bom_no} (${b.status})`).join(', ')}. A new BOQ is created next to it.`) : null,
-    p.lists.length ? null : h('p', { style: { color: 'var(--warn)' } }, 'There are no Standard Material Lists yet (Sales & Projects → 🧩 Standard Material Lists). Every line is copied for design to detail.'),
+    p.lists.length ? null : h('p', { style: { color: 'var(--warn)' } }, 'There are no Standard Material Lists yet (Projects → 🧩 Standard Material Lists). Every line is copied for design to detail.'),
     h('div.form-grid', h('label', 'Client / site (BOQ title)', client), h('label', 'Material required by', reqBy)),
     h('div', count, h('span.muted', ' · ✔ product = the list linked to the quotation’s catalog product; ✔ words = found by the list’s match words. Change any line here (the choice is remembered on the work order).')),
     h('div.table-wrap', { style: { maxHeight: '50vh' } }, h('table.data', h('thead', h('tr', ['Section', 'Sr', 'Work-order line', 'Qty', 'Standard material list', ''].map(x => h('th', x)))),

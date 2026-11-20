@@ -334,12 +334,17 @@ function poDoc(po, v, s, internal = false) {
     (() => {
       const purchase = [...new Set([po.prepared_by || po.created_by, po.purchase_approved_by].filter(Boolean).map(plainName))];
       const cells = [[purchase.join(' / '), [po.prepared_by || po.created_by, po.purchase_approved_by].filter(Boolean).join(' · '), !!po.purchase_approved_by],
-        [plainName(po.tech_approved_by), po.tech_approved_by], [plainName(po.comm_approved_by), po.comm_approved_by], [plainName(po.approved_by), po.approved_by]];
+        [plainName(po.comm_approved_by), po.comm_approved_by], [plainName(po.approved_by), po.approved_by]];
+      // POs approved before Nov 2026 still show their Technical approval
+      const tech = !!po.tech_approved_by;
+      if (tech) cells.splice(1, 0, [plainName(po.tech_approved_by), po.tech_approved_by]);
+      const heads = ['Purchase (Prepared & Approved)', tech ? 'Technical Approval' : null, 'Commercial Approval', 'Approved By'].filter(Boolean);
+      const roles = ['Purchase Executive / Purchase Head', tech ? 'Technical Manager' : null, 'Account Manager', 'General Manager'].filter(Boolean);
       return h('table.po-sign', { style: { marginTop: '-1px', textAlign: 'center' } }, h('tbody',
-        h('tr', ['Purchase (Prepared & Approved)', 'Technical Approval', 'Commercial Approval', 'Approved By'].map(x => h('th', { style: { width: '25%' } }, x))),
+        h('tr', heads.map(x => h('th', { style: { width: `${100 / heads.length}%` } }, x))),
         h('tr', cells.map(([name, who, stamp]) => h('td', { style: { height: '40px', verticalAlign: 'bottom' } },
           h('div', { style: { display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: '4px' } }, stamp ? stampImg() : null, who ? sigImg(who) : null), name || ''))),
-        h('tr', ['Purchase Executive / Purchase Head', 'Technical Manager', 'Account Manager', 'General Manager'].map(x => h('td', x)))));
+        h('tr', roles.map(x => h('td', x)))));
     })(),
     h('div', { style: { fontSize: '10px', marginTop: '4px' } }, s.po_doc_no || 'WIESPL/PUR./02/R0'),
     internal ? h('div', { style: { color: '#1f4e9a', fontWeight: 700, marginTop: '6px' } }, 'INTERNAL COPY – shows projects / sites; send the vendor copy to the vendor') : null,

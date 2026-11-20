@@ -4,7 +4,7 @@ import { afterFollowup } from './pofollow.js';
 import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
-import { prefillProduction } from './storeflow.js';
+import { prefillProduction, productionHead } from './storeflow.js';
 import { parseLatLng, prepLeave, markLeave } from './hr.js';
 import { prepEmployee, prepOnboarding, afterOnboarding, prepReview, afterReview, prepSeparation } from './hrfile.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
@@ -473,6 +473,7 @@ export function beforeSave(name, row, existing, user) {
       break;
     case 'production_entries': {
       if (!existing && !row.entry_no) row.entry_no = docNo('production', date, (n, fy) => `PRD-${n}/20${fy}`);
+      if ('fg_lines' in row || (!existing && row.fg_item_id)) productionHead(row, existing);
       const fg = row.fg_item_id ?? existing?.fg_item_id;
       if (fg && !(row.uom ?? existing?.uom)) row.uom = db.prepare('SELECT uom FROM items WHERE id = ?').get(Number(fg))?.uom || null;
       if (!existing) prefillProduction(row);

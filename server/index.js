@@ -46,6 +46,7 @@ import * as enq from './enquiries.js';
 import * as perf from './performance.js';
 import * as journey from './journey.js';
 import * as materials from './materials.js';
+import * as projectStore from './projectstore.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
 import * as news from './news.js';
@@ -679,7 +680,11 @@ function postStockEntry(reqBody, user) {
   const body = { ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') };
   if (body.type === 'OUTWARD') stock.checkOutwardNo(body.doc_no); // another slip may have taken a typed number since the draft was saved
   if (['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(body.type)) {
-    reservedCheck(body, body.lines, { projectId: body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id), bomId: body.bom_id });
+    // a slip for several projects: each project's lines are checked against what is reserved for the others
+    const head = body.project_id || projectOf('boms', body.bom_id) || projectOf('boqs', body.boq_id);
+    const byProject = new Map();
+    for (const l of body.lines || []) { const k = (body.bom_id || body.boq_id ? null : l.project_id) || head || null; byProject.set(k, [...(byProject.get(k) || []), l]); }
+    for (const [projectId, ls] of byProject) reservedCheck(body, ls, { projectId, bomId: body.bom_id });
   }
   // Outward against a BOQ: the delivery challan is created automatically with the issue.
   const challanOk = () => { if (!canWrite('challans', req.user.role)) throw new HttpError(403, 'You do not have permission to create delivery challans'); };
@@ -733,6 +738,9 @@ api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.comp
 // the order journey: one per order, from the enquiry to the OT handover (server/journey.js)
 // Material tracker per project: BOQ shortage → requisition → PO → received, with needed-by and promised dates
 api.get('/materials/projects', wrap(req => materials.trackedProjects(req.user)));
+// Store per project: needed / ordered / received / sent / in store / pending, with its slips, POs, challans (server/projectstore.js)
+api.get('/project-store', wrap(req => projectStore.projectList(req.user)));
+api.get('/project-store/:id', wrap(req => projectStore.projectStore(Number(req.params.id), req.user)));
 api.get('/materials/:projectId', wrap(req => materials.projectMaterials(Number(req.params.projectId), req.user)));
 api.put('/materials/po/:id/project', wrap(req => materials.linkPo(Number(req.params.id), req.body, req.user)));
 api.put('/materials/po/:id/line/:line', wrap(req => materials.setLineDates(Number(req.params.id), req.params.line, req.body, req.user)));
@@ -816,6 +824,10 @@ api.post('/items/:id/merge', need('items'), wrap(req => {
 }));
 api.get('/stock/docs', wrap(req => { storeView(req); return stock.stockDocs(req.query); }));
 api.get('/stock/doc', wrap(req => { storeView(req); return stock.stockDoc(req.query); }));
+api.post('/stock/delete', wrap(req => {
+  if (!canDelete('stock_moves', req.user.role)) throw new HttpError(403, 'Only people with full access to Stock Movements can delete them');
+  return stock.deleteMoves(req.body?.ids, req.user);
+}));
 api.put('/stock/grn', need('stock_moves'), wrap(req => {
   if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Only the store (people allowed to post stock) can change a GRN');
   return stock.editGrn({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user);
@@ -985,7 +997,7 @@ api.post('/admin/restore', requireRole(), express.raw({ type: () => true, limit:
   audit(req.user.name, 'backup', null, 'restore scheduled');
   return { ok: true, message: 'Backup accepted. Restart the CRM to finish restoring: close the CRM window and run start-crm.bat again (on Render: Manual Deploy → Restart service). The current data is kept in the backups folder.' };
 }));
-api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user)));
+api.post('/approvals/:id/decide', wrap(req => wf.decide(req.params.id, req.body?.decision, req.body?.comments, req.user, req.body?.extra || null)));
 api.post('/sales_orders/:id/project', need('projects'), wrap(req => wf.projectFromSalesOrder(req.params.id, req.user)));
 api.post('/sales_orders/:id/submit', need('sales_orders'), wrap(req => wf.submitForApproval('Sales Order', req.params.id, req.user)));
 // An approved order changes only through Revise: back to Draft, and to the GM again.
@@ -1263,6 +1275,8 @@ api.delete('/:entity/:id', wrap(req => {
   const ent = entityOr404(entity);
   const row = db.prepare(`SELECT * FROM ${entity} WHERE id = ?`).get(Number(id));
   if (!row) throw new HttpError(404, 'Record not found');
+  // a GRN line also comes off its PO line's received quantity
+  if (entity === 'stock_moves') { if (!canDelete(entity, req.user.role)) throw new HttpError(403, 'Only people with full access to Stock Movements can delete them'); return stock.deleteMoves([row.id], req.user); }
   if (entity === 'bom_items') bomEditable(row.bom_id, req.user);
   if (PAY_DOC[entity] && !['Draft', 'Rejected'].includes(row.status)) throw new HttpError(409, `A ${row.status.toLowerCase()} ${ENTITIES[entity].singular.toLowerCase()} cannot be deleted${row.status === 'Paid' ? '; the GM can reverse it with a reason' : ''}`);
   if ((entity === 'attendance' && row.check_in) || entity === 'attendance_pings') throw new HttpError(409, 'Attendance with a clock-in is evidence: it cannot be deleted; HR reviews and corrects the day instead');
@@ -1315,6 +1329,8 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 news.migrateNews();
+wf.migratePoSteps();
+sf.migrateProductionLines();
 loginlog.migrateLoginLog();
 // "Please clock in / clock out" pop-ups at each person's shift times
 setInterval(() => { try { hr.shiftReminders(); } catch (e) { console.error('shift reminders', e.message); } }, 60 * 1000);

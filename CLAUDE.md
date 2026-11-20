@@ -77,6 +77,10 @@ memory do not move between computers).
   `server/aiwork.js` (instant answers written by the CRM: my day = My tasks, approvals, POs to chase, project material, late journey steps).
   Store prices only with `see_stock_value`. The panel sends the screen (`#/view/enquiries/2` → "summarise this enquiry"); ideas per screen in `ai-core.js`.
   Test: a node script calling `ai.chat()` with a fake res, `WIESPL_AI_SHARED=1` (uses the live engine), `MSYS_NO_PATHCONV=1` in Git Bash for `#/…` values.
+- Store (20 Nov 2026): one Stock Movements screen (by slip; open / edit / delete per line, Delete slip; a GRN line deleted comes off its PO, `stock.deleteMoves`);
+  a project on every stock-entry line; Project Store per project `server/projectstore.js` · `views/projectstore.js` (#/project-store/<id>);
+  production entries with several finished goods (`fg_lines`, item no. + project each); PO approval Purchase → Commercial → GM, the GM may add one
+  "Extra approval" (named person + remarks, `EXTRA_STAGE`). Menus: Sales and Projects apart; Delivery Challans in Store; Dispatch Plans in Purchase.
 - Roles: heads (md, chief_engineer, finance_head, design_head, qc_head, project_head, sales_head, marketing) in `public/js/schema.js`.
 
 ## Working rules

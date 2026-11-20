@@ -272,14 +272,15 @@ export const UNPAID_LEAVE = ['Leave without pay', 'Unpaid'];
 // Why someone stepped outside the site during the day (told by the employee with "Going out", or set by HR).
 export const OUT_REASONS = ['Material / purchase', 'Other site / client work', 'Lunch / food', 'Personal', 'Other'];
 export const EMPLOYMENT_TYPES = ['Probation', 'Confirmed', 'Fixed-term', 'Trainee', 'Contract'];
+// A step the GM adds to one PO for a named person (approvals.also_by), after her own approval.
+export const EXTRA_STAGE = 'Extra approval';
 export const APPROVAL_FLOWS = {
   Quotation: [{ stage: 'Approval', fn: 'approve_quotation' }],
   'Sales Order': [{ stage: 'GM', fn: 'approve_sales_order' }],
   Requisition: [{ stage: 'Purchase Head', fn: 'approve_requisition' }],
-  // As on the printed PO: Purchase → Technical → Commercial → GM.
+  // Three people approve a PO: Purchase → Commercial → GM. The GM may ask one more person (with remarks) before it is approved.
   'Purchase Order': [
     { stage: 'Purchase Approval', fn: 'po_check', field: 'purchase_approved_by' },
-    { stage: 'Technical Approval', fn: 'po_technical', field: 'tech_approved_by' },
     { stage: 'Commercial', fn: 'po_commercial', field: 'comm_approved_by' },
     { stage: 'Approved By (GM)', fn: 'po_final', field: 'approved_by' },
   ],
@@ -631,7 +632,7 @@ export const ENTITIES = {
     ],
   },
 
-  // ---------------------------------------------------------------- Sales & Projects (ERP)
+  // ---------------------------------------------------------------- Sales and Projects (ERP; two menus)
   sales_orders: {
     label: 'Sales Orders', singular: 'Sales Order', group: 'Approvals', icon: '🤝', write: ['admin', 'manager', 'sales', 'accounts'],
     display: "{t}.so_no",
@@ -670,7 +671,7 @@ export const ENTITIES = {
     ],
   },
   projects: {
-    label: 'Projects / Execution', singular: 'Project', group: 'Sales & Projects', icon: '🏗️', write: ENG,
+    label: 'Projects / Execution', singular: 'Project', group: 'Projects', icon: '🏗️', write: ENG,
     display: "COALESCE(NULLIF({t}.project_no, ''), {t}.code) || ' ' || {t}.name",
     search: ['code', 'project_no', 'name', 'site', 'site_address', 'engineer', 'notes'],
     list: ['project_no', 'name', 'customer_id', 'site', 'stage', 'material_cost', 'po_value', 'status'],
@@ -767,7 +768,7 @@ export const ENTITIES = {
   },
   // Client work order (the customer's Excel, e.g. Lokmanya "Electrical & HVAC - Work Order 1"); table name kept from earlier versions.
   boqs: {
-    label: 'Work Orders', singular: 'Work Order', group: 'Sales & Projects', icon: '📂', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'boq',
+    label: 'Work Orders', singular: 'Work Order', group: 'Projects', icon: '📂', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'boq',
     display: "{t}.boq_no || ' · ' || {t}.title",
     search: ['boq_no', 'title', 'wo_no', 'remarks'],
     list: ['boq_no', 'title', 'project_id', 'wo_no', 'lines', 'sent_lines', 'pending_lines', 'progress', 'status'],
@@ -827,7 +828,7 @@ export const ENTITIES = {
   },
   // Planning: what goes to a project site when (dispatch / logistics plan); each plan is a milestone on the project Gantt.
   dispatch_plans: {
-    label: 'Dispatch Plans', singular: 'Dispatch Plan', group: 'Sales & Projects', icon: '🚛', write: ['admin', 'manager', 'planning', 'store', 'technical'],
+    label: 'Dispatch Plans', singular: 'Dispatch Plan', group: 'Purchase', icon: '🚛', write: ['admin', 'manager', 'planning', 'store', 'technical'],
     display: "{t}.plan_no || ' · ' || COALESCE({t}.title, '')",
     search: ['plan_no', 'title', 'vehicle', 'transporter', 'remarks'],
     list: ['plan_no', 'planned_date', 'project_id', 'boq_id', 'title', 'ready_by', 'vehicle', 'status', 'late', 'challan_id'],
@@ -861,7 +862,7 @@ export const ENTITIES = {
   // Standard material list ("recipe") per product the design department keeps: the components for ONE unit of a
   // work-order item (one door, one Sq. Ft of wall panel …). "Generate BOQ" multiplies them by the work-order qty.
   material_lists: {
-    label: 'Standard Material Lists', singular: 'Material List', group: 'Sales & Projects', icon: '🧩', write: ENG.concat('purchase_head'),
+    label: 'Standard Material Lists', singular: 'Material List', group: 'Projects', icon: '🧩', write: ENG.concat('purchase_head'),
     display: "COALESCE({t}.code || ' · ', '') || {t}.name",
     search: ['code', 'name', 'department', 'boq_section', 'match_words', 'notes'],
     list: ['code', 'name', 'product_id', 'boq_section', 'department', 'per_uom', 'makes_item_id', 'match_words', 'components', 'active'],
@@ -892,7 +893,7 @@ export const ENTITIES = {
   },
   // BOQ / Bill of Material prepared by WIESPL engineers (format: SR.NO, COMPONENT NAME, SPECIFICATIONS, DIMENSIONS, QTY, UOM, MOC, DRAWING MODEL NO, Remark, MAKE).
   boms: {
-    label: 'BOQ / Bill of Material', singular: 'BOQ', group: 'Sales & Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'bom',
+    label: 'BOQ / Bill of Material', singular: 'BOQ', group: 'Projects', icon: '📑', write: ENG.concat('store', 'purchase', 'purchase_head'), editor: 'bom',
     display: "{t}.bom_no || ' · ' || COALESCE({t}.client, '')",
     search: ['bom_no', 'client', 'remarks', 'prepared_by'],
     list: ['bom_no', 'date', 'client', 'project_id', 'work_order_id', 'required_by', 'lines', 'procured_lines', 'sent_lines', 'progress', 'status'],
@@ -960,7 +961,7 @@ export const ENTITIES = {
     ],
   },
   challans: {
-    label: 'Delivery Challans', singular: 'Delivery Challan', group: 'Sales & Projects', icon: '🚚', write: ENG.concat('store', 'purchase', 'purchase_head'),
+    label: 'Delivery Challans', singular: 'Delivery Challan', group: 'Store', icon: '🚚', write: ENG.concat('store', 'purchase', 'purchase_head'),
     display: "{t}.challan_no",
     search: ['challan_no', 'issue_no', 'ship_to', 'vehicle_no', 'receiver_name', 'site_contact', 'section', 'received_by', 'remarks'],
     list: ['challan_no', 'date', 'bom_id', 'boq_id', 'project_id', 'section', 'receiver_name', 'vendor_id', 'vehicle_no', 'porter_amount', 'status', 'delivered_date', 'received_by'],
@@ -1002,7 +1003,7 @@ export const ENTITIES = {
   // Tax invoice: Draft (no number) → Issue (number in date order, locked) → receipts / credit notes. Corrections only by
   // credit note; cancellation (GM) only while nothing is received or credited. Proforma invoices ask for advances.
   invoices: {
-    label: 'Invoices', singular: 'Invoice', group: 'Sales & Projects', icon: '💳', write: ACC,
+    label: 'Invoices', singular: 'Invoice', group: 'Sales', icon: '💳', write: ACC,
     display: "COALESCE({t}.invoice_no, 'Draft invoice #' || {t}.id)",
     search: ['invoice_no', 'notes', 'place_of_supply', 'milestone'],
     list: ['invoice_no', 'type', 'bill_kind', 'date', 'customer_id', 'project_id', 'milestone', 'total', 'received', 'credited', 'balance', 'due_now', 'due_date', 'status'],
@@ -1048,7 +1049,7 @@ export const ENTITIES = {
   // Money received from a customer: against a tax invoice, or an advance on a sales order (adjusted against its invoices
   // later). Saved = locked; only the GM can reverse it, with a reason.
   payments: {
-    label: 'Customer Receipts', singular: 'Receipt', group: 'Sales & Projects', icon: '💰', write: ACC,
+    label: 'Customer Receipts', singular: 'Receipt', group: 'Sales', icon: '💰', write: ACC,
     display: "COALESCE({t}.receipt_no, '') || ' ₹' || {t}.amount",
     search: ['receipt_no', 'reference', 'remarks', 'mode'],
     list: ['date', 'receipt_no', 'customer_id', 'kind', 'invoice_id', 'sales_order_id', 'amount', 'tds_amount', 'mode', 'reference', 'status', 'bank_date', 'form16a'],
@@ -1078,7 +1079,7 @@ export const ENTITIES = {
   // Reduces what a customer owes on one invoice (rate difference, return, short supply…). The invoice itself is never
   // edited. Approved by the GM; the number is given on approval.
   credit_notes: {
-    label: 'Credit Notes', singular: 'Credit Note', group: 'Sales & Projects', icon: '↩️', write: ACC,
+    label: 'Credit Notes', singular: 'Credit Note', group: 'Sales', icon: '↩️', write: ACC,
     display: "COALESCE({t}.cn_no, 'Draft credit note #' || {t}.id)",
     search: ['cn_no', 'reason', 'description'],
     list: ['date', 'cn_no', 'customer_id', 'invoice_id', 'reason', 'taxable', 'tax', 'total', 'status'],
@@ -2023,8 +2024,9 @@ export const ENTITIES = {
       { key: 'project_note', label: 'Note', type: 'text', span: 2 },
       { key: 'prepared_by', label: 'Prepared By', type: 'person', default: 'me' },
       { key: 'purchase_approved_by', label: 'Purchase Approval', type: 'text', readonly: true },
-      { key: 'tech_approved_by', label: 'Technical Approval', type: 'text', readonly: true },
+      { key: 'tech_approved_by', label: 'Technical Approval (old POs)', type: 'text', readonly: true, hidden: true },
       { key: 'comm_approved_by', label: 'Commercial Approval', type: 'text', readonly: true },
+      { key: 'extra_approval', label: 'Extra Approval (asked by the GM)', type: 'text', readonly: true, span: 2 },
       // Received value: material inward (GRN) on this PO × rate, before GST. Paid: only payments actually made.
       { key: 'received_value', label: 'Received (₹, before GST)', type: 'money', computed: `ROUND(${RECEIVED_VALUE}, 2)` },
       { key: 'billed', label: 'Billed (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(b.amount),0) FROM vendor_bills b WHERE b.po_id = {t}.id)" },
@@ -2213,6 +2215,7 @@ export const ENTITIES = {
         { key: 'qty', label: 'Qty', type: 'number', width: 80 },
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'site', label: 'Site / Hospital', type: 'text', width: 150 },
+        { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', width: 180, blank: '— as at the top —' },
         { key: 'remark', label: 'Remark', type: 'text', width: 140 },
         { key: 'issued', label: 'Issued', type: 'number', width: 70 },
         { key: 'to_purchase', label: 'To Purchase', type: 'number', width: 80 },
@@ -2228,18 +2231,29 @@ export const ENTITIES = {
   production_entries: {
     label: 'Production (Finished Goods)', singular: 'Production Entry', group: 'Store', icon: '🏭', write: ['admin', 'manager', 'production', 'store'],
     display: "{t}.entry_no",
-    search: ['entry_no', 'for_site', 'made_by', 'remarks'],
-    list: ['entry_no', 'date', 'shift', 'fg_item_id', 'qty', 'uom', 'for_site', 'made_by', 'unit_cost', 'status'],
+    search: ['entry_no', 'for_site', 'made_by', 'remarks', 'fg_summary'],
+    list: ['entry_no', 'date', 'shift', 'fg_summary', 'qty', 'for_site', 'made_by', 'unit_cost', 'status'],
     statusField: 'status',
     fields: [
       { key: 'entry_no', label: 'Production No', type: 'text', readonly: true, hint: 'Auto: PRD-001/2026-27' },
       { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
       { key: 'shift', label: 'Shift', type: 'select', options: ['General', 'Day', 'Night'], default: 'General' },
-      { key: 'fg_item_id', label: 'Finished Good Made', type: 'ref', ref: 'items', required: true },
-      { key: 'qty', label: 'Quantity Made', type: 'number', required: true },
-      { key: 'uom', label: 'UOM', type: 'text', hint: 'From the item if blank' },
+      // Several finished goods (each with its item no. and project) can be made on one entry; the first one and the
+      // total pieces are kept in fg_item_id / qty for the lists and reports.
+      { key: 'fg_lines', label: 'Finished Goods Made (item no., qty, project)', type: 'lines', span: 2, itemRef: true, amounts: false, newLine: true,
+        hint: 'One line per finished good part; several parts and several projects can be made together', columns: [
+          { key: 'description', label: 'Finished good', type: 'text', width: 220 },
+          { key: 'qty', label: 'Qty Made', type: 'number', width: 90 },
+          { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+          { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', width: 200, blank: '— stock / none —' },
+          { key: 'remark', label: 'Remark', type: 'text', width: 140 },
+        ] },
+      { key: 'fg_summary', label: 'Finished Goods', type: 'text', readonly: true, span: 2 },
+      { key: 'fg_item_id', label: 'Finished Good (first line)', type: 'ref', ref: 'items', readonly: true, hidden: true },
+      { key: 'qty', label: 'Total Pieces Made', type: 'number', readonly: true },
+      { key: 'uom', label: 'UOM', type: 'text', hidden: true },
       { key: 'for_site', label: 'For Site / Hospital', type: 'text' },
-      { key: 'project_id', label: 'Project (CRM)', type: 'ref', ref: 'projects' },
+      { key: 'project_id', label: 'Project (CRM, for lines without one)', type: 'ref', ref: 'projects' },
       { key: 'bom_id', label: 'Against BOQ', type: 'ref', ref: 'boms' },
       { key: 'made_by', label: 'Made By / Supervisor', type: 'person', default: 'me' },
       { key: 'lines', label: 'Raw Material Used (from production stock)', type: 'lines', span: 2, itemRef: true, amounts: false,
@@ -2615,7 +2629,8 @@ export const ENTITIES = {
     ],
   },
   stock_moves: {
-    label: 'Stock Movements', singular: 'Stock Movement', group: 'Store', icon: '🔁', write: STORE.concat('engineer'),
+    // not in the menu: Store → Stock Movements (by GRN / slip) shows the same lines, grouped per slip
+    label: 'Stock Movements', singular: 'Stock Movement', group: 'Store', icon: '🔁', write: STORE.concat('engineer'), nav: false,
     display: "COALESCE({t}.doc_no, '') || ' ' || {t}.type",
     search: ['doc_no', 'issued_to', 'supplier', 'invoice_no', 'po_no', 'remarks', 'to_location', 'against_issue_no'],
     list: ['date', 'type', 'doc_no', 'item_id', 'qty', 'uom', 'rate', 'value', 'project_id', 'issued_to', 'supplier', 'po_no'],
@@ -2659,7 +2674,7 @@ export const ENTITIES = {
   },
 };
 
-export const GROUPS = ['Tasks', 'CRM', 'Approvals', 'Sales & Projects', 'Service', 'Purchase', 'Store', 'Production', 'HR'];
+export const GROUPS = ['Tasks', 'CRM', 'Approvals', 'Sales', 'Projects', 'Service', 'Purchase', 'Store', 'Production', 'HR'];
 
 export function fieldMap(entity) {
   return Object.fromEntries(ENTITIES[entity].fields.map(f => [f.key, f]));

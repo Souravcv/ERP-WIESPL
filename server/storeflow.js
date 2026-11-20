@@ -54,7 +54,7 @@ export function mrStock(id) {
     const stock = l.item_id ? r3(stockOf(Number(l.item_id))) : 0;
     const free = l.item_id ? r3(Math.max(0, freeStock(Number(l.item_id)))) : 0;
     const issue = l.item_id ? r3(Math.min(need, free)) : 0;
-    return { line: i, item_id: l.item_id || null, description: l.description || '', uom: l.uom || '', site: l.site || mr.site || '', qty, issued: done, to_purchase: onOrder,
+    return { line: i, item_id: l.item_id || null, description: l.description || '', uom: l.uom || '', site: l.site || mr.site || '', project_id: l.project_id || mr.project_id || null, qty, issued: done, to_purchase: onOrder,
       need, stock, free, issue, purchase: r3(Math.max(0, need - issue - onOrder)) };
   });
 }
@@ -102,7 +102,7 @@ export function processMR(id, body = {}, user, postDraft = null) {
       const body2 = production
         ? { type: 'TRANSFER', date: today(), from_location: 'Store', to_location: PRODUCTION, requested_by: mr.requested_by, purpose: `${mr.mr_no} – production`, remarks: `Against ${mr.mr_no}` }
         : { type: 'OUTWARD', date: today(), project_id: mr.project_id || null, issued_to: mr.site || mr.department || '', requested_by: mr.requested_by, purpose: `${mr.mr_no}${mr.site ? ' – ' + mr.site : ''}`, remarks: `Against ${mr.mr_no}` };
-      body2.lines = issue.map(p => ({ item_id: p.item_id, qty: p.qty, uom: p.uom, remark: p.site && p.site !== mr.site ? `Site: ${p.site}` : '' }));
+      body2.lines = issue.map(p => ({ item_id: p.item_id, qty: p.qty, uom: p.uom, project_id: p.project_id || null, remark: p.site && p.site !== mr.site ? `Site: ${p.site}` : '' }));
       draft = insertRow('stock_drafts', { ...draftRow(body2), status: 'Draft', prepared_by: user.name, mr_id: mr.id }, user, { system: true });
       for (const p of issue) {
         // Issuing beyond the unplanned part uses up what was on order for this line.
@@ -118,7 +118,7 @@ export function processMR(id, body = {}, user, postDraft = null) {
       req = insertRow('requisitions', {
         project_id: mr.project_id || null, project_name: mr.site || null, department: mr.department === 'Production' ? 'Production' : 'Store', required_by: mr.needed_by || null, status: 'Draft',
         requested_by: mr.requested_by, remarks: `From material request ${mr.mr_no} (${mr.requested_by || ''}); not in store stock.`,
-        lines: buy.map(p => ({ item_id: p.item_id, description: p.description, qty: p.qty, uom: p.uom, site: p.site || '', remark: `${mr.mr_no}` })),
+        lines: buy.map(p => ({ item_id: p.item_id, description: p.description, qty: p.qty, uom: p.uom, site: p.site || '', project_id: p.project_id || null, remark: `${mr.mr_no}` })),
       }, user, { system: true });
       submitForApproval('Requisition', req.id, user);
       req = getRow('requisitions', req.id);
@@ -161,13 +161,48 @@ export function productionStock() {
 export const productionBalance = itemId => productionStock().find(r => r.item_id === Number(itemId))?.balance || 0;
 
 // A new entry without materials gets the same material per piece as the last posted entry of that finished good.
+const arr = v => (typeof v === 'string' ? JSON.parse(v || '[]') : v || []);
+// The finished goods of an entry: its lines, or (older entries) the one finished good on its head.
+export function fgList(p) {
+  const fl = arr(p.fg_lines).filter(l => l.item_id && Number(l.qty) > 0);
+  if (fl.length) return fl.map(l => ({ item_id: Number(l.item_id), qty: Number(l.qty), uom: l.uom || null, project_id: l.project_id || p.project_id || null, remark: l.remark || null }));
+  return p.fg_item_id && Number(p.qty) > 0 ? [{ item_id: Number(p.fg_item_id), qty: Number(p.qty), uom: p.uom || null, project_id: p.project_id || null }] : [];
+}
+// On save: the first finished good and the total pieces go on the head; a one-line summary for the list.
+export function productionHead(row, existing) {
+  let fl = arr(row.fg_lines ?? existing?.fg_lines).filter(l => l.item_id || l.description);
+  if (!fl.length && row.fg_item_id) fl = [{ item_id: Number(row.fg_item_id), qty: Number(row.qty) || 0, uom: row.uom || null, project_id: row.project_id || null }];
+  const items = new Map(fl.filter(l => l.item_id).map(l => [Number(l.item_id), db.prepare('SELECT code, name, uom FROM items WHERE id = ?').get(Number(l.item_id))]));
+  fl = fl.map(l => { const it = items.get(Number(l.item_id)); return it ? { ...l, description: l.description || it.name, uom: l.uom || it.uom } : l; });
+  const proj = id => (id ? db.prepare("SELECT COALESCE(NULLIF(project_no, ''), code, name) n FROM projects WHERE id = ?").get(Number(id))?.n : null);
+  row.fg_lines = JSON.stringify(fl);
+  const good = fl.filter(l => l.item_id && Number(l.qty) > 0);
+  row.fg_item_id = good[0] ? Number(good[0].item_id) : null;
+  row.qty = r3(good.reduce((s, l) => s + Number(l.qty), 0));
+  row.uom = good.length === 1 ? good[0].uom || null : good.length ? 'pcs' : null;
+  row.fg_summary = good.map(l => {
+    const it = items.get(Number(l.item_id));
+    const p = proj(l.project_id || row.project_id || existing?.project_id);
+    return `${it?.code || ''} ${it?.name || l.description || ''} × ${l.qty}${p ? ` (${p})` : ''}`.trim();
+  }).join(' · ') || null;
+}
+
 export function prefillProduction(row) {
-  const lines = typeof row.lines === 'string' ? JSON.parse(row.lines || '[]') : row.lines || [];
-  if (lines.some(l => l.item_id && Number(l.qty)) || !row.fg_item_id || !(Number(row.qty) > 0)) return;
-  const last = db.prepare("SELECT qty, lines FROM production_entries WHERE fg_item_id = ? AND status = 'Posted' AND qty > 0 ORDER BY date DESC, id DESC LIMIT 1").get(Number(row.fg_item_id));
-  if (!last) return;
-  const k = Number(row.qty) / last.qty;
-  row.lines = JSON.stringify(JSON.parse(last.lines || '[]').filter(l => l.item_id && Number(l.qty)).map(l => ({ ...l, qty: r3(Number(l.qty) * k) })));
+  const lines = arr(row.lines);
+  const fgs = fgList(row);
+  if (lines.some(l => l.item_id && Number(l.qty)) || !fgs.length) return;
+  // the raw material per piece of each finished good, from its last posted entry that made only that finished good
+  const need = new Map();
+  for (const fg of fgs) {
+    const last = db.prepare("SELECT qty, lines, fg_lines FROM production_entries WHERE fg_item_id = ? AND status = 'Posted' AND qty > 0 ORDER BY date DESC, id DESC LIMIT 1").get(fg.item_id);
+    if (!last || arr(last.fg_lines).filter(l => l.item_id && Number(l.qty) > 0).length > 1) continue;
+    const k = fg.qty / last.qty;
+    for (const l of arr(last.lines).filter(x => x.item_id && Number(x.qty))) {
+      const cur = need.get(Number(l.item_id));
+      need.set(Number(l.item_id), cur ? { ...cur, qty: r3(cur.qty + Number(l.qty) * k) } : { ...l, qty: r3(Number(l.qty) * k) });
+    }
+  }
+  if (need.size) row.lines = JSON.stringify([...need.values()]);
 }
 
 // Post: the finished goods go into store stock (valued at the material used); the material leaves the production stock.
@@ -175,7 +210,8 @@ export function postProduction(id, body = {}, user) {
   if (!hasFunction(user.role, 'production_post')) throw new HttpError(403, 'Your role may not post production entries');
   const p = getRow('production_entries', id);
   if (p.status !== 'Draft') throw new HttpError(409, `Already ${p.status}`);
-  if (!(Number(p.qty) > 0)) throw new HttpError(400, 'Enter the quantity made');
+  const fgs = fgList(p);
+  if (!fgs.length) throw new HttpError(400, 'Enter the finished goods made (item and quantity)');
   const used = (p.lines || []).filter(l => l.item_id && Number(l.qty) > 0);
   if (!used.length && !body.noMaterial) throw new HttpError(400, 'Enter the raw material used (or confirm that no material was used)');
   const need = {};
@@ -188,12 +224,18 @@ export function postProduction(id, body = {}, user) {
   }
   const rate = id2 => db.prepare('SELECT rate FROM items WHERE id = ?').get(Number(id2))?.rate || 0;
   const cost = used.reduce((s, l) => s + Number(l.qty) * rate(l.item_id), 0);
-  const unit = r2(cost / Number(p.qty));
+  // Several finished goods: the material cost is shared by the pieces (weighted by each item's price, else equally).
+  const pieces = fgs.reduce((s, f) => s + f.qty, 0);
+  const unit = r2(cost / pieces);
+  const weight = fgs.reduce((s, f) => s + f.qty * (rate(f.item_id) || 0), 0);
   return tx(() => {
-    insertRow('stock_moves', { type: 'PRODUCED', date: p.date, doc_no: p.entry_no, item_id: p.fg_item_id, qty: Number(p.qty), rate: unit || rate(p.fg_item_id), uom: p.uom || null,
-      project_id: p.project_id || null, issued_to: p.for_site || null, purpose: `Made in production (${p.shift || ''})`, remarks: p.remarks || null }, user, { system: true });
+    for (const f of fgs) {
+      const each = fgs.length === 1 || !(weight > 0) ? unit : r2(cost * (rate(f.item_id) || 0) / weight);
+      insertRow('stock_moves', { type: 'PRODUCED', date: p.date, doc_no: p.entry_no, item_id: f.item_id, qty: f.qty, rate: each || rate(f.item_id), uom: f.uom || null,
+        project_id: f.project_id || null, issued_to: p.for_site || null, purpose: `Made in production (${p.shift || ''})`, remarks: [f.remark, p.remarks].filter(Boolean).join(' · ') || null }, user, { system: true });
+    }
     const out = updateRow('production_entries', id, { status: 'Posted', unit_cost: unit, posted_by: `${user.name} (${stamp()})` }, user, { system: true });
-    audit(user.name, 'production_entries', p.id, 'posted', `${p.qty} × ${p.fg_item_id_label || p.fg_item_id}`);
+    audit(user.name, 'production_entries', p.id, 'posted', p.fg_summary || `${p.qty} × ${p.fg_item_id_label || p.fg_item_id}`);
     return out;
   });
 }
@@ -201,8 +243,8 @@ export function postProduction(id, body = {}, user) {
 // Finished goods made per day (posted entries), with totals per day and per item.
 export function dailyOutput({ from, to } = {}) {
   const f = from || today().slice(0, 8) + '01', t = to || today();
-  const rows = db.prepare(`SELECT p.date, p.fg_item_id, i.code, i.name, i.uom, SUM(p.qty) qty, COUNT(*) entries, SUM(p.qty * COALESCE(p.unit_cost, 0)) value
-    FROM production_entries p LEFT JOIN items i ON i.id = p.fg_item_id WHERE p.status = 'Posted' AND p.date BETWEEN ? AND ? GROUP BY p.date, p.fg_item_id ORDER BY p.date DESC, i.name`).all(f, t);
+  const rows = db.prepare(`SELECT m.date, m.item_id fg_item_id, i.code, i.name, i.uom, SUM(m.qty) qty, COUNT(DISTINCT m.doc_no) entries, SUM(m.qty * COALESCE(m.rate, 0)) value
+    FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id WHERE m.type = 'PRODUCED' AND m.date BETWEEN ? AND ? GROUP BY m.date, m.item_id ORDER BY m.date DESC, i.name`).all(f, t);
   const days = new Map();
   for (const r of rows) { const d = days.get(r.date) || { date: r.date, pieces: 0, items: 0, value: 0 }; d.pieces = r3(d.pieces + r.qty); d.items++; d.value = r2(d.value + r.value); days.set(r.date, d); }
   const byItem = new Map();
@@ -227,4 +269,15 @@ export function backfillLeadTimes() {
   let n = 0;
   for (const r of db.prepare("SELECT DISTINCT item_id FROM stock_moves WHERE type = 'INWARD' AND po_id IS NOT NULL").all()) if (refreshLeadTime(r.item_id) != null) n++;
   return n;
+}
+
+// Entries made before several finished goods per entry: their one finished good becomes the first line (once).
+export function migrateProductionLines() {
+  const rows = db.prepare("SELECT * FROM production_entries WHERE fg_item_id IS NOT NULL AND (fg_lines IS NULL OR fg_lines = '' OR fg_lines = '[]')").all();
+  for (const r of rows) {
+    const row = { fg_item_id: r.fg_item_id, qty: r.qty, uom: r.uom, project_id: r.project_id };
+    productionHead(row, null);
+    db.prepare('UPDATE production_entries SET fg_lines = ?, fg_summary = ? WHERE id = ?').run(row.fg_lines, row.fg_summary, r.id);
+  }
+  return rows.length;
 }

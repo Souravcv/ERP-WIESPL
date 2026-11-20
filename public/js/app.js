@@ -25,13 +25,14 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
   CRM: [['#/panels', '🖥️', 'Control Panels & OR App', 'enquiries']],
-  Purchase: [['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
+  Purchase: [['#/project-store', '🏗️', 'Project Store (material per project)', 'purchase_orders'], ['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
-  'Sales & Projects': [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
+  Sales: [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
+  Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'projects']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -52,7 +53,7 @@ function buildNav(pending = 0) {
   for (const g of GROUPS) {
     const links = [
       ...(EXTRA_LINKS[g] || []).filter(l => (l[3].startsWith('fn:') ? hasFunction(role, l[3].slice(3)) : canView(l[3], role)) && !WORKER_ROLES.includes(role)).map(([href, icon, label]) => h('a', { href }, `${icon} ${label}`)),
-      ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && canView(k, role) && !(k === 'items' && WORKER_ROLES.includes(role)))
+      ...Object.entries(ENTITIES).filter(([k, e]) => e.group === g && e.nav !== false && canView(k, role) && !(k === 'items' && WORKER_ROLES.includes(role)))
         .map(([key, e]) => h('a', { href: `#/list/${key}` }, `${e.icon} ${e.label}`, key === 'approvals' && pending ? h('span.count', pending) : null)),
     ];
     navGroup(nav, g, links);
@@ -149,6 +150,7 @@ async function route() {
       case 'tasks': await tasksView(view); refreshPending(); break;
       case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
+      case 'project-store': { const { projectStoreView } = await import('./views/projectstore.js'); await projectStoreView(view, a); break; }
       case 'news': { const { newsView } = await import('./views/news.js'); await newsView(view); break; }
       case 'journey': { const { journeyView } = await import('./views/journey.js'); await journeyView(view, a); break; }
       case 'planner': { const { plannerView } = await import('./views/planner.js'); await plannerView(view, a); break; }

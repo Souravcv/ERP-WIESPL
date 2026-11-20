@@ -90,7 +90,7 @@ export async function rolesView(root) {
           funcChk[k] = h('input', { type: 'checkbox', checked: (base.functions || []).includes(k), style: { width: 'auto' } });
           return h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: 400 } }, funcChk[k], v);
         })),
-      h('p.muted', { style: { fontSize: '12px' } }, 'View = can open and search. View + add / edit = can also create and change records. Full = can also delete. PO approvals happen in order: Technical → Commercial → Final (GM).'));
+      h('p.muted', { style: { fontSize: '12px' } }, 'View = can open and search. View + add / edit = can also create and change records. Full = can also delete. PO approvals happen in order: Purchase → Commercial → GM (the GM may ask one more person).'));
     await modal(r ? `Role: ${r.label}` : 'New role', h('div.grid', h('div.form-grid', h('label', 'Role name', label), h('label.span-2', 'What this role handles', description)), matrix),
       [{ label: 'Cancel' }, ...(r && !r.builtin && !r.users ? [{ label: 'Delete role', cls: 'danger', action: async () => {
         if (!(await confirmBox(`Delete the role "${r.label}"?`, 'Delete'))) return false;

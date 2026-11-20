@@ -1,5 +1,5 @@
 import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry, backLink, goBack, redirect } from '../ui.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS, ROLE_INFO } from '../schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS, ROLE_INFO, EXTRA_STAGE } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
 import { newBoqDialog } from './dispatch.js';
@@ -48,7 +48,7 @@ export async function quickItem(preset = {}) {
   return it;
 }
 const stepOf = (docType, stage) => (APPROVAL_FLOWS[docType] || []).find(s => s.stage === stage) || (APPROVAL_FLOWS[docType] || [])[0];
-export const canApprove = (docType, stage, ap = null) => docType === 'Order Journey' ? !!ap && (state.user.role === 'admin' || String(ap.approver_role || '').split(',').includes(state.user.role)) : !!stepOf(docType, stage) && (hasFunction(state.user.role, stepOf(docType, stage).fn) || (!!ap?.also_by && ap.also_by === state.user.name));
+export const canApprove = (docType, stage, ap = null) => stage === EXTRA_STAGE ? state.user.role === 'admin' || (!!ap?.also_by && ap.also_by === state.user.name) : docType === 'Order Journey' ? !!ap && (state.user.role === 'admin' || String(ap.approver_role || '').split(',').includes(state.user.role)) : !!stepOf(docType, stage) && (hasFunction(state.user.role, stepOf(docType, stage).fn) || (!!ap?.also_by && ap.also_by === state.user.name));
 export const resolveDefault = d => d === 'today' ? today() : d === 'me' ? state.user.name
   : typeof d === 'string' && d.startsWith('setting:') ? state.settings[d.slice(8)] ?? '' : d;
 
@@ -511,6 +511,22 @@ function actionsFor(entity, row, reload, ctx = {}) {
           reload();
         });
         A.push(h('button.btn.good', { onclick: decide('Approved') }, '✔ Approve'), h('button.btn.danger.solid', { onclick: decide('Rejected') }, '✖ Reject'));
+        // The GM (last PO step) may approve and ask one more person, with remarks; that person gives the last approval.
+        const flow = APPROVAL_FLOWS['Purchase Order'];
+        if (row.doc_type === 'Purchase Order' && row.stage === flow[flow.length - 1].stage) A.push(h('button.btn', { title: 'Approve, and ask one more person to approve this PO too (with your remarks)', onclick: go(async () => {
+          const who = h('select', h('option', { value: '' }, '— choose the person —'), (state.people || []).filter(p => p.name !== state.user.name && !p.no_login).map(p => h('option', { value: p.name }, p.name)));
+          const rem = h('textarea', { placeholder: 'What should they check? (required)' });
+          const ok = await modal(`Approve ${row.doc_ref} and ask one more person`, h('div', h('label', 'Who else approves *', who), h('label', 'Remarks *', rem)),
+            [{ label: 'Cancel', value: false }, { label: 'Approve & ask', cls: 'good', value: true }]);
+          if (!ok) return;
+          if (!who.value || !rem.value.trim()) throw new Error('Choose the person and write the remarks');
+          await post(`/approvals/${id}/decide`, { decision: 'Approved', comments: rem.value, extra: { name: who.value, remarks: rem.value } });
+          toast(`Sent to ${who.value}`);
+          window.dispatchEvent(new Event('approvals-changed'));
+          reload();
+        }) }, '➕ Approve & ask one more'));
+      } else if (row.status === 'Pending' && row.stage === EXTRA_STAGE) {
+        A.push(h('span.muted', `Waiting for: ${row.also_by || 'the person the GM asked'}`));
       } else if (row.status === 'Pending') {
         A.push(h('span.muted', row.doc_type === 'Order Journey' ? `Waiting for: ${row.stage}` : `Waiting for someone allowed to: ${FUNCTIONS[stepOf(row.doc_type, row.stage)?.fn] || 'approve'}`));
       }
@@ -894,7 +910,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
     case 'production_entries':
       if (row.status === 'Draft' && hasFunction(state.user.role, 'production_post')) A.push(h('button.btn.good', { onclick: go(async () => {
         if (ctx.save) await ctx.save({ quiet: true });
-        if (!(await confirmBox(`Post ${row.entry_no}? ${row.qty} ${row.uom || ''} of ${row.fg_item_id_label || 'the finished good'} go into store stock and the material used leaves the production stock.`, 'Post'))) return;
+        if (!(await confirmBox(`Post ${row.entry_no}? ${row.fg_summary || `${row.qty} × ${row.fg_item_id_label || 'the finished good'}`} go into store stock and the material used leaves the production stock.`, 'Post'))) return;
         try { await post(`/production_entries/${id}/post`, {}); }
         catch (e) {
           if (/Enter the raw material used/.test(e.message)) { if (!(await confirmBox('No raw material is entered. Post anyway (nothing used from the production stock)?', 'Post anyway'))) return; await post(`/production_entries/${id}/post`, { noMaterial: true }); }
