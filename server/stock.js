@@ -371,9 +371,17 @@ export function accountsDashboard() {
 // ---------------------------------------------------------------- movements as documents
 // One row per slip: all the items of one GRN / issue slip / transfer together (same type, number and date).
 const DOC_KEY = "COALESCE(NULLIF(m.doc_no, ''), '#' || m.id)";
-function docFilter(q) {
+// Inward / outward groups (the project store and Stock Movements "Inward" / "Outward" filters)
+export const IN_TYPES = ['INWARD', 'JOB_IN', 'PRODUCED', 'RETURN', 'OPENING', 'ADJUST'];
+export const OUT_GROUP = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
+function docFilter(q, withType = true) {
   const where = ['1 = 1'], args = [];
-  if (q.type) { where.push('m.type = ?'); args.push(q.type); }
+  if (withType && q.type) { where.push('m.type = ?'); args.push(q.type); }
+  if (withType && !q.type && ['in', 'out'].includes(q.dir)) { const t = q.dir === 'in' ? IN_TYPES : OUT_GROUP; where.push(`m.type IN (${t.map(() => '?').join(',')})`); args.push(...t); }
+  if (q.project === 'none') where.push('m.project_id IS NULL');
+  else if (Number(q.project)) { where.push('m.project_id = ?'); args.push(Number(q.project)); }
+  if (Number(q.item)) { where.push('m.item_id = ?'); args.push(Number(q.item)); }
+  if (Number(q.vendor)) { where.push('m.vendor_id = ?'); args.push(Number(q.vendor)); }
   if (q.from) { where.push('m.date >= ?'); args.push(q.from); }
   if (q.to) { where.push('m.date <= ?'); args.push(q.to); }
   if (q.po === 'without') where.push("m.type = 'INWARD' AND m.po_id IS NULL");
@@ -392,17 +400,20 @@ export function stockDocs(q = {}, max = 2000) {
       MAX(m.to_location) to_location, MAX(m.created_by) created_by, MIN(m.id) first_id
     FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id
     WHERE ${where.join(' AND ')} GROUP BY m.type, doc_key, m.date ORDER BY m.date DESC, first_id DESC LIMIT ?`).all(...args, Math.min(Number(q.limit) || 300, max));
-  const counts = Object.fromEntries(db.prepare("SELECT type, COUNT(DISTINCT type || COALESCE(NULLIF(doc_no, ''), '#' || id) || date) n FROM stock_moves GROUP BY type").all().map(r => [r.type, r.n]));
+  // tab counts follow the other filters (project, item, dates, search)
+  const c = docFilter(q, false);
+  const counts = Object.fromEntries(db.prepare(`SELECT m.type, COUNT(DISTINCT m.type || ${DOC_KEY} || m.date) n FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id
+    LEFT JOIN projects p ON p.id = m.project_id WHERE ${c.where.join(' AND ')} GROUP BY m.type`).all(...c.args).map(r => [r.type, r.n]));
   return { rows, counts };
 }
 
 // Every item line of the slips stockDocs finds, for the Excel export.
-export function stockDocLines(q = {}) {
+export function stockDocLines(q = {}, max = 1000000) {
   const { where, args } = docFilter(q);
-  return db.prepare(`SELECT m.type, ${DOC_KEY} doc_key, m.date, m.doc_no, COALESCE(v.name, m.supplier) party, m.invoice_no, m.invoice_date, m.po_no, po.project_note, p.name project,
+  return db.prepare(`SELECT m.id, m.item_id, m.project_id, m.po_id, m.type, ${DOC_KEY} doc_key, m.date, m.doc_no, COALESCE(v.name, m.supplier) party, m.invoice_no, m.invoice_date, m.po_no, po.project_note, p.name project,
       m.issued_to, m.to_location, i.code, i.name item, m.qty, m.uom, m.rate, ROUND(COALESCE(m.qty, 0) * COALESCE(m.rate, 0), 2) value, m.batch_no, m.rack, m.remarks, m.created_by
     FROM stock_moves m LEFT JOIN items i ON i.id = m.item_id LEFT JOIN vendors v ON v.id = m.vendor_id LEFT JOIN projects p ON p.id = m.project_id LEFT JOIN purchase_orders po ON po.id = m.po_id
-    WHERE ${where.join(' AND ')} ORDER BY m.date DESC, m.id DESC`).all(...args);
+    WHERE ${where.join(' AND ')} ORDER BY m.date DESC, m.id DESC LIMIT ?`).all(...args, max);
 }
 
 // The lines of one slip; doc_key is the number, or '#id' for a single entry without a number.

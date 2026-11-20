@@ -824,6 +824,8 @@ api.post('/items/:id/merge', need('items'), wrap(req => {
 }));
 api.get('/stock/docs', wrap(req => { storeView(req); return stock.stockDocs(req.query); }));
 api.get('/stock/doc', wrap(req => { storeView(req); return stock.stockDoc(req.query); }));
+// item by item (Stock Movements "Item by item", Project Store movements): the same filters as the slips
+api.get('/stock/lines', wrap(req => { storeView(req); return stock.stockDocLines(req.query, Math.min(Number(req.query.limit) || 1000, 5000)); }));
 api.post('/stock/delete', wrap(req => {
   if (!canDelete('stock_moves', req.user.role)) throw new HttpError(403, 'Only people with full access to Stock Movements can delete them');
   return stock.deleteMoves(req.body?.ids, req.user);

@@ -6,7 +6,8 @@ import { inr, round2 } from '../calc.js';
 import { itemPicker } from './form.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
-const TABS = [['', 'All'], ['INWARD', '📥 Inward (GRN)'], ['OUTWARD', '📤 Issue / Outward'], ['TRANSFER', '🔀 Transfer (MTN)'], ['RETURN', '↩️ Return'],
+const IN_TYPES = ['INWARD', 'JOB_IN', 'PRODUCED', 'RETURN', 'OPENING', 'ADJUST'], OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
+const TABS = [['', 'All'], ['in', '⬇ All inward'], ['out', '⬆ All outward'], ['INWARD', '📥 Inward (GRN)'], ['OUTWARD', '📤 Issue / Outward'], ['TRANSFER', '🔀 Transfer (MTN)'], ['RETURN', '↩️ Return'],
   ['SCRAP', '🗑️ Scrap'], ['ADJUST', '⚖️ Adjustment'], ['JOB_OUT', '🛠️ Job Work Outward'], ['JOB_IN', '🛠️ Job Work Inward'], ['PRODUCED', '🏭 Production'], ['OPENING', '🏁 Opening']];
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const printUrl = r => `#/print/stockdoc/${r.type}?doc=${encodeURIComponent(r.doc_no || '')}`;
@@ -32,6 +33,13 @@ export async function stockMovementsView(root) {
     clearRefCache();
     await load();
   });
+  const [projects, items] = await Promise.all([refOptions('projects'), refOptions('items')]);
+  let project = p.project === 'none' ? 'none' : Number(p.project) || null, item = Number(p.item) || null;
+  let mode = p.mode === 'item' || item ? 'item' : 'slip'; // one row per slip, or one row per item line (the old item-wise list)
+  const projectOpts = [{ id: -1, label: '— no project (general stock) —' }, ...projects];
+  const projectPick = itemPicker(projectOpts, project === 'none' ? -1 : project, { onPick: id => { project = id === -1 ? 'none' : id || null; open.clear(); load(); } });
+  const itemPick = itemPicker(items, item, { onPick: id => { item = id || null; if (item) mode = 'item'; open.clear(); load(); } });
+  const modeBox = h('div.tabs', { style: { margin: 0 } });
   const f = {
     q: h('input.grow', { type: 'search', placeholder: 'Search slip no, supplier, invoice, PO, project or item…', value: p.q || '' }),
     from: h('input', { type: 'date', value: p.from || '' }), to: h('input', { type: 'date', value: p.to || '' }),
@@ -63,13 +71,47 @@ export async function stockMovementsView(root) {
     } catch (e) { fail(e); }
   }
 
-  const query = () => new URLSearchParams(Object.entries({ type, q: f.q.value, from: f.from.value, to: f.to.value, po: type === 'INWARD' || !type ? f.po.value : '' }).filter(([, v]) => v)).toString();
+  const one = () => type && !['in', 'out'].includes(type); // a single movement type is chosen
+  const query = () => new URLSearchParams(Object.entries({ ...(one() ? { type } : type ? { dir: type } : {}), q: f.q.value, from: f.from.value, to: f.to.value,
+    po: type === 'INWARD' || !one() ? f.po.value : '', project: project || '', item: item || '' }).filter(([, v]) => v)).toString();
+  const lineActions = (m, label) => h('td.nowrap', h('a.icon-btn', { href: `#/view/stock_moves/${m.id}`, title: 'Open this line' }, '👁'),
+    mayChange && m.type !== 'INWARD' ? h('a.icon-btn', { href: `#/edit/stock_moves/${m.id}`, title: 'Edit this line' }, '✏️') : null,
+    mayChange && m.type === 'INWARD' && mayEdit ? h('a.icon-btn', { href: editUrl({ doc_key: m.doc_key, date: m.date }), title: 'Edit this GRN / change its PO' }, '✏️') : null,
+    mayDelete ? h('button.icon-btn.del', { type: 'button', title: 'Delete this line', onclick: remove([m.id], label) }, '🗑') : null);
+
+  // Item by item: every line with its project, supplier / site and PO; open, edit or delete each.
+  async function loadItems(counts) {
+    const rows = await api(`/stock/lines?${query()}&limit=2000`);
+    const priced = !one() || PRICED.includes(type);
+    const sign = m => (IN_TYPES.includes(m.type) ? 1 : OUT_TYPES.includes(m.type) ? -1 : 0);
+    const inQ = round2(rows.filter(m => sign(m) > 0).reduce((a, m) => a + (Number(m.qty) || 0), 0));
+    const outQ = round2(rows.filter(m => sign(m) < 0).reduce((a, m) => a + (Number(m.qty) || 0), 0));
+    out.replaceChildren(
+      h('p.muted', `${rows.length}${rows.length >= 2000 ? '+' : ''} lines · in ${inQ} · out ${outQ}${item ? ` · net ${round2(inQ - outQ)}` : ''}. Choose a project and / or an item above to see just those.`),
+      rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
+        h('thead', h('tr', h('th', 'Date'), !one() ? h('th', 'Type') : null, h('th', 'No'), h('th', 'Item'), h('th.num', 'In'), h('th.num', 'Out'), h('th', 'UOM'),
+          priced ? h('th.num', 'Rate') : null, priced ? h('th.num', 'Value') : null, h('th', 'Project'), h('th', 'Supplier / site / to'), h('th', 'PO'), h('th', 'Remark'), h('th'))),
+        h('tbody', rows.map(m => h('tr', h('td.nowrap', fmtDate(m.date)), !one() ? h('td.nowrap', MOVE_TYPES[m.type]?.label || m.type) : null,
+          h('td.nowrap', h('a', { href: printUrl(m), target: '_blank', title: 'Print the slip' }, m.doc_no || '—')),
+          h('td', { style: { minWidth: '220px' } }, h('a', { href: `#/view/items/${m.item_id}` }, [m.code, m.item].filter(Boolean).join(' · '))),
+          h('td.num', sign(m) >= 0 ? round2(m.qty) : ''), h('td.num', sign(m) < 0 ? round2(m.qty) : ''), h('td', m.uom || ''),
+          priced ? h('td.num', PRICED.includes(m.type) ? inr(m.rate) : '') : null, priced ? h('td.num', PRICED.includes(m.type) ? inr(m.value) : '') : null,
+          h('td', m.project || h('span.muted', 'stock')), h('td.clip', [m.party, m.issued_to, m.to_location && `→ ${m.to_location}`].filter(Boolean).join(' · ')),
+          h('td.nowrap', m.po_no || ''), h('td.clip', m.remarks || ''), lineActions(m, `${m.item} × ${m.qty} on ${m.doc_no || 'this slip'}`)))),
+        h('tfoot', h('tr', h('td', { colspan: !one() ? 4 : 3 }, h('b', 'Total')), h('td.num', h('b', inQ)), h('td.num', h('b', outQ)), h('td'),
+          priced ? h('td') : null, priced ? h('td.num', h('b', money(rows.filter(m => PRICED.includes(m.type)).reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null,
+          h('td', { colspan: 5 })))))) : h('div.empty', 'No lines match'));
+  }
+
   async function load() {
     try {
       const { rows, counts } = await api(`/stock/docs?${query()}`);
+      const countOf = t => (t === 'in' ? IN_TYPES : t === 'out' ? OUT_TYPES : t ? [t] : Object.keys(counts)).reduce((a, k) => a + (counts[k] || 0), 0);
       tabs.replaceChildren(...TABS.map(([t, l]) => h('button', { class: t === type ? 'active' : '', onclick: () => { type = t; open.clear(); load(); } },
-        l, h('span.muted', { style: { marginLeft: '4px', fontSize: '11px' } }, t ? counts[t] || 0 : Object.values(counts).reduce((a, b) => a + b, 0)))));
-      const priced = !type || PRICED.includes(type);
+        l, h('span.muted', { style: { marginLeft: '4px', fontSize: '11px' } }, countOf(t)))));
+      modeBox.replaceChildren(...[['slip', '🗂️ By slip'], ['item', '☰ Item by item']].map(([k, l]) => h('button', { class: k === mode ? 'active' : '', onclick: () => { mode = k; load(); } }, l)));
+      if (mode === 'item') return await loadItems(counts);
+      const priced = !one() || PRICED.includes(type);
       const noPo = rows.filter(r => r.type === 'INWARD' && !r.with_po).length;
       const body = [];
       for (const r of rows) {
@@ -78,19 +120,19 @@ export async function stockMovementsView(root) {
         const cell = h('td', { colspan: 10 });
         body.push(h('tr.clickable', { onclick: () => { exp ? open.delete(key) : open.add(key); load(); } },
           h('td', exp ? '▾' : '▸'), h('td.nowrap', fmtDate(r.date)), h('td.nowrap', h('b', r.doc_no || '—')),
-          !type ? h('td.nowrap', MOVE_TYPES[r.type]?.label || r.type) : null,
+          !one() ? h('td.nowrap', MOVE_TYPES[r.type]?.label || r.type) : null,
           h('td.clip', { title: party(r) }, party(r)),
-          type === 'INWARD' || !type ? h('td.nowrap', r.type !== 'INWARD' ? '' : r.with_po ? r.po_no : h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null,
+          type === 'INWARD' || !one() ? h('td.nowrap', r.type !== 'INWARD' ? '' : r.with_po ? r.po_no : h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null,
           h('td.num', `${r.items} item${r.items === 1 ? '' : 's'}`), h('td.num', round2(r.qty)), priced ? h('td.num', PRICED.includes(r.type) ? inr(r.value) : '') : null, h('td.muted', r.created_by || '')));
         if (exp) { body.push(h('tr', cell)); lines(r, cell); }
       }
       out.replaceChildren(
-        h('p.muted', `${rows.length}${rows.length >= 300 ? '+' : ''} slips${noPo && (type === 'INWARD' || !type) ? ` · ${noPo} GRN(s) without a PO: open one and use “Attach PO”` : ''}. Click a slip to see its items: open, edit or delete them there.`),
+        h('p.muted', `${rows.length}${rows.length >= 300 ? '+' : ''} slips${noPo && (type === 'INWARD' || !one()) ? ` · ${noPo} GRN(s) without a PO: open one and use “Attach PO”` : ''}. Click a slip to see its items: open, edit or delete them there. “Item by item” lists every line.`),
         rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
-          h('thead', h('tr', h('th'), h('th', 'Date'), h('th', 'No'), !type ? h('th', 'Type') : null, h('th', type === 'INWARD' ? 'Supplier · invoice' : 'Project / to'),
-            type === 'INWARD' || !type ? h('th', 'PO') : null, h('th.num', 'Items'), h('th.num', 'Total Qty'), priced ? h('th.num', 'Value') : null, h('th', 'By'))),
+          h('thead', h('tr', h('th'), h('th', 'Date'), h('th', 'No'), !one() ? h('th', 'Type') : null, h('th', type === 'INWARD' ? 'Supplier · invoice' : 'Project / to'),
+            type === 'INWARD' || !one() ? h('th', 'PO') : null, h('th.num', 'Items'), h('th.num', 'Total Qty'), priced ? h('th.num', 'Value') : null, h('th', 'By'))),
           h('tbody', body),
-          h('tfoot', h('tr', h('td'), h('td', { colspan: !type ? 3 : 2 }, h('b', `Total of ${rows.length} slip${rows.length === 1 ? '' : 's'}`)), h('td'), type === 'INWARD' || !type ? h('td') : null,
+          h('tfoot', h('tr', h('td'), h('td', { colspan: !one() ? 3 : 2 }, h('b', `Total of ${rows.length} slip${rows.length === 1 ? '' : 's'}`)), h('td'), type === 'INWARD' || !one() ? h('td') : null,
             h('td.num', h('b', `${rows.reduce((a, r) => a + r.items, 0)} items`)), h('td.num', h('b', round2(rows.reduce((a, r) => a + (Number(r.qty) || 0), 0)))),
             priced ? h('td.num', h('b', money(rows.filter(r => PRICED.includes(r.type)).reduce((a, r) => a + (Number(r.value) || 0), 0)))) : null, h('td')))))) : h('div.empty', 'No slips match'));
     } catch (e) { fail(e); }
@@ -100,8 +142,10 @@ export async function stockMovementsView(root) {
   root.replaceChildren(
     h('div.page-head', h('h1', '🔁 Stock Movements'), h('div.actions',
       h('a.btn.primary', { href: '#/stock-entry' }, '+ Stock Entry'), h('button.btn', { title: 'What this tab and filter show: one sheet by GRN / slip, one sheet item by item', onclick: () => download(`/api/export/stock-movements?${query()}`) }, '⬇ Export Excel'), h('a.btn', { href: '#/list/stock_drafts?status=Draft' }, '📝 Drafts'),
-      h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'))),
-    tabs, h('div.toolbar', f.q, f.po, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to), out);
+      h('a.btn', { href: '#/project-store' }, '🏗️ Project Store'), h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'))),
+    tabs,
+    h('div.toolbar', modeBox, h('label', { style: { minWidth: '240px' } }, 'Project', projectPick), h('label', { style: { minWidth: '260px' } }, 'Item', itemPick)),
+    h('div.toolbar', f.q, f.po, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to), out);
   await load();
 }
 
