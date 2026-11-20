@@ -22,8 +22,11 @@ export function rules() {
   const s = getSettings();
   const n = (v, d) => (v === undefined || v === null || v === '' || !Number.isFinite(Number(v)) ? d : Number(v));
   return { fullDay: n(s.hr_full_day_hours, 8), halfDay: n(s.hr_half_day_hours, 4), grace: n(s.hr_grace_minutes, 15), checkEvery: n(s.hr_check_every_hours, 3),
-    maxAccuracy: n(s.hr_max_accuracy_m, 150), pingMinutes: n(s.hr_auto_ping_minutes, 15) };
+    maxAccuracy: n(s.hr_max_accuracy_m, 150), pingMinutes: n(s.hr_auto_ping_minutes, 15), photos: s.hr_photos === 'On' };
 }
+// Selfies at clock-in / out and photo checks during the day: only for field staff, and only while the setting
+// "Field staff photos" is On (Off by default since 20 Nov 2026; the location checks stay).
+export const needsPhoto = emp => emp?.field_staff === 'Yes' && rules().photos;
 
 // The person's own shift (Employees → Shift Start / End; "2:00 PM" is read too), else the company day 09:30–18:00.
 // own = the shift differs from the company day: then its length is the working day (clock-out lock, full / half day),
@@ -224,7 +227,7 @@ export function evaluate(attId) {
       short = Math.max(0, lateIn + earlyOut - covered);
       timing = short <= R.grace ? 'On time' : short <= Math.min(P.shortLeaveMin, halfMin) ? 'Late mark' : short <= halfMin ? 'Half day (late / early)' : 'Full day cut (over 4 h late / early)';
     }
-    if (emp.field_staff === 'Yes' && hours >= R.checkEvery) {
+    if (R.photos && emp.field_staff === 'Yes' && hours >= R.checkEvery) {
       const need = Math.floor(hours / R.checkEvery), got = pings.filter(p => p.kind === 'Photo check').length;
       if (got < need) flags.add(`few presence checks (${got} of ${need} photo checks)`);
     }
@@ -284,7 +287,7 @@ export function clockIn(user, body = {}, ip, device = null) {
       if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${f.loc.name} (allowed ${f.radius} m). Choose the site where you are from the list, or Travel / outstation with a note.`);
     }
   } else if (!String(body.note || '').trim()) throw new HttpError(400, 'Write where you are going / why (travel or outstation work)');
-  if (emp.field_staff === 'Yes' && !body.photo) throw new HttpError(400, 'Take a selfie to clock in');
+  if (needsPhoto(emp) && !body.photo) throw new HttpError(400, 'Take a selfie to clock in');
   return tx(() => {
     const att = existing ? getRow('attendance', existing.id) : insertRow('attendance', { date: t, employee_id: emp.id }, user, { system: true });
     updateRow('attendance', att.id, { check_in: now(), location_id: f?.loc.id || null, mode: travel ? 'Travel / outstation' : 'Site / office', in_distance_m: f?.distance ?? null, in_ip: ip || null,
@@ -445,7 +448,7 @@ export function clockOut(user, body = {}, ip) {
   const from = earliestOut(emp, att);
   if (from && hhmm(now()) < from) throw new HttpError(400, `Your hours are not complete: you can clock out at ${from}. To leave early, apply for a short leave or half day and ask HR to approve it.`);
   const p = position(body);
-  if (emp.field_staff === 'Yes' && !body.photo) throw new HttpError(400, 'Take a selfie to clock out');
+  if (needsPhoto(emp) && !body.photo) throw new HttpError(400, 'Take a selfie to clock out');
   return tx(() => {
     const photoId = savePhoto(att.id, 'Clock out', body.photo, user);
     // clocking out at another site than the morning's: the day moves there first
@@ -472,7 +475,7 @@ export function myDay(user) {
   const sh = shiftOf(emp), lvToday = leavesOn(emp.id, t);
   const part = lvToday.length && lvToday.every(partLeave);
   const cover = part ? leaveAllowance(emp, t, lvToday) : 0;
-  return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, shift_start: sh.from, shift_end: sh.to },
+  return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, photos: needsPhoto(emp), shift_start: sh.from, shift_end: sh.to },
     // an approved short / half-day leave today: the person still clocks in (later) or out (earlier)
     leave_today: lvToday.length ? { type: lvToday[0].type, half: lvToday.some(isHalf), part: !!part, minutes: cover, come_by: part ? hm(sh.start + cover) : null, go_from: part ? hm(sh.stop - cover) : null } : null,
     today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),

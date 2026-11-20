@@ -141,7 +141,7 @@ export async function attendView(root) {
     (me.other_sites || []).length ? h('optgroup', { label: 'Other sites' }, me.other_sites.map(s => h('option', { value: s.id }, s.name))) : null);
   const siteLbl = h('label', 'Site', site);
   mode.onchange = () => { siteLbl.style.display = mode.value === 'Travel / outstation' ? 'none' : ''; };
-  const needPhoto = me.employee.field_staff === 'Yes';
+  const needPhoto = me.employee.photos === true; // field staff, and only while Settings → Field staff photos is On
   const send = async (path, extra = {}, withPhoto = needPhoto) => {
     const photo = withPhoto ? await selfie() : undefined;
     toast('Getting your location…');
