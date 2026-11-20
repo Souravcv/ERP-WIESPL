@@ -14,7 +14,12 @@ export function letterhead(s) {
     h('div.co', h('b', s.company_name), h('div', s.reg_address), h('div', `${s.phone} · ${s.email} · ${s.website}`),
       s.gstin ? h('div', `GSTIN: ${s.gstin}`) : null));
 }
-export const footer = () => h('img.foot-img', { src: 'letterfoot.jpeg', alt: '' });
+// Footer of printed documents, written from Company Settings (it was a picture with the old registered address).
+export const footer = (s = {}) => h('div.doc-foot',
+  h('div.df-co', String(s.company_name || 'Western India Electromedical Systems Pvt. Ltd.').toLowerCase().replace(/(^|\s)\S/g, c => c.toUpperCase())),
+  s.reg_address ? h('div', h('span.df-k', 'Reg.: '), s.reg_address) : null,
+  s.works_address ? h('div', h('span.df-k', 'Works : '), s.works_address) : null,
+  h('div.df-row', h('span', [s.phone && `☎ ${s.phone}`, s.email && `✉ ${s.email}`, s.website].filter(Boolean).join('    ')), s.cin ? h('span', `CIN : ${s.cin}`) : null));
 const sign = (s, by) => h('div.sign', h('div', h('b', `For, ${s.company_name}`)), h('div.space' + (by ? '.signed' : ''), by ? [stampImg(), sigImg(by)] : null), h('div', h('b', 'AUTHORISED SIGNATORY')), by ? h('div.signame', plainSigner(by)) : null);
 export const page = (...c) => h('div.page', ...c);
 
@@ -60,7 +65,7 @@ function quotationDoc(q, s) {
     h('table', { style: { width: 'auto', marginLeft: '20px' } }, h('tbody', sections.map((sec, i) =>
       h('tr', h('td', { style: { border: 'none' } }, `•  ANNEXURE ${ROMAN[i]}`), h('td', { style: { border: 'none' } }, `-  ${sec[1]}`))))),
     ...lines(s.letter_closing).map(l => h('p', l)),
-    h('p', 'Yours faithfully,'), sign(s, q.approved_by), footer()));
+    h('p', 'Yours faithfully,'), sign(s, q.approved_by), footer(s)));
 
   if (num('usp')) {
     pages.push(page(letterhead(s), h('h2', `ANNEXURE ${num('usp')}`), h('h3', s.usp_title || 'Distinctive features of WIESPL HVAC Systems'),
@@ -148,7 +153,7 @@ function quotationDoc(q, s) {
       annex.scope !== false && (d.scope_matrix || []).length ? [h('h3', { style: { marginTop: '16px' } }, 'SCOPE SHEET'),
         h('table', h('thead', h('tr', h('th', 'Sr. No.'), h('th', 'Particulars'), h('th', 'WIESPL Scope'), h('th', 'Client Scope'))),
           h('tbody', d.scope_matrix.map((r, i) => h('tr', h('td', String.fromCharCode(65 + i)), h('td', r[0]), h('td.spec', r[1]), h('td.spec', r[2])))))] : null,
-      sign(s, q.approved_by), footer()));
+      sign(s, q.approved_by), footer(s)));
   }
   return h('div.doc', pages);
 }
@@ -175,7 +180,7 @@ function taxDoc({ title, no, date, party, partyLabel, refs, items, place, notes,
     h('p', h('b', amountInWords(t.total))),
     notes ? h('div.spec', { style: { marginTop: '8px' } }, notes) : null,
     s.bank_details && !['PURCHASE ORDER', 'CREDIT NOTE'].includes(title) ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Bank details: '), s.bank_details) : null,
-    sign(s, approvedBy), footer()));
+    sign(s, approvedBy), footer(s)));
 }
 
 // A requisition / PO for several sites: each line is printed with its site (nothing is added for a single site).
@@ -458,7 +463,7 @@ function challanDoc(c, s, codes = {}) {
       h('tr', [plainName(c.dispatched_by) || c.created_by, '', c.received_by ? `${c.received_by}${c.delivered_date ? ' · ' + fmtDate(c.delivered_date) : ''}` : ''].map((x, i) => h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, i === 0 && c.dispatched_by ? [stampImg(), sigImg(c.dispatched_by)] : null, x || ''))))),
     h('div', { style: { marginTop: '6px' } }, h('b', `For, ${s.company_name}`)),
     c.status === 'Draft' ? h('div', { style: { color: '#b42318', fontWeight: 700, marginTop: '6px' } }, 'DRAFT – not yet dispatched') : null,
-    footer()));
+    footer(s)));
 }
 
 const SLIP_TITLES = { INWARD: 'GOODS RECEIPT NOTE (GRN)', OUTWARD: 'MATERIAL ISSUE SLIP', TRANSFER: 'MATERIAL TRANSFER NOTE (MTN)', JOB_OUT: 'JOB WORK OUTWARD – DC TO VENDOR', JOB_IN: 'JOB WORK INWARD (GRN)', PRODUCED: 'PRODUCTION NOTE (FINISHED GOODS MADE)', RETURN: 'MATERIAL RETURN NOTE', SCRAP: 'SCRAP NOTE', OPENING: 'OPENING STOCK', ADJUST: 'STOCK ADJUSTMENT' };
@@ -483,7 +488,7 @@ function stockSlipDoc(type, docNo, moves, s, lotsOf) {
     h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By (Store)', type === 'INWARD' ? 'Checked By (Quality)' : 'Received By', 'Authorised Signatory'].map(x => h('th', { style: { width: '33%' } }, x))),
       h('tr', [m0.created_by, '', ''].map(x => h('td', { style: { height: '50px', verticalAlign: 'bottom' } }, x || ''))))),
-    footer()));
+    footer(s)));
 }
 
 function stockSlipNoPrice(type, docNo, moves, s, lotsOf = {}) {
@@ -503,7 +508,7 @@ function stockSlipNoPrice(type, docNo, moves, s, lotsOf = {}) {
     h('table', { style: { marginTop: '24px', textAlign: 'center' } }, h('tbody',
       h('tr', ['Prepared By (Store)', 'Received By', 'Authorised Signatory'].map(x => h('th', { style: { width: '33%' } }, x))),
       h('tr', [m0.created_by, '', ''].map(x => h('td', { style: { height: '50px', verticalAlign: 'bottom' } }, x || ''))))),
-    footer()));
+    footer(s)));
 }
 
 export async function printView(root, kind, id) {
@@ -644,5 +649,5 @@ function invoiceDoc(inv, c, so, s) {
       h('td', { style: { width: '40%', height: '70px', verticalAlign: 'bottom' } }, h('b', "Client's Seal & Signature")),
       h('td', { style: { verticalAlign: 'top', fontSize: '11px' } }, h('b', 'Bank Details :'), h('br'), ...multiline(String(s.bank_details || '').replace(/^"+|"+$/g, '').trim() || ['Western India Electromedical Systems Pvt Ltd.', 'Bank - Axis Bank Ltd., Branch - Chinchwad,', 'Account No. 103010200001007, IFSC code - UTIB0000103.'].join('\n')))))),
     inv.notes ? h('div.spec', { style: { marginTop: '6px', fontSize: '11px' } }, inv.notes) : null,
-    footer()));
+    footer(s)));
 }

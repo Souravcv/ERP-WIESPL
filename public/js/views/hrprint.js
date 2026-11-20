@@ -13,7 +13,7 @@ const toBlock = e => h('div', { style: { margin: '12px 0' } }, h('div', 'To,'), 
   e.designation || e.department ? h('div', [e.designation, e.department].filter(Boolean).join(', ')) : null, e.address ? h('div', { style: { whiteSpace: 'pre-wrap', maxWidth: '60%' } }, e.address) : null);
 const letter = (s, date, ref, ...body) => h('div.doc', page(letterhead(s),
   h('div', { style: { display: 'flex', justifyContent: 'space-between' } }, h('span', ref ? `Ref: ${ref}` : ''), h('span', `Date: ${fmtDate(date)}`)), ...body,
-  h('div', { style: { marginTop: '40px' } }, h('b', `For ${s.company_name}`), h('div', { style: { height: '56px' } }), h('div', 'Authorised Signatory (HR & Administration)')), footer()));
+  h('div', { style: { marginTop: '40px' } }, h('b', `For ${s.company_name}`), h('div', { style: { height: '56px' } }), h('div', 'Authorised Signatory (HR & Administration)')), footer(s)));
 const subject = x => h('p', { style: { margin: '12px 0', fontWeight: 700 } }, `Subject: ${x}`);
 const checkTable = (rows, cols) => h('table', { style: { marginTop: '6px' } }, h('thead', h('tr', h('th', '#'), cols.map(c => h('th', c[1])))),
   h('tbody', rows.map((r, i) => h('tr', h('td', i + 1), cols.map(c => h('td', { style: { whiteSpace: 'pre-wrap' } }, c[2] ? c[2](r) : r[c[0]] ?? ''))))));

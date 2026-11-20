@@ -276,6 +276,10 @@ dl.detail-grid dd { margin: 0; font-size: 13px; white-space: pre-line; overflow-
 .doc .letterhead .co { text-align: right; font-size: 11px; color: #333; }
 .doc .letterhead .co b { color: #1f4e9a; font-size: 14px; }
 .doc .foot-img { width: 100%; margin-top: 14px; }
+.doc .doc-foot { margin-top: 14px; padding: 6px 0 0 70px; font-size: 10.5px; line-height: 1.5; color: #444; }
+.doc .doc-foot .df-co { color: #1aa3c8; font-weight: 700; font-size: 11.5px; }
+.doc .doc-foot .df-k { color: #1aa3c8; }
+.doc .doc-foot .df-row { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .doc h2 { text-align: center; color: #1f4e9a; font-size: 15px; margin: 6px 0; }
 .doc h3 { text-align: center; font-size: 13px; margin: 4px 0 10px; text-decoration: underline; }
 .doc table { width: 100%; border-collapse: collapse; }
