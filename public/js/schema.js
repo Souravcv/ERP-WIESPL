@@ -2400,6 +2400,7 @@ export const ENTITIES = {
       { key: 'department', label: 'Department', type: 'text' },
       { key: 'work', label: 'Work', type: 'text', span: 2 },
       { key: 'order_id', label: 'Production Order', type: 'ref', ref: 'production_orders' },
+      { key: 'project_id', label: 'Project / Site', type: 'ref', ref: 'projects' },
       { key: 'target', label: 'Target', type: 'number' },
       { key: 'done', label: 'Done', type: 'number' },
       { key: 'rejected', label: 'Rejected / Rework', type: 'number' },

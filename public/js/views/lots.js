@@ -2,7 +2,7 @@
 // left of each lot (and its trail till exhausted), and project-wise consumption valued at the lots' rates (for Tally).
 // Also the System Health page: where data and process are out of step.
 import { h, api, state, toast, fail, modal, fmtDate, busy, refOptions, today, setHashParam } from '../ui.js';
-import { hasFunction } from '../schema.js';
+import { hasFunction, canView } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker } from './form.js';
 
@@ -15,27 +15,34 @@ const csv = (name, head, rows) => {
 };
 
 export async function lotsView(root) {
-  let tab = ['iqc', 'register', 'consumption'].includes(qs().tab) ? qs().tab : 'register';
+  // People who only inspect (Quality) see the IQC tab alone; the store sees lots and consumption too.
+  const storeSide = canView('stock_moves', state.user.role);
+  let tab = !storeSide ? 'iqc' : ['iqc', 'register', 'consumption'].includes(qs().tab) ? qs().tab : 'register';
+  let mine = qs().mine === '1' || (!storeSide && qs().mine !== '0');
   const fy = fyOf(today());
   const f = { q: h('input.grow', { type: 'search', placeholder: 'Item, GRN, batch, PO or supplier…', value: qs().q || '' }),
     from: h('input', { type: 'date', value: `20${fy.slice(0, 2)}-04-01` }), to: h('input', { type: 'date', value: today() }),
     status: h('select', { style: { width: 'auto' } }, ['', 'ACTIVE', 'LOW STOCK', 'IQC PENDING', 'HOLD', 'EXHAUSTED', 'CLOSED (1 April opening)'].map(s => h('option', { value: s }, s || 'All lots'))) };
-  const projects = await refOptions('projects');
+  const projects = storeSide ? await refOptions('projects').catch(() => []) : [];
   let project = null;
   const projPick = itemPicker([{ id: 0, label: 'All projects' }, ...projects], 0, { onPick: id => { project = id || null; load(); } });
   const tabs = h('div.tabs'), bar = h('div.toolbar'), out = h('div');
   const mayQc = hasFunction(state.user.role, 'iqc_inspect');
 
   function drawTabs() {
-    tabs.replaceChildren(...[['iqc', '🔍 IQC pending'], ['register', '🏷️ Lot register (inward → exhausted)'], ['consumption', '📊 Consumption by project (FIFO value)']]
+    tabs.replaceChildren(...[['iqc', '🔍 IQC pending'], ...(storeSide ? [['register', '🏷️ Lot register (inward → exhausted)'], ['consumption', '📊 Consumption by project (FIFO value)']] : [])]
       .map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; setHashParam('tab', k); drawTabs(); load(); } }, l)));
-    bar.replaceChildren(...(tab === 'register' ? [f.q, f.status, h('span.muted', 'Inward from'), f.from, h('span.muted', 'to'), f.to]
+    bar.replaceChildren(...(tab === 'iqc' ? [h('div.tabs', { style: { margin: 0 } }, [[true, '🙋 Mine'], [false, '📋 All pending']].map(([v, l]) => h('button', { class: mine === v ? 'active' : '', onclick: () => { mine = v; setHashParam('mine', v ? '1' : '0'); drawTabs(); load(); } }, l))), f.q]
+      : tab === 'register' ? [f.q, f.status, h('span.muted', 'Inward from'), f.from, h('span.muted', 'to'), f.to]
       : tab === 'consumption' ? [h('span', { style: { minWidth: '260px', display: 'inline-block' } }, projPick), h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to] : []));
   }
 
-  // ---- IQC
+  // ---- IQC (each material group can have its own inspector: Settings → Incoming inspection)
+  const reportUrl = (doc, date) => `#/print/iqc/x?doc=${encodeURIComponent(doc)}&date=${date}`;
   async function iqc() {
-    const rows = await api('/iqc');
+    const [all, recent] = await Promise.all([api(`/iqc${mine ? '?mine=1' : ''}`), api('/iqc/recent?days=30').catch(() => [])]);
+    const term = f.q.value.trim().toLowerCase();
+    const rows = term ? all.filter(r => [r.doc_no, r.item, r.code, r.vendor, r.po_no, r.category, r.inspector].some(v => String(v || '').toLowerCase().includes(term))) : all;
     const picked = new Set();
     const decide = status => busy(async () => {
       if (!picked.size) throw new Error('Tick the GRN lines first');
@@ -44,21 +51,40 @@ export async function lotsView(root) {
       const partly = status === 'Partly accepted' ? h('table.data', h('tbody', rows.filter(r => picked.has(r.id)).map(r => h('tr', h('td', `${r.doc_no} · ${r.item}`), h('td', `received ${r.qty} ${r.uom || r.item_uom || ''}`),
         h('td', h('input', { type: 'number', step: 'any', min: 0, placeholder: 'rejected qty', style: { width: '110px' }, oninput: e => { rej[r.id] = Number(e.target.value); } })))))) : null;
       const ok = await modal(`IQC: ${status} (${picked.size} line${picked.size === 1 ? '' : 's'})`, h('div.grid', partly, h('label', 'Remarks', remarks),
-        h('p.muted', status === 'Rejected' || status === 'Partly accepted' ? 'Rejected material is not issued and is not paid for (the 3-way check counts only the accepted quantity). Raise a debit note / return it to the vendor.' : status === 'Hold' ? 'Material on hold is not issued until it is accepted.' : 'Accepted material is free to issue.')),
+        h('p.muted', status === 'Rejected' || status === 'Partly accepted' ? 'Rejected material is not issued and is not paid for (the 3-way check counts only the accepted quantity). Raise a debit note / return it to the vendor.' : status === 'Hold' ? 'On hold: the material stays in the store and is not issued until it is inspected.' : 'Accepted material can be issued.')),
         [{ label: 'Cancel', value: false }, { label: status, cls: status === 'Accepted' ? 'good' : 'danger solid', value: true }]);
       if (!ok) return;
       await api('/iqc', { method: 'POST', body: { ids: [...picked], status, remarks: remarks.value, rejected: rej } });
-      toast(`IQC recorded: ${status}`); load();
+      toast(`IQC recorded: ${status}. Print the IQC report from the GRN row.`); load();
     });
+    // one heading row per GRN (tick all its lines, print its report), then its lines
+    const groups = [];
+    for (const r of rows) { const g = groups.at(-1); if (g && g.doc_no === r.doc_no && g.date === r.date) g.rows.push(r); else groups.push({ doc_no: r.doc_no, date: r.date, vendor: r.vendor, po_no: r.po_no, rows: [r] }); }
+    const boxes = new Map();
+    const tbody = h('tbody');
+    for (const g of groups) {
+      const all2 = mayQc ? h('input', { type: 'checkbox', style: { width: 'auto' }, title: 'Tick every line of this GRN', onchange: e => { for (const r of g.rows) { const c = boxes.get(r.id); c.checked = e.target.checked; c.onchange({ target: c }); } } }) : '';
+      tbody.append(h('tr', { style: { background: 'var(--bg)' } }, h('td', all2), h('td', { colspan: 9 }, h('b', `GRN ${g.doc_no}`), h('span.muted', ` · ${fmtDate(g.date)} · ${g.vendor || ''}${g.po_no ? ` · PO ${g.po_no}` : ''} · ${g.rows.length} line${g.rows.length === 1 ? '' : 's'}`)),
+        h('td', h('a.btn.small', { href: reportUrl(g.doc_no, g.date), target: '_blank' }, '🖨 IQC report'))));
+      for (const r of g.rows) {
+        const cb = mayQc ? h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: e => { e.target.checked ? picked.add(r.id) : picked.delete(r.id); } }) : null;
+        if (cb) boxes.set(r.id, cb);
+        tbody.append(h('tr', h('td', cb || ''), h('td', { style: { color: r.age > 2 ? 'var(--bad)' : '' } }, `${r.age} d`), h('td.clip', `${r.code} · ${r.item}`), h('td', r.category || ''),
+          h('td.num', `${r.qty} ${r.uom || r.item_uom || ''}`), h('td', r.batch_no || ''), h('td', r.rack || ''), h('td', r.inspector || h('span.muted', 'anyone')), h('td', r.invoice_no || ''),
+          h('td', { style: { color: r.qc_status === 'Hold' ? 'var(--bad)' : 'var(--warn)' } }, r.qc_status), h('td')));
+      }
+    }
     out.replaceChildren(
-      h('p.muted', 'Every GRN line starts as IQC pending. Inspect it: Accepted, Partly accepted (enter the rejected quantity), Rejected or Hold. Old GRNs from before IQC count as accepted.'),
-      rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
-        h('thead', h('tr', h('th'), ...['GRN', 'Date', 'Days', 'Supplier', 'PO', 'Item', 'Qty', 'Batch / lot', 'Rack', 'Status'].map(x => h('th', x)))),
-        h('tbody', rows.map(r => h('tr', h('td', mayQc ? h('input', { type: 'checkbox', style: { width: 'auto' }, onchange: e => { e.target.checked ? picked.add(r.id) : picked.delete(r.id); } }) : ''),
-          h('td.nowrap', h('b', r.doc_no)), h('td.nowrap', fmtDate(r.date)), h('td', { style: { color: r.age > 2 ? 'var(--bad)' : '' } }, r.age), h('td.clip', r.vendor || ''), h('td', r.po_no || ''),
-          h('td.clip', `${r.code} · ${r.item}`), h('td.num', `${r.qty} ${r.uom || r.item_uom || ''}`), h('td', r.batch_no || ''), h('td', r.rack || ''), h('td', { style: { color: r.qc_status === 'Hold' ? 'var(--bad)' : 'var(--warn)' } }, r.qc_status))))))) : h('div.empty', 'Nothing waiting for inspection ✓'),
+      h('p.muted', `${mine ? 'Lines for you to inspect (your material groups, and groups without an inspector).' : 'All lines waiting for inspection.'} Tick lines (or a whole GRN), then Accept, Partly accept, Reject or Hold. Who inspects which material: Settings → Incoming inspection (IQC).`),
+      rows.length ? h('div.card.flush', h('div.table-wrap', h('table.data', h('thead', h('tr', h('th'), ...['Waiting', 'Item', 'Category', 'Qty', 'Batch / lot', 'Rack', 'Inspector', 'Invoice', 'Status', ''].map(x => h('th', x)))), tbody)))
+        : h('div.card', h('div.empty', mine ? 'Nothing waiting for your inspection. 🎉' : 'No GRN line is waiting for inspection.')),
       rows.length && mayQc ? h('div.toolbar', h('button.btn.good', { onclick: decide('Accepted') }, '✔ Accept'), h('button.btn', { onclick: decide('Partly accepted') }, '◐ Partly accepted'),
-        h('button.btn.danger', { onclick: decide('Rejected') }, '✗ Reject'), h('button.btn', { onclick: decide('Hold') }, '⏸ Hold')) : null);
+        h('button.btn.danger', { onclick: decide('Rejected') }, '✗ Reject'), h('button.btn', { onclick: decide('Hold') }, '⏸ Hold')) : null,
+      recent.length ? h('div.card', h('h2', '🖨 IQC reports: GRNs inspected in the last 30 days'), h('div.table-wrap', h('table.data',
+        h('thead', h('tr', ['GRN', 'Date', 'Supplier', 'Lines', 'Rejected', 'Still open', 'Inspected by', ''].map(x => h('th', x)))),
+        h('tbody', recent.map(g => h('tr', h('td', h('b', g.doc_no)), h('td.nowrap', fmtDate(g.date)), h('td.clip', g.vendor || ''), h('td.num', g.lines),
+          h('td.num', { style: { color: g.rejected || g.partly ? 'var(--bad)' : '' } }, (g.rejected || 0) + (g.partly || 0) || ''), h('td.num', g.open || ''), h('td', g.by_ || ''),
+          h('td', h('a.btn.small', { href: reportUrl(g.doc_no, g.date), target: '_blank' }, '🖨 Report')))))))) : null);
   }
 
   // ---- lot register
@@ -116,7 +142,7 @@ export async function lotsView(root) {
   async function load() { try { await ({ iqc, register, consumption }[tab])(); } catch (e) { fail(e); } }
   let timer;
   for (const el of Object.values(f)) el.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 300); });
-  root.replaceChildren(h('div.page-head', h('h1', '🏷️ Lots, IQC & FIFO'), h('div.actions', h('a.btn', { href: '#/stock-movements' }, '🗂️ Stock Movements'), h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary'))),
+  root.replaceChildren(h('div.page-head', h('h1', storeSide ? '🏷️ Lots, IQC & FIFO' : '🔍 IQC – incoming inspection'), storeSide ? h('div.actions', h('a.btn', { href: '#/stock-movements' }, '🗂️ Stock Movements'), h('a.btn', { href: '#/stock-summary' }, '📊 Stock Summary')) : null),
     tabs, bar, out);
   drawTabs();
   await load();

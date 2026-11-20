@@ -491,6 +491,28 @@ function stockSlipDoc(type, docNo, moves, s, lotsOf) {
     footer(s)));
 }
 
+// Incoming Inspection Report of one GRN (Quality): received, accepted, rejected, remarks, inspected by.
+function iqcDoc(r, s) {
+  const st = l => (l.qc_status === 'Partly accepted' ? 'Partly accepted' : l.qc_status || 'Pending');
+  const cell = { border: '1px solid #999', padding: '3px 5px', verticalAlign: 'top' };
+  const tot = k => Math.round(r.lines.reduce((a, l) => a + (Number(l[k]) || 0), 0) * 1000) / 1000;
+  return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
+    companyHead(s, 'INCOMING INSPECTION REPORT (IQC)'),
+    grid([['GRN No', r.doc_no], ['GRN Date', fmtDate(r.date)], ['Supplier', r.vendor], ['PO No', r.po_no], ['Invoice No', r.invoice_no], ['Invoice Date', fmtDate(r.invoice_date)],
+      ['Inspected By', r.inspectors.join(', ') || '—'], ['Result', r.open ? `${r.open} line(s) still pending` : 'All lines inspected']]),
+    h('table', { style: { width: '100%', borderCollapse: 'collapse', marginTop: '8px' } },
+      h('thead', h('tr', ['#', 'Item', 'Category', 'Batch / lot', 'Received', 'Accepted', 'Rejected', 'Result', 'Remarks / defect', 'Inspected by'].map(x => h('th', { style: { ...cell, background: '#eef2f7' } }, x)))),
+      h('tbody', r.lines.map((l, i) => h('tr', h('td', { style: cell }, i + 1), h('td', { style: cell }, [l.code, l.item].filter(Boolean).join(' · ')), h('td', { style: cell }, l.category || ''),
+        h('td', { style: cell }, l.batch_no || ''), h('td', { style: { ...cell, textAlign: 'right' } }, `${l.qty} ${l.uom || l.item_uom || ''}`),
+        h('td', { style: { ...cell, textAlign: 'right' } }, l.accepted ?? ''), h('td', { style: { ...cell, textAlign: 'right' } }, l.qc_status === 'Rejected' ? l.qty : l.qc_rejected || ''),
+        h('td', { style: { ...cell, fontWeight: 700, color: ['Rejected', 'Hold'].includes(l.qc_status) ? '#b00' : l.qc_status === 'Accepted' ? '#2e7d32' : '#555' } }, st(l)),
+        h('td', { style: cell }, l.qc_remarks || ''), h('td', { style: cell }, [l.qc_by || (l.inspector ? `(${l.inspector})` : ''), l.qc_at ? fmtDate(String(l.qc_at).slice(0, 10)) : ''].filter(Boolean).join(' · '))))),
+      h('tfoot', h('tr', h('td', { style: cell, colSpan: 4 }, h('b', 'Total')), h('td', { style: { ...cell, textAlign: 'right' } }, h('b', tot('qty'))), h('td', { style: { ...cell, textAlign: 'right' } }, h('b', tot('accepted'))),
+        h('td', { style: { ...cell, textAlign: 'right' } }, h('b', Math.round(r.lines.reduce((a, l) => a + (l.qc_status === 'Rejected' ? Number(l.qty) : Number(l.qc_rejected) || 0), 0) * 1000) / 1000)), h('td', { style: cell, colSpan: 3 })))),
+    h('p', { style: { fontSize: '10.5px', marginTop: '6px' } }, 'Rejected material is kept apart, is not issued and is not paid for; Purchase raises the debit note / return to the vendor (SCAR for repeated rejections).'),
+    signRow(['Inspected by (Quality)', r.inspectors.join(', ')], ['Store', ''], ['Approved by (QC Head)', ''])));
+}
+
 function stockSlipNoPrice(type, docNo, moves, s, lotsOf = {}) {
   const m0 = moves[0] || {};
   const info = [['No', docNo], ['Date', fmtDate(m0.date)], ['Project', m0.project_id_label], ['Issued to / Site', m0.issued_to],
@@ -582,6 +604,11 @@ export async function printView(root, kind, id) {
     const [brief, files] = await Promise.all([api(`/enquiries/${id}/brief-data`).catch(() => ({})), api(`/attachments/enquiries/${id}`).catch(() => [])]);
     title = `Techno-commercial sheet ${e.enquiry_no || ''} ${e.hospital_name || ''}`.trim();
     doc = techSheetDoc(e, brief, files, s);
+  } else if (kind === 'iqc') {
+    const q = new URLSearchParams(location.hash.split('?')[1] || '');
+    const r = await api(`/iqc/report?doc=${encodeURIComponent(q.get('doc') || '')}${q.get('date') ? `&date=${q.get('date')}` : ''}`);
+    title = `IQC report GRN ${r.doc_no}`;
+    doc = iqcDoc(r, s);
   } else if (kind === 'stockdoc') {
     const docNo = new URLSearchParams(location.hash.split('?')[1] || '').get('doc');
     const moves = await api(`/stock_moves?type=${encodeURIComponent(id)}&doc_no=${encodeURIComponent(docNo)}`);

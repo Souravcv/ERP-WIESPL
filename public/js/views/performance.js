@@ -2,6 +2,7 @@
 // sees the whole department and enters the Daily Team Work; the GM, HR, production and planning see every department.
 import { h, api, state, toast, fail, fmtDate, today, busy, setHashParam } from '../ui.js';
 import { hasFunction } from '../schema.js';
+import { workFormat } from '../workformats.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const kpi = (label, value, sub) => h('div.kpi', h('div.label', label), h('div.value', value ?? '—'), sub ? h('div.sub', sub) : null);
@@ -54,7 +55,7 @@ export async function performanceView(root) {
       h('tbody', d.people.length ? d.people.map((r, i) => h('tr', h('td', r.score != null ? medal(i) : ''), h('td', h('b', r.name), r.designation ? h('div.muted', { style: { fontSize: '12px' } }, r.designation) : null), h('td', r.department),
         h('td.num', `${r.present_days} / ${r.working_days}`), h('td.num', p(r.attendance)), h('td.num', r.late_marks), h('td.num', r.work_days), h('td.num', r.work_hours), h('td.num', r.done), h('td.num', r.target || '—'), h('td.num', p(r.achievement)), h('td.num', r.rejected), h('td.num', p(r.quality)), scoreCell(r.score)))
         : h('tr', h('td', { colspan: 14 }, h('span.muted', 'Nobody in this department yet.'))))))) : null;
-    const work = d.my_work?.length ? h('div.card', h('h2', '🧰 My work'), h('div.table-wrap', h('table.data', h('thead', h('tr', ['Date', 'Work', 'Order', 'Target', 'Done', 'Rejected', 'Hours', 'Remark'].map((x, i) => h('th' + (i > 2 && i < 7 ? '.num' : ''), x)))),
+    const work = d.my_work?.length ? h('div.card', h('h2', '🧰 My work'), h('div.table-wrap', h('table.data', h('thead', h('tr', ['Date', 'Work', 'For', 'Target', 'Done', 'Rejected', 'Hours', 'Remark'].map((x, i) => h('th' + (i > 2 && i < 7 ? '.num' : ''), x)))),
       h('tbody', d.my_work.map(w => h('tr', h('td.nowrap', fmtDate(w.date)), h('td', w.work), h('td.nowrap', w.order_no || ''), h('td.num', w.target ?? ''), h('td.num', `${w.done ?? ''} ${w.uom || ''}`), h('td.num', w.rejected ?? ''), h('td.num', w.hours ?? ''), h('td', w.remark || ''))))))) : null;
     body.replaceChildren(filter, mine, leaders, deptTable, people, work,
       h('p.muted', { style: { fontSize: '12px' } }, `Score = output against target ${d.parts.output} % + attendance ${d.parts.attendance} % + quality ${d.parts.quality} %, over the parts that have data. Compare people doing similar work: quantities of different jobs are not the same.`));
@@ -68,19 +69,22 @@ export async function performanceView(root) {
     const dSel = h('select', { style: { width: 'auto' }, 'aria-label': 'Department', onchange: e => teamScreen(t.date, e.target.value).catch(fail) }, t.departments.map(x => h('option', { value: x }, x)));
     dSel.value = t.department;
     // what is entered for the day, and a blank row for everyone else in the team
-    const rows = [...t.logs.map(l => ({ ...l })), ...t.employees.filter(e => !t.logs.some(l => l.employee_id === e.id)).map(e => ({ employee_id: e.id, work: '', uom: 'Nos' }))];
+    // each department has its own columns: what the row is for (order / project / nothing), the numbers, the usual works
+    const F = t.format || workFormat(t.department);
+    const rows = [...t.logs.map(l => ({ ...l })), ...t.employees.filter(e => !t.logs.some(l => l.employee_id === e.id)).map(e => ({ employee_id: e.id, work: '', uom: F.uom }))];
     const tbody = h('tbody');
     const draw2 = () => tbody.replaceChildren(...rows.map((r, i) => {
       const put = k => e => { r[k] = e.target.value; };
       const who = h('select', { onchange: put('employee_id'), style: { minWidth: '150px' } }, t.employees.map(e => h('option', { value: e.id }, e.name + (e.designation ? ` · ${e.designation}` : ''))));
       who.value = r.employee_id ?? '';
-      const order = h('select', { onchange: put('order_id'), style: { minWidth: '130px' } }, h('option', { value: '' }, '—'), t.orders.map(o => h('option', { value: o.id }, o.label)));
-      order.value = r.order_id ?? '';
+      const linkKey = F.link === 'order' ? 'order_id' : 'project_id';
+      const order = F.link ? h('select', { onchange: put(linkKey), style: { minWidth: '150px' } }, h('option', { value: '' }, '—'), (F.link === 'order' ? t.orders : t.projects || []).map(o => h('option', { value: o.id }, o.label))) : null;
+      if (order) order.value = r[linkKey] ?? '';
       const n = (k, w = '76px') => h('input', { type: 'number', min: 0, step: 'any', value: r[k] ?? '', oninput: put(k), style: { width: w } });
-      return h('tr', h('td', who), h('td', h('input', { value: r.work || '', list: 'team-works', placeholder: 'Work done', oninput: put('work'), style: { minWidth: '150px' } })), h('td', order),
-        h('td', n('target')), h('td', n('done')), h('td', n('rejected')), h('td', h('input', { value: r.uom || '', oninput: put('uom'), style: { width: '60px' } })), h('td', n('hours', '64px')),
+      return h('tr', h('td', who), h('td', h('input', { value: r.work || '', list: 'team-works', placeholder: 'Work done', oninput: put('work'), style: { minWidth: '150px' } })), order ? h('td', order) : null,
+        F.target ? h('td', n('target')) : null, h('td', n('done')), F.rejected ? h('td', n('rejected')) : null, h('td', h('input', { value: r.uom || '', oninput: put('uom'), style: { width: '70px' } })), h('td', n('hours', '64px')),
         h('td', h('input', { value: r.remark || '', oninput: put('remark'), style: { minWidth: '120px' } })),
-        h('td.nowrap', h('button.icon-btn', { type: 'button', title: 'Add another work for this person', onclick: () => { rows.splice(i + 1, 0, { employee_id: r.employee_id, work: '', uom: r.uom }); draw2(); } }, '＋'),
+        h('td.nowrap', h('button.icon-btn', { type: 'button', title: 'Add another work for this person', onclick: () => { rows.splice(i + 1, 0, { employee_id: r.employee_id, work: '', uom: r.uom || F.uom }); draw2(); } }, '＋'),
           h('button.icon-btn.del', { type: 'button', title: 'Remove', onclick: () => { rows.splice(i, 1); draw2(); } }, '✕')));
     }));
     draw2();
@@ -91,9 +95,10 @@ export async function performanceView(root) {
     }) }, '💾 Save the day');
     body.replaceChildren(
       h('div.toolbar', h('span.muted', 'Date'), dateI, t.departments.length > 1 ? dSel : h('b', t.department), h('span', { style: { flex: 1 } }), t.employees.length ? save : null),
-      t.employees.length ? h('div.card.flush.table-wrap', h('table.data.lines', h('thead', h('tr', ['Person', 'Work', 'Production order', 'Target', 'Done', 'Rejected / rework', 'UOM', 'Hours', 'Remark', ''].map(x => h('th', x)))), tbody))
+      t.employees.length ? h('div.card.flush.table-wrap', h('table.data.lines', h('thead', h('tr', ['Person', 'Work', F.link ? F.linkLabel : null, F.target, F.done, F.rejected, 'UOM', 'Hours', 'Remark', ''].filter(x => x !== null).map(x => h('th', x)))), tbody))
         : h('div.card', h('p', `No active employee is in ${t.department || 'this department'} yet. HR sets the department on the employee record.`)),
-      h('datalist', { id: 'team-works' }, WORKS.map(w => h('option', { value: w }))),
+      h('datalist', { id: 'team-works' }, (F.works.length ? F.works : WORKS).map(w => h('option', { value: w }))),
+      h('p.muted', { style: { fontSize: '12px' } }, `Format for ${t.department}: ${F.title}${F.link ? ` · each row for a ${F.linkLabel.toLowerCase()}` : ''}.`),
       h('p.muted', { style: { fontSize: '12px' } }, 'One row per person and work. Rows left without work or quantities are not saved. Saving again replaces this day for this department. The target is what was expected that day; without a target the score uses attendance and quality only.'));
   }
 

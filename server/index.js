@@ -48,6 +48,7 @@ import * as journey from './journey.js';
 import * as materials from './materials.js';
 import * as projectStore from './projectstore.js';
 import * as policies from './policies.js';
+import * as iqc from './iqc.js';
 import * as scheduleXlsx from './scheduleexcel.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
@@ -582,7 +583,10 @@ api.get('/lots', wrap(req => { lotView(req); return lots.lotRegister(req.query);
 api.get('/lots/consumption', wrap(req => { lotView(req); return lots.projectConsumption(req.query); }));
 api.get('/lots/for-doc', wrap(req => { lotView(req); return lots.lotsForDoc(req.query.type, req.query.doc); }));
 api.get('/lots/:item/:lot', wrap(req => { lotView(req); return lots.lotTrail(req.params.lot, req.params.item); }));
-api.get('/iqc', wrap(req => { lotView(req); return lots.iqcPending(); }));
+// IQC: the pending lines with their inspector (mine=1: only mine), the IQC report of a GRN, GRNs inspected lately
+api.get('/iqc', wrap(req => iqc.pending(req.user, { mine: req.query.mine === '1' })));
+api.get('/iqc/report', wrap(req => iqc.report(String(req.query.doc || ''), req.query.date || null, req.user)));
+api.get('/iqc/recent', wrap(req => iqc.recent(req.user, req.query.days)));
 api.post('/iqc', wrap(req => lots.inspect(req.body, req.user)));
 api.get('/health', wrap(req => lots.health(req.user)));
 // Vendor management
@@ -713,6 +717,7 @@ function postStockEntry(reqBody, user) {
   const r = stock.stockEntry(body, req.user);
   // Lead time of each item received against a PO: PO date → GRN date.
   if (body.type === 'INWARD') for (const id of new Set((body.lines || []).map(l => Number(l.item_id)).filter(Boolean))) sf.refreshLeadTime(id);
+  if (body.type === 'INWARD') iqc.notifyGrn(r.doc_no, body.date || new Date().toLocaleString('sv-SE').slice(0, 10), req.user); // the inspector of each material group
   return r;
 }
 
@@ -1347,6 +1352,7 @@ setInterval(() => {
 
 news.migrateNews();
 wf.migratePoSteps();
+iqc.seedRouting();
 sf.migrateProductionLines();
 loginlog.migrateLoginLog();
 // "Please clock in / clock out" pop-ups at each person's shift times

@@ -8,6 +8,7 @@ import { canApprove } from './workflows.js';
 import { reviewsOf, storeOverview } from './boqflow.js';
 import { myJourneyItems } from './journey.js';
 import { myFollowItems } from './pofollow.js';
+import { myIqcItems } from './iqc.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const addDays = (d, n) => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + n); return x.toLocaleString('sv-SE').slice(0, 10); };
@@ -21,6 +22,8 @@ export function myTasks(user) {
   for (const [k, icon, title, items] of taskGroups(user, t, soon)) group(k, icon, title, items);
   // Order journey: steps of my role that are late, due or next and not given as a task yet
   try { group('journey', '🧭', 'Order journey: steps for you', myJourneyItems(user)); } catch (e) { console.error('journey tasks', e.message); }
+  // Incoming inspection of the material groups this person inspects (Settings → IQC inspectors)
+  try { group('iqc', '🔍', 'Incoming inspection (IQC) for you', myIqcItems(user)); } catch (e) { console.error('iqc tasks', e.message); }
 
   // BOQ design review / Final / changes asked
   if (canView('boms', role)) {

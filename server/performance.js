@@ -7,6 +7,7 @@ import { db, tx, audit } from './db.js';
 import { HttpError } from './crud.js';
 import { hasFunction } from '../public/js/schema.js';
 import { isOffDay } from './hrpolicy.js';
+import { workFormat } from '../public/js/workformats.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const r1 = n => Math.round((Number(n) || 0) * 10) / 10;
@@ -93,7 +94,7 @@ export function report(user, q = {}) {
   const out = { scope: scope.kind, from, to, parts: SCORE_PARTS, me, rank, of: inDept.filter(r => r.score != null).length, department: scope.me ? myDept : null, departments };
   if (scope.kind === 'self') out.top = inDept.filter(r => r.score > 0).slice(0, 3).map(r => ({ name: r.name, designation: r.designation, score: r.score }));
   else out.people = everyone.filter(r => !wanted || r.department === wanted).sort(byScore);
-  if (me) out.my_work = db.prepare(`SELECT w.date, w.work, w.target, w.done, w.rejected, w.uom, w.hours, w.remark, o.order_no FROM work_logs w LEFT JOIN production_orders o ON o.id = w.order_id
+  if (me) out.my_work = db.prepare(`SELECT w.date, w.work, w.target, w.done, w.rejected, w.uom, w.hours, w.remark, COALESCE(o.order_no, COALESCE(NULLIF(pj.project_no, ''), pj.code) || ' ' || pj.name) order_no FROM work_logs w LEFT JOIN production_orders o ON o.id = w.order_id LEFT JOIN projects pj ON pj.id = w.project_id
     WHERE w.employee_id = ? AND w.date BETWEEN ? AND ? ORDER BY w.date DESC, w.id DESC LIMIT 200`).all(me.id, from, to > t ? t : to);
   return out;
 }
@@ -114,9 +115,11 @@ export function team(user, q = {}) {
   const { all, dept } = logScope(user, q.department);
   const date = /^\d{4}-\d{2}-\d{2}$/.test(q.date || '') ? q.date : today();
   const departments = all ? db.prepare("SELECT DISTINCT COALESCE(department, 'Not set') d FROM employees WHERE COALESCE(status, 'Active') = 'Active' ORDER BY 1").all().map(r => r.d) : [dept];
-  const logs = db.prepare('SELECT employee_id, work, order_id, target, done, rejected, uom, hours, remark FROM work_logs WHERE date = ? AND department = ? ORDER BY id').all(date, dept);
-  const orders = db.prepare("SELECT id, order_no, description FROM production_orders WHERE status IN ('Released', 'In production') ORDER BY id DESC LIMIT 300").all().map(o => ({ id: o.id, label: `${o.order_no} · ${String(o.description || '').slice(0, 50)}` }));
-  return { date, department: dept, departments, employees: dept ? teamOf(dept) : [], logs, orders };
+  const logs = db.prepare('SELECT employee_id, work, order_id, project_id, target, done, rejected, uom, hours, remark FROM work_logs WHERE date = ? AND department = ? ORDER BY id').all(date, dept);
+  const format = workFormat(dept);
+  const orders = format.link === 'order' ? db.prepare("SELECT id, order_no, description FROM production_orders WHERE status IN ('Released', 'In production') ORDER BY id DESC LIMIT 300").all().map(o => ({ id: o.id, label: `${o.order_no} · ${String(o.description || '').slice(0, 50)}` })) : [];
+  const projects = format.link === 'project' ? db.prepare("SELECT id, COALESCE(NULLIF(project_no, ''), code) no, name FROM projects WHERE COALESCE(status, '') NOT IN ('Completed', 'Cancelled') ORDER BY id DESC LIMIT 300").all().map(p => ({ id: p.id, label: `${p.no || ''} ${p.name}`.trim() })) : [];
+  return { date, department: dept, departments, employees: dept ? teamOf(dept) : [], logs, orders, projects, format };
 }
 
 // The day's work of one department, saved as a whole (a correction replaces what was there). An in-charge may enter today
@@ -137,11 +140,13 @@ export function saveTeam(user, body = {}) {
     for (const k of ['target', 'done', 'rejected', 'hours']) if (num(r[k]) != null && num(r[k]) < 0) throw new HttpError(400, `${who}: ${k} cannot be negative`);
     if (num(r.hours) != null && num(r.hours) > 24) throw new HttpError(400, `${who}: more than 24 hours in a day`);
   });
-  const ins = db.prepare(`INSERT INTO work_logs (date, employee_id, department, work, order_id, target, done, rejected, uom, hours, remark, created_by, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))`);
+  const fmt = workFormat(dept);
+  const ins = db.prepare(`INSERT INTO work_logs (date, employee_id, department, work, order_id, project_id, target, done, rejected, uom, hours, remark, created_by, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))`);
   return tx(() => {
     const had = db.prepare('DELETE FROM work_logs WHERE date = ? AND department = ?').run(date, dept).changes;
-    for (const r of rows) ins.run(date, Number(r.employee_id), dept, String(r.work).trim().slice(0, 200), num(r.order_id), num(r.target), num(r.done), num(r.rejected), String(r.uom || '').trim().slice(0, 20) || null, num(r.hours), String(r.remark || '').trim().slice(0, 300) || null, user.name);
+    for (const r of rows) ins.run(date, Number(r.employee_id), dept, String(r.work).trim().slice(0, 200), fmt.link === 'order' ? num(r.order_id) : null, fmt.link === 'project' ? num(r.project_id) : null,
+      fmt.target ? num(r.target) : null, num(r.done), fmt.rejected ? num(r.rejected) : null, String(r.uom || '').trim().slice(0, 20) || null, num(r.hours), String(r.remark || '').trim().slice(0, 300) || null, user.name);
     audit(user.name, 'work_logs', null, `daily work ${date}`, `${dept}: ${rows.length} row(s)${had ? `, replaced ${had}` : ''}`);
     return { saved: rows.length, date, department: dept };
   });

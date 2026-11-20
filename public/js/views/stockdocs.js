@@ -66,6 +66,7 @@ export async function stockMovementsView(root) {
             priced ? h('td') : null, priced ? h('td.num', h('b', inr(d.moves.reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null, r.type === 'INWARD' ? h('td') : null, h('td'), h('td'), h('td')))),
         h('div', { style: { display: 'flex', gap: '8px', marginTop: '8px' } },
           h('a.btn.small', { href: printUrl(r), target: '_blank' }, '🖨 Print'),
+          r.type === 'INWARD' ? h('a.btn.small', { href: `#/print/iqc/x?doc=${encodeURIComponent(r.doc_no || '')}&date=${r.date}`, target: '_blank', title: 'Incoming inspection report of this GRN' }, '🔍 IQC report') : null,
           r.type === 'INWARD' && mayEdit ? h('a.btn.small.primary', { href: editUrl(r) }, r.with_po ? '✏ Edit GRN / change PO' : '📎 Attach PO / edit GRN') : null,
           mayDelete ? h('button.btn.small.danger', { type: 'button', style: { marginLeft: 'auto' }, onclick: remove(d.moves.map(m => m.id), `The whole slip ${r.doc_no || ''} (${d.moves.length} line${d.moves.length === 1 ? '' : 's'})`) }, '🗑 Delete slip') : null)));
     } catch (e) { fail(e); }

@@ -31,7 +31,7 @@ const EXTRA_LINKS = {
   Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'projects']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
-  Production: [['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
+  Production: [['#/lots?tab=iqc', '🔍', 'IQC – incoming inspection (GRN)', 'fn:iqc_inspect'], ['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
   Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
