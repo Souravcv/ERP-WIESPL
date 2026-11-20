@@ -1,7 +1,7 @@
 // Project Store (Store, Purchase and Projects menus): pick a project and see, item by item, what its BOQs need, what is
 // ordered for it, what came in for it, what went to the site, what the store holds for it now and what is pending —
 // with its slips, POs, challans and material requests underneath (server/projectstore.js).
-import { h, api, fail, money, fmtDate, badge } from '../ui.js';
+import { h, api, fail, money, fmtDate, badge, hashParams, setHashQuery } from '../ui.js';
 import { MOVE_TYPES } from '../schema.js';
 import { round2 } from '../calc.js';
 import { itemPicker } from './form.js';
@@ -18,10 +18,11 @@ export async function projectStoreView(root, idArg) {
   const projects = await api('/project-store');
   const opts = projects.map(p => ({ id: p.id, label: `${p.no || ''} ${p.name}${p.status && ['Completed', 'Cancelled'].includes(p.status) ? ` · ${p.status}` : ''}${p.moves ? '' : ' · nothing in store yet'}`.trim() }));
   let pid = Number(idArg) || null;
-  let tab = 'items', only = '', dir = '', moveItem = null, find = '';
+  const hp = hashParams();
+  let tab = TABS.some(t => t[0] === hp.get('tab')) ? hp.get('tab') : 'items', only = hp.get('show') || '', dir = hp.get('dir') || '', moveItem = Number(hp.get('item')) || null, find = '';
   const openItems = new Set();
   const out = h('div');
-  const go = id => { location.hash = id ? `#/project-store/${id}` : '#/project-store'; };
+  const go = id => { location.hash = id ? `#/project-store/${id}${tab !== 'items' ? `?tab=${tab}` : ''}` : '#/project-store'; };
   root.replaceChildren(h('div.page-head', h('h1', '🏗️ Project Store')),
     h('p.muted', 'Everything the store has to do with one project: what its BOQs need, what is ordered for it, what came in for it, what went to the site, what the store still holds for it and what is pending.'),
     h('div.toolbar', h('label', { style: { minWidth: '340px' } }, 'Project', itemPicker(opts, pid, { onPick: id => go(id) }))), out);
@@ -51,6 +52,7 @@ export async function projectStoreView(root, idArg) {
     } catch (e) { fail(e); }
   };
   function draw() {
+    setHashQuery(new URLSearchParams(Object.entries({ tab: tab === 'items' ? '' : tab, show: tab === 'items' ? only : '', dir: tab === 'moves' ? dir : '', item: tab === 'moves' && moveItem ? moveItem : '' }).filter(([, v]) => v)).toString());
     tabs.replaceChildren(...TABS.map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; draw(); } }, l,
       k === 'moves' ? null : h('span.muted', { style: { marginLeft: '4px', fontSize: '11px' } }, String({ items: d.rows.length, slips: d.slips.length, pos: d.pos.length, challans: d.challans.length, mrs: d.mrs.length }[k])))));
     if (tab === 'moves') {

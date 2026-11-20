@@ -1,6 +1,6 @@
 // Stock movements by slip: one row per GRN / issue slip / transfer with all its items together, tabs per type like the
 // stock entry, and editing a GRN (supplier, invoice, quantities, prices) to attach the PO it came against.
-import { h, api, state, toast, fail, modal, refOptions, money, fmtDate, badge, busy, clearRefCache, download } from '../ui.js';
+import { h, api, state, toast, fail, modal, refOptions, money, fmtDate, badge, busy, clearRefCache, download, setHashQuery } from '../ui.js';
 import { MOVE_TYPES, hasFunction, canWrite, canDelete } from '../schema.js';
 import { inr, round2 } from '../calc.js';
 import { itemPicker } from './form.js';
@@ -105,6 +105,7 @@ export async function stockMovementsView(root) {
 
   async function load() {
     try {
+      setHashQuery(new URLSearchParams(Object.entries({ type, mode: mode === 'item' ? 'item' : '', project: project || '', item: item || '', q: f.q.value.trim(), from: f.from.value, to: f.to.value, po: f.po.value }).filter(([, v]) => v)).toString());
       const { rows, counts } = await api(`/stock/docs?${query()}`);
       const countOf = t => (t === 'in' ? IN_TYPES : t === 'out' ? OUT_TYPES : t ? [t] : Object.keys(counts)).reduce((a, k) => a + (counts[k] || 0), 0);
       tabs.replaceChildren(...TABS.map(([t, l]) => h('button', { class: t === type ? 'active' : '', onclick: () => { type = t; open.clear(); load(); } },

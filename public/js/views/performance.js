@@ -1,6 +1,6 @@
 // Performance: a person's own working days, output and quality, their department, and who is doing well. The in-charge
 // sees the whole department and enters the Daily Team Work; the GM, HR, production and planning see every department.
-import { h, api, state, toast, fail, fmtDate, today, busy } from '../ui.js';
+import { h, api, state, toast, fail, fmtDate, today, busy, setHashParam } from '../ui.js';
 import { hasFunction } from '../schema.js';
 
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
@@ -17,8 +17,8 @@ export async function performanceView(root) {
   const body = h('div');
   const tabs = h('div.tabs.wrap');
   const drawTabs = () => tabs.replaceChildren(
-    h('button', { class: tab === 'report' ? 'active' : '', onclick: () => { tab = 'report'; drawTabs(); draw().catch(fail); } }, '📈 Performance'),
-    canLog ? h('button', { class: tab === 'team' ? 'active' : '', onclick: () => { tab = 'team'; drawTabs(); draw().catch(fail); } }, '📝 Daily Team Work') : null);
+    h('button', { class: tab === 'report' ? 'active' : '', onclick: () => { tab = 'report'; setHashParam('tab', ''); drawTabs(); draw().catch(fail); } }, '📈 Performance'),
+    canLog ? h('button', { class: tab === 'team' ? 'active' : '', onclick: () => { tab = 'team'; setHashParam('tab', 'team'); drawTabs(); draw().catch(fail); } }, '📝 Daily Team Work') : null);
   const from = h('input', { type: 'date', value: params.from || `${today().slice(0, 8)}01`, style: { width: 'auto' } }), to = h('input', { type: 'date', value: params.to || today(), style: { width: 'auto' } });
   const deptSel = h('select', { style: { width: 'auto' }, 'aria-label': 'Department' });
   let dept = params.department || '';

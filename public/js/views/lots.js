@@ -1,7 +1,7 @@
 // Lots, IQC & FIFO (WIESPL Stores policy): incoming inspection of GRN lines, the lot-wise inward register with what is
 // left of each lot (and its trail till exhausted), and project-wise consumption valued at the lots' rates (for Tally).
 // Also the System Health page: where data and process are out of step.
-import { h, api, state, toast, fail, modal, fmtDate, busy, refOptions, today } from '../ui.js';
+import { h, api, state, toast, fail, modal, fmtDate, busy, refOptions, today, setHashParam } from '../ui.js';
 import { hasFunction } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker } from './form.js';
@@ -28,7 +28,7 @@ export async function lotsView(root) {
 
   function drawTabs() {
     tabs.replaceChildren(...[['iqc', '🔍 IQC pending'], ['register', '🏷️ Lot register (inward → exhausted)'], ['consumption', '📊 Consumption by project (FIFO value)']]
-      .map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; drawTabs(); load(); } }, l)));
+      .map(([k, l]) => h('button', { class: k === tab ? 'active' : '', onclick: () => { tab = k; setHashParam('tab', k); drawTabs(); load(); } }, l)));
     bar.replaceChildren(...(tab === 'register' ? [f.q, f.status, h('span.muted', 'Inward from'), f.from, h('span.muted', 'to'), f.to]
       : tab === 'consumption' ? [h('span', { style: { minWidth: '260px', display: 'inline-block' } }, projPick), h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to] : []));
   }

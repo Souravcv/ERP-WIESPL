@@ -1,7 +1,7 @@
 // Control Panels & OR App: a live 3D showcase of the panels (views/panels3d.js) above the five WIESPL versions side
 // by side, what each app does, the fumigation sequence and the client demo — for sales to explain and print.
 // Data in ../panels.js (shared with the forms and the product master).
-import { h } from '../ui.js';
+import { h, hashParams, setHashParam } from '../ui.js';
 import { PANELS, FEATURE_GROUPS, FEATURE_NOTE, HARDWARE, valueText, SURGEON_APP, OR_APP, FUMIGATION_STEPS, FUMIGATION_SAFETY, DEMO_FLOW, REQUIREMENTS } from '../panels.js';
 import { panelShowcase, OR_STORY } from './panels3d.js';
 
@@ -31,7 +31,7 @@ const stagger = (els, step = 60) => els.map((el, i) => { if (el) el.style.animat
 export async function panelsView(root) {
   let pick = null;
   try { pick = localStorage.getItem(KEY) || null; } catch { /* storage blocked */ }
-  let tab = 'versions', show3d = null, fumBtn = null, stepEls = [];
+  let tab = hashParams().get('tab') || 'versions', show3d = null, fumBtn = null, stepEls = [];
   const verIdx = () => Math.max(0, PANELS.findIndex(p => p.key === pick));
 
   // ---------------------------------------------------------------- 3D stage
@@ -184,11 +184,12 @@ export async function panelsView(root) {
     ], 120),
   };
   const TABS = [['versions', '🖥️ Versions & features'], ['apps', '📱 What the apps do'], ['safety', '🛡️ Fumigation & site needs'], ['demo', '🎬 Client demo']];
+  if (!TABS.some(t => t[0] === tab)) tab = 'versions'; // an old or mistyped ?tab= in the address
 
   const body = h('div');
   const tabs = h('div.tabs.pn-tabs');
   function draw() {
-    tabs.replaceChildren(...TABS.map(([k, l]) => h('button' + (tab === k ? '.active' : ''), { type: 'button', onclick: () => { tab = k; draw(); } }, l)));
+    tabs.replaceChildren(...TABS.map(([k, l]) => h('button' + (tab === k ? '.active' : ''), { type: 'button', onclick: () => { tab = k; setHashParam('tab', k === 'versions' ? '' : k); draw(); } }, l)));
     body.replaceChildren(...sections[tab]());
   }
   const print = () => {
