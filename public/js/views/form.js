@@ -435,6 +435,37 @@ function actionsFor(entity, row, reload, ctx = {}) {
   });
   const A = [];
   switch (entity) {
+    case 'company_policies': {
+      if (state.user.role !== 'admin') break;
+      A.push(h('button.btn.primary', { onclick: go(async () => {
+        const roles = await api('/roles');
+        const all = h('input', { type: 'checkbox', checked: true });
+        const boxes = roles.filter(r => r.name !== 'admin').map(r => ({ r, el: h('input', { type: 'checkbox' }) }));
+        const list = h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '4px', maxHeight: '300px', overflow: 'auto', opacity: '.5' } },
+          boxes.map(b => h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center', fontWeight: 400 } }, b.el, `${b.r.label} (${b.r.users})`)));
+        all.onchange = () => { list.style.opacity = all.checked ? '.5' : '1'; };
+        for (const b of boxes) b.el.onchange = () => { if (b.el.checked) { all.checked = false; list.style.opacity = '1'; } };
+        const ok = await modal(`Send “${row.title}” to staff`, h('div', h('p.muted', 'Each person gets a notification and finds it under 📜 Company Policies, where they confirm “I have read it”. Attach the PDF (📎) before sending.'),
+          h('label', { style: { display: 'flex', gap: '6px', alignItems: 'center' } }, all, h('b', 'Everyone')), h('p.muted', 'or only these roles:'), list),
+          [{ label: 'Cancel', value: false }, { label: '📤 Send', cls: 'primary', value: true }]);
+        if (!ok) return;
+        const picked = all.checked ? [] : boxes.filter(b => b.el.checked).map(b => b.r.name);
+        if (!all.checked && !picked.length) throw new Error('Tick Everyone or at least one role');
+        const r = await post(`/company_policies/${id}/send`, { roles: picked });
+        toast(`Sent to ${r.told} people`);
+        reload();
+      }) }, row.status === 'Sent' ? '📤 Send again' : '📤 Send to staff'));
+      if (row.status === 'Sent') A.push(h('button.btn', { onclick: go(async () => {
+        const ppl = await api(`/company_policies/${id}/readers`);
+        const done = ppl.filter(p => p.read_at);
+        await modal(`Who has read “${row.title}”`, h('div', h('p', h('b', `${done.length} of ${ppl.length} have read it`)),
+          h('div.table-wrap', { style: { maxHeight: '420px', overflow: 'auto' } }, h('table.data', h('thead', h('tr', h('th', 'Person'), h('th', 'Role'), h('th', 'Read'))),
+            h('tbody', ppl.sort((a, b) => (a.read_at ? 1 : 0) - (b.read_at ? 1 : 0) || a.name.localeCompare(b.name)).map(p => h('tr', h('td', p.name), h('td', p.role),
+              h('td', p.read_at ? `✔ ${p.read_at}` : h('span', { style: { color: 'var(--bad)' } }, 'not yet')))))))), [{ label: 'Close', value: true }]);
+      }) }, '👁 Who has read it'));
+      A.push(h('a.btn', { href: '#/policies' }, '📜 Staff view'));
+      break;
+    }
     case 'customers':
       if (can('enquiries')) A.push(h('button.btn', { onclick: () => newRecord('enquiries', { customer_id: id }) }, '+ New Enquiry'));
       if (can('contacts')) A.push(h('button.btn', { onclick: () => newRecord('contacts', { customer_id: id }) }, '+ Contact'));

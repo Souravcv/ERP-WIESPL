@@ -146,7 +146,7 @@ const SETTINGS_FORM = [
     ['web_mail_user', 'Mail login (usually the From address)'], ['web_mail_pass', 'Mail password', 'pw'], ['web_mail_bcc', 'Copy every email to (optional)'], ['web_mail_subject', 'Subject'],
     ['web_mail_body', 'Email text. Filled in: {{name}} {{hospital}} {{enquiry_no}} {{drawings}}. Sentences saying “attached” are left out when no file is added below', 'tall']]],
   ['Quotation defaults', [['default_subject', 'Default subject'], ['letter_greeting', 'Greeting'], ['letter_intro', 'Opening paragraph', 'ta'], ['letter_body', 'Body paragraph', 'ta'], ['letter_closing', 'Closing lines', 'ta'],
-    ['usp_title', 'USP heading'], ['usp', 'USP points (one per line)', 'list'], ['terms', 'Default terms (one per line)', 'list'], ['client_scope', 'Default client scope', 'ta'], ['boq_note', 'Note under BOQ'], ['invoice_terms', 'Invoice terms', 'ta']]],
+    ['usp_title', 'USP heading'], ['usp', 'USP points (one per line)', 'list'], ['terms', 'Default terms (one per line)', 'list'], ['client_scope', 'Default client scope', 'ta'], ['boq_note', 'Note under BOQ']]],
 ];
 
 export async function settingsView(root) {
@@ -154,7 +154,7 @@ export async function settingsView(root) {
   const inputs = {};
   const sections = SETTINGS_FORM.map(([title, fields]) => h('div.card', h('h2', title), h('div.form-grid', fields.map(([k, label, type]) => {
     let el;
-    if (type === 'ta' || type === 'list' || type === 'tall') { el = h('textarea', { rows: type === 'tall' ? 22 : type === 'list' ? 10 : 3 }); el.value = type === 'list' ? (s[k] || []).join('\n') : s[k] ?? ''; }
+    if (type === 'ta' || type === 'list' || type === 'tall') { el = h('textarea', { rows: type === 'tall' ? 22 : type === 'list' ? 10 : 3 }); el.value = type === 'list' ? (Array.isArray(s[k]) ? s[k].join('\n') : k === 'invoice_terms' ? '' : String(s[k] ?? '')) : s[k] ?? ''; } // a list saved as text by an older screen still opens (old 2-line invoice text: empty = the standard terms)
     else if (type === 'pw') el = h('input', { type: 'password', autocomplete: 'new-password', placeholder: s.web_mail_pass_set ? 'Saved. Leave blank to keep it' : '' });
     else if (type === 'yn') { el = h('select', h('option', 'Yes'), h('option', 'No')); el.value = s[k] || 'Yes'; }
     else if (String(type).startsWith('sel:')) { const opts = type.slice(4).split('|'); el = h('select', opts.map(o => h('option', o))); el.value = s[k] || opts[0]; }

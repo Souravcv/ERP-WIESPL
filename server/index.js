@@ -47,6 +47,7 @@ import * as perf from './performance.js';
 import * as journey from './journey.js';
 import * as materials from './materials.js';
 import * as projectStore from './projectstore.js';
+import * as policies from './policies.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
 import * as news from './news.js';
@@ -740,6 +741,11 @@ api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.comp
 api.get('/materials/projects', wrap(req => materials.trackedProjects(req.user)));
 // Store per project: needed / ordered / received / sent / in store / pending, with its slips, POs, challans (server/projectstore.js)
 api.get('/project-store', wrap(req => projectStore.projectList(req.user)));
+// Company policies: sent by the admin, read and confirmed by each person (server/policies.js)
+api.get('/policies', wrap(req => policies.mine(req.user)));
+api.post('/policies/:id/read', wrap(req => policies.markRead(Number(req.params.id), req.user)));
+api.post('/company_policies/:id/send', wrap(req => policies.send(Number(req.params.id), req.body, req.user)));
+api.get('/company_policies/:id/readers', wrap(req => policies.readers(Number(req.params.id), req.user)));
 api.get('/project-store/:id', wrap(req => projectStore.projectStore(Number(req.params.id), req.user)));
 api.get('/materials/:projectId', wrap(req => materials.projectMaterials(Number(req.params.projectId), req.user)));
 api.put('/materials/po/:id/project', wrap(req => materials.linkPo(Number(req.params.id), req.body, req.user)));
@@ -1062,7 +1068,8 @@ api.post('/attachments/:entity/:id', express.raw({ type: () => true, limit: '200
   if (isCad(saved.filename)) preparePlan(roles.attachmentFile(saved.id)); // ready before anyone opens it in 3D
   return saved;
 }));
-const fileVisible = (a, role) => (a.entity.startsWith('journey:') ? journey.canSeeRole(role) : canView(a.entity, role));
+const fileVisible = (a, role) => (a.entity.startsWith('journey:') ? journey.canSeeRole(role)
+  : a.entity === 'company_policies' ? policies.forRole(getRow('company_policies', a.record_id), role) : canView(a.entity, role));
 api.get('/files/:id', wrap((req, res) => {
   const a = roles.attachmentFile(req.params.id);
   if (!fileVisible(a, req.user.role)) throw new HttpError(403, 'You do not have access to this file');

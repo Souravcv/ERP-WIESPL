@@ -2603,6 +2603,37 @@ export const ENTITIES = {
   },
   // Outward (issue slip / dispatch challan) and transfers are prepared as drafts: nothing leaves the stock until someone
   // allowed to post checks and posts the draft; posting gives the issue / transfer / challan number.
+  // Company policies (Admin → Company Policies, server/policies.js): kept with their PDF, sent to staff, read and confirmed.
+  company_policies: {
+    label: 'Company Policies', singular: 'Company Policy', group: 'Hidden', icon: '📜', write: ['admin'],
+    display: "{t}.title || COALESCE(' (' || {t}.version || ')', '')",
+    search: ['title', 'category', 'version', 'summary'],
+    list: ['title', 'category', 'version', 'effective_date', 'status', 'sent_to', 'sent_at'],
+    statusField: 'status',
+    fields: [
+      { key: 'title', label: 'Policy', type: 'text', required: true, span: 2, hint: 'e.g. Store Policy, HR Policy, Purchase Policy, Quality Policy' },
+      { key: 'category', label: 'Department', type: 'select', options: ['General', 'HR', 'Store', 'Purchase', 'Production', 'Quality', 'Safety', 'Accounts', 'Sales', 'Projects / Site', 'Service', 'IT'], default: 'General' },
+      { key: 'version', label: 'Version / Revision', type: 'text', hint: 'e.g. Rev. 01' },
+      { key: 'effective_date', label: 'Effective From', type: 'date', default: 'today' },
+      { key: 'summary', label: 'Summary (what everyone must know)', type: 'textarea', span: 2, hint: 'Attach the full policy (PDF / Word) with 📎 below after saving' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Sent', 'Withdrawn'], default: 'Draft', readonly: true },
+      { key: 'sent_to', label: 'Sent To', type: 'text', readonly: true },
+      { key: 'sent_at', label: 'Sent On', type: 'text', readonly: true },
+      { key: 'sent_by', label: 'Sent By', type: 'text', readonly: true },
+    ],
+  },
+  policy_reads: {
+    label: 'Policy Read Confirmations', singular: 'Read Confirmation', group: 'Hidden', icon: '✔', write: [], noCreate: true,
+    display: "{t}.user_name",
+    search: ['user_name'],
+    list: ['policy_id', 'user_name', 'role', 'read_at'],
+    fields: [
+      { key: 'policy_id', label: 'Policy', type: 'ref', ref: 'company_policies', readonly: true },
+      { key: 'user_name', label: 'Person', type: 'text', readonly: true },
+      { key: 'role', label: 'Role', type: 'text', readonly: true },
+      { key: 'read_at', label: 'Read On', type: 'text', readonly: true },
+    ],
+  },
   stock_drafts: {
     label: 'Draft Issues & Transfers', singular: 'Draft Slip', group: 'Store', icon: '📝', write: STORE.concat('engineer'), noCreate: true,
     display: "'Draft #' || {t}.id || ' · ' || COALESCE({t}.doc_kind, '')",
