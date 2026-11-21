@@ -49,6 +49,7 @@ import * as materials from './materials.js';
 import * as projectStore from './projectstore.js';
 import * as policies from './policies.js';
 import * as iqc from './iqc.js';
+import * as deptStore from './deptstore.js';
 import * as scheduleXlsx from './scheduleexcel.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
@@ -754,6 +755,9 @@ api.post('/qc_inspections/:id/done', need('qc_inspections'), wrap(req => qa.comp
 api.get('/materials/projects', wrap(req => materials.trackedProjects(req.user)));
 // Store per project: needed / ordered / received / sent / in store / pending, with its slips, POs, challans (server/projectstore.js)
 api.get('/project-store', wrap(req => projectStore.projectList(req.user)));
+// Department stores: what each department / place got from the store, returned, used and holds (server/deptstore.js)
+api.get('/dept-stores', wrap(req => deptStore.places(req.user)));
+api.get('/dept-stores/:place', wrap(req => deptStore.placeDetail(String(req.params.place), req.user)));
 // Company policies: sent by the admin, read and confirmed by each person (server/policies.js)
 api.get('/policies', wrap(req => policies.mine(req.user)));
 api.post('/policies/:id/read', wrap(req => policies.markRead(Number(req.params.id), req.user)));

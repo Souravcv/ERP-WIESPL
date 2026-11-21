@@ -32,7 +32,7 @@ const EXTRA_LINKS = {
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/lots?tab=iqc', '🔍', 'IQC – incoming inspection (GRN)', 'fn:iqc_inspect'], ['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -152,6 +152,7 @@ async function route() {
       case 'project-analysis': await projectAnalysisView(view, a); break;
       case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
       case 'project-store': { const { projectStoreView } = await import('./views/projectstore.js'); await projectStoreView(view, a); break; }
+      case 'dept-stores': { const { deptStoresView } = await import('./views/deptstores.js'); await deptStoresView(view); break; }
       case 'policies': { const { policiesView } = await import('./views/policies.js'); await policiesView(view); break; }
       case 'news': { const { newsView } = await import('./views/news.js'); await newsView(view); break; }
       case 'journey': { const { journeyView } = await import('./views/journey.js'); await journeyView(view, a); break; }

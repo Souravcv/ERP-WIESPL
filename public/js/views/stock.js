@@ -1,6 +1,6 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
 import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy, redirect, setHashQuery } from '../ui.js';
-import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction } from '../schema.js';
+import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction, COMPANY_DEPARTMENTS } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker, bomRows } from './form.js';
 
@@ -266,9 +266,10 @@ export async function stockEntryView(root) {
     }
     if (type === 'OUTWARD' && (bom || boq)) F.push(field('Project', h('input', { value: projects.find(x => x.id === Number(header.project_id))?.label || 'none', disabled: true }), `from the ${bom ? 'BOQ' : 'work order'}`));
     else if (['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP', 'ADJUST', 'OPENING', 'JOB_IN'].includes(type)) F.push(pick('project_id', projects, 'Project', 'For all lines; for several projects choose the project on each line below'));
-    if (tabOf() !== 'DC' && ['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
+    if (tabOf() !== 'DC' && ['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', type === 'RETURN' ? sv('issued_to', COMPANY_DEPARTMENTS) : v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
-    if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store', 'Production'])), field('To *', sv('to_location', ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'])));
+    // To a department (traced in Store → Department Stores), a job-work vendor or a site
+    if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store'])), field('To (department / place) *', sv('to_location', [...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating', 'Site'])));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
     if (type === 'RETURN') F.push(field('Reason for Entry *', v('reason', h('select', [''].concat(RETURN_REASONS).map(o => h('option', { value: o }, o || '— choose the reason —'))))));
     else if (['SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
