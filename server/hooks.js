@@ -15,6 +15,7 @@ import { prepOrder, prepPlan, prepReport, beforeReport, afterReport } from './pr
 import { prepInspection, prepNcr } from './quality.js';
 import { prepPlan as prepQcPlan, prepRecord as prepQcRecord } from './qcplans.js';
 import { nextEnquiryNo } from './enquiries.js';
+import { prep as sfPrep } from './salesfin.js';
 import { HttpError } from './crud.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
@@ -627,6 +628,7 @@ export function beforeSave(name, row, existing, user) {
       const selling = r2(cost + margin + (Number(v('transport')) || 0));
       const gst = r2(selling * (Number(v('gst_rate') ?? 18) || 0) / 100);
       Object.assign(row, { material_cost: material, cost_total: cost, margin_amount: margin, selling_total: selling, gst_amount: gst, grand_total: r2(selling + gst) });
+      sfPrep(row, v);
       const cid = v('customer_id');
       if (cid && !v('hospital')) row.hospital = db.prepare('SELECT name FROM customers WHERE id = ?').get(Number(cid))?.name || null;
       break;

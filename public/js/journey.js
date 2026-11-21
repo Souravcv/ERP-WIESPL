@@ -108,7 +108,7 @@ export const RACI = {
   s3a: R(['technical'], ['technical'], ['design_engineer', 'sales'], ['sales_head'], '2 days after the sales design', 'Basis of Design sheet, from the enquiry and the CAD file'),
   s4: R(['technical'], ['chief_engineer'], ['design_engineer'], ['sales'], '5 days after the sales design', 'Costing sheet: standard BOQ checked, extra scope costed'),
   s5: R(['technical'], ['technical'], ['design_engineer', 'sales_head'], ['finance_head'], '1 day after the costing', 'Technical sign-off: feasibility, quantities, heat load, panels'),
-  s6: R(['accounts'], ['finance_head'], ['manager', 'production_manager', 'project_head'], ['sales'], '2 days after the technical sign-off', 'Sales Finance note: raw material profit, timeline cost, manpower, logistics, penalty clause; senior approval if the profit is low'),
+  s6: R(['accounts'], ['finance_head', 'md'], ['manager', 'production_manager', 'project_head'], ['sales'], '2 days after the technical sign-off', 'Sales Finance note: raw material profit, timeline cost, manpower, logistics, penalty clause; senior approval if the profit is low'),
   s6a: R(['sales_head'], ['sales_head'], ['technical', 'sales'], ['marketing'], '1 day after Sales Finance says go', 'Final check note: scope complete, nothing missed'),
   s6b: R(['marketing'], ['marketing'], ['sales_head'], ['finance_head'], '1 day after the final check', 'Final OK on the quotation'),
   s7: R(['sales_head'], ['manager'], ['technical', 'sales'], ['finance_head'], '2 days after the final OK', 'Final quotation (approved in the CRM)'),

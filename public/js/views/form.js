@@ -344,6 +344,17 @@ function commercialPanel(po, reload) {
     h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
 }
 
+// Sales Finance rates (Finance Head): cost per day of each city, the standard manpower cost per day, the minimum profit %
+async function ratesDialog(rates, reload) {
+  const city = h('input', { placeholder: 'City, e.g. Pune' }), rate = h('input', { type: 'number', placeholder: 'Cost per day ₹' });
+  const man = h('input', { type: 'number', value: rates.manpower_day || '' }), min = h('input', { type: 'number', value: rates.min_profit_pct });
+  const list = Object.entries(rates.cities).map(([c, r]) => `${c}: ₹${r}`).join(' · ') || 'No cities yet';
+  const ok = await modal('Sales Finance rates', h('div.grid', h('p.muted', `Cost per day: ${list}`), h('label', 'Add or change a city', city), h('label', 'Cost per day (₹)', rate),
+    h('label', 'Standard manpower cost per day (₹)', man), h('label', 'Minimum profit % for a direct clearance', min)),
+    [{ label: 'Cancel', value: false }, { label: 'Save', cls: 'primary', action: () => api('/sales-fin/rates', { method: 'PUT', body: { city: city.value, rate: rate.value, manpower_day: man.value, min_profit_pct: min.value } }) }]);
+  if (ok) { toast('Rates saved'); reload?.(); }
+}
+
 // Sales questionnaire (MD, 13 Oct 2026): is the client cost-sensitive or quality-sensitive, what budget and taste,
 // so the proposal can be tailored. Internal only; saved on the enquiry.
 const PROFILE_QS = [
@@ -708,6 +719,25 @@ function actionsFor(entity, row, reload, ctx = {}) {
       A.push(h('a.btn', { href: `#/print/rca/${id}`, target: '_blank' }, '🖨 Print RCA'));
       break;
     case 'costing_sheets':
+      if (row.kind === 'Sales' && (hasFunction(state.user.role, 'sales_fin') || hasFunction(state.user.role, 'sales_fin_rates') || row.sf_status)) A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        const d = await api(`/costing_sheets/${id}/sales-fin`);
+        const fmt = x => '₹ ' + Number(x || 0).toLocaleString('en-IN');
+        const body = h('div', h('p.muted', `Status: ${d.status}. Minimum profit for a direct clearance: ${d.min}%.`),
+          h('table.data', h('tbody', d.checks.map(c => h('tr', h('td', c.ok ? '✅' : '❌'), h('td', h('b', c.title)), h('td', c.ok ? c.text : h('span', { style: { color: 'var(--bad)' } }, c.why)))))),
+          h('p', h('b', `Order profit: ${fmt(d.profit)} (${d.pct}%)`), d.pct < d.min ? h('span', { style: { color: 'var(--bad)' } }, ` · below ${d.min}%: needs approval from the seniors`) : ' · above the limit'),
+          d.penalty ? h('p.muted', `Penalty clause: ${fmt(d.penalty.per_day)} per day. Ten days late would cost ${fmt(d.penalty.max_10_days)}.`) : null);
+        const reason = h('input', { placeholder: 'Why should the order be taken at this profit? (for the seniors)' });
+        const low = d.pct < d.min, btns = [{ label: 'Close', value: false }];
+        if (d.can_rates) btns.unshift({ label: '⚙ Rates and limit', value: 'rates' });
+        if (d.can_check && d.all_ok && d.status !== 'Cleared' && d.status !== 'Approved by seniors') btns.push(low
+          ? { label: 'Request Approval', cls: 'primary', action: () => api(`/costing_sheets/${id}/sales-fin`, { method: 'POST', body: { request: true, reason: reason.value } }) }
+          : { label: 'Approve (clear Sales Finance)', cls: 'good', action: () => api(`/costing_sheets/${id}/sales-fin`, { method: 'POST', body: {} }) });
+        if (low && d.can_check && d.all_ok) body.append(h('label', 'Note for the seniors', reason));
+        const r = await modal('🧾 Sales Finance check', body, btns, { wide: true });
+        if (r === 'rates') return ratesDialog(d.rates, reload);
+        if (r) { toast(r.status === 'Cleared' ? 'Cleared: the journey step is done' : 'Sent to the seniors for approval'); reload(); }
+      }) }, '🧾 Sales Finance check'));
       A.push(h('a.btn', { href: `#/print/costing/${id}`, target: '_blank' }, row.kind === 'Service' ? '🖨 Service quotation' : '🖨 Quotation (selling prices)'));
       if (row.kind === 'Sales' && can('quotations')) A.push(h('button.btn.primary', { onclick: go(async () => {
         if (ctx.save) await ctx.save({ quiet: true });

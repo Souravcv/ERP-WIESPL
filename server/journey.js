@@ -11,6 +11,7 @@ import { templateRows } from './scheduletemplates.js';
 import { notify, notifyDecision } from './notify.js';
 import { storeReadiness } from './materials.js';
 import { getSettings } from './db.js';
+import { decided as sfDecided } from './salesfin.js';
 
 export function migrateJourneys() {
   db.exec(`CREATE TABLE IF NOT EXISTS journeys (id INTEGER PRIMARY KEY, enquiry_id INTEGER, sales_order_id INTEGER, project_id INTEGER,
@@ -358,9 +359,25 @@ export function submitStep(id, key, body, user) {
   return view(id, user);
 }
 
+// Sales Finance (server/salesfin.js): the journey of an enquiry, and the Sales Finance step cleared without an approval
+export function journeyFor(enquiryId) {
+  let j = one('SELECT id FROM journeys WHERE enquiry_id = ?', enquiryId);
+  if (!j) { ensureJourneys(); j = one('SELECT id FROM journeys WHERE enquiry_id = ?', enquiryId); }
+  if (!j) throw new HttpError(404, 'This enquiry has no order journey yet');
+  return j.id;
+}
+export function clearStep(id, key, note, user) {
+  if (!TICKABLE.has(key)) throw new HttpError(400, 'Unknown step');
+  cancelPending(id, key, 'cleared by Sales Finance', user);
+  db.prepare(`INSERT INTO journey_steps (journey_id, step, status, note, by_name, at, task_id) VALUES (?, ?, 'done', ?, ?, datetime('now','localtime'), NULL)
+    ON CONFLICT (journey_id, step) DO UPDATE SET status = 'done', note = excluded.note, by_name = excluded.by_name, at = excluded.at, task_id = NULL`).run(id, key, String(note).slice(0, 500), user.name);
+  audit(user.name, 'journeys', id, 'update', `${key}: cleared`);
+}
+
 // called by the approval engine (workflows.decide) after the approval row is saved
 export function approvalDecided(ap, decision, comments, user) {
   const j = load(ap.doc_id), key = ap.journey_step, chain = approvalChain(key), seq = Number(ap.approval_seq) || 0;
+  if (key === 's6' && j.enquiry_id && (decision === 'Rejected' || seq + 1 >= chain.length)) sfDecided(j.enquiry_id, decision);
   const task = one("SELECT id, status FROM work_tasks WHERE journey_id = ? AND journey_step = ? AND status <> 'Cancelled' ORDER BY id DESC LIMIT 1", j.id, key);
   if (decision === 'Rejected') {
     if (task?.status === 'Done') updateRow('work_tasks', task.id, { status: 'In progress', progress_note: `Rejected by ${user.name}${comments ? `: ${comments}` : ''}` }, user, { system: true });
