@@ -162,6 +162,16 @@ export async function stockEntryView(root) {
   if (p.item) lines.push({ item_id: Number(p.item), qty: '' });
   if (p.project) header.project_id = Number(p.project);
   if (p.vendor) header.vendor_id = Number(p.vendor);
+  if (p.from) header.from_location = p.from;
+  // a transfer from a department / place (not the main store): what that place holds, shown and checked per line
+  let deptHeld = null;
+  const fromDept = () => type === 'TRANSFER' && header.from_location && !/^\s*(main\s+)?store\s*$/i.test(header.from_location);
+  async function loadHeld() {
+    deptHeld = null;
+    if (fromDept()) { try { deptHeld = new Map((await api(`/dept-stores/${encodeURIComponent(header.from_location.trim())}`)).rows.map(r => [r.item_id, r.balance])); } catch { deptHeld = new Map(); } }
+    render();
+    saveLabel();
+  }
   if (!lines.length) lines.push({ item_id: null, qty: '' });
 
   // Line picker: type part of the material and choose from what is still pending on the BOQ / work order.
@@ -269,7 +279,7 @@ export async function stockEntryView(root) {
     if (tabOf() !== 'DC' && ['OUTWARD', 'RETURN', 'SCRAP'].includes(type)) F.push(field(type === 'RETURN' ? 'Returned from (site / department)' : 'Issued to (site / department)', type === 'RETURN' ? sv('issued_to', COMPANY_DEPARTMENTS) : v('issued_to', h('input', { placeholder: 'e.g. D.Y Patil Pune, Production, BGM' }))));
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     // To a department (traced in Store → Department Stores), a job-work vendor or a site
-    if (type === 'TRANSFER') F.push(field('From', sv('from_location', ['Store'])), field('To (department / place) *', sv('to_location', [...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating', 'Site'])));
+    if (type === 'TRANSFER') F.push(field('From', (() => { const w = sv('from_location', ['Store', ...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating']); w.firstChild.addEventListener('change', () => loadHeld()); return w; })(), 'Store, or a department / place sending material on (to the store or anywhere)'), field('To (department / place) *', sv('to_location', [...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating', 'Site'])));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
     if (type === 'RETURN') F.push(field('Reason for Entry *', v('reason', h('select', [''].concat(RETURN_REASONS).map(o => h('option', { value: o }, o || '— choose the reason —'))))));
     else if (['SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
@@ -285,7 +295,7 @@ export async function stockEntryView(root) {
     const recalc = () => { totalValue.textContent = money(lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.rate ?? itemById.get(l.item_id)?.rate) || 0), 0)); };
     const rows = lines.map((l, i) => {
       const it = itemById.get(l.item_id);
-      const stockCell = h('td.num', it ? `${round2(it.stock)} ${it.uom || ''}` : '');
+      const stockCell = h('td.num', !it ? '' : deptHeld ? h('span', { title: `What ${header.from_location} holds` }, `${round2(deptHeld.get(it.id) || 0)} ${it.uom || ''}`) : `${round2(it.stock)} ${it.uom || ''}`);
       const short = () => ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(type) && it && Number(l.qty) > it.stock;
       const qty = h('input', { type: 'number', step: 'any', value: l.qty ?? '', style: { width: '90px' } });
       const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? '', placeholder: type === 'JOB_IN' ? 'if charged' : 'required', style: { width: '110px' } });
@@ -346,6 +356,15 @@ export async function stockEntryView(root) {
 
   async function save(allowNegative = false, allowReserved = false) {
     if (type === 'RETURN' && !header.reason) throw new Error('Choose the reason for the return');
+    // from a department / place: back to the store (a return) or on to another department / place, posted at once
+    if (fromDept()) {
+      if (!String(header.to_location || '').trim()) throw new Error('Enter where the material goes (Store, or a department / place)');
+      const r = await api('/stock/dept-move', { method: 'POST', body: { from: header.from_location, to: header.to_location, date: header.date, project_id: header.project_id, requested_by: header.requested_by, remarks: header.remarks, purpose: header.purpose,
+        lines: lines.filter(l => l.item_id && Number(l.qty)).map(l => ({ item_id: l.item_id, qty: Number(l.qty), uom: l.uom, remark: l.remark, project_id: l.project_id })) } });
+      await postedDialog(r);
+      location.hash = `#/dept-stores?place=${encodeURIComponent(header.from_location.trim())}`;
+      return;
+    }
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
     const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(perLine() && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
@@ -395,7 +414,7 @@ export async function stockEntryView(root) {
   }
 
   const saveBtn = h('button.btn.primary', { onclick: busy(() => save()) });
-  const saveLabel = () => { saveBtn.textContent = DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
+  const saveLabel = () => { saveBtn.textContent = fromDept() ? '💾 Post the transfer' : DRAFTED.includes(type) ? `💾 ${draft ? 'Update' : 'Save'} draft` : '💾 Save Entry'; };
   saveLabel();
   const tabs = h('div.tabs.wrap', TABS.map(t => h('button', { class: t === type ? 'active' : '', disabled: (!!po && t !== 'INWARD') || ((!!boq || !!bom) && t !== 'OUTWARD') || (!!draft && t !== type), onclick: () => { type = t; makeChallan = false; setHashQuery(`type=${t}`); lines = lines.map(l => ({ ...l, rate: null })); header.doc_no = ''; draw(); } }, TITLES[t])));
   function draw() {
@@ -411,6 +430,7 @@ export async function stockEntryView(root) {
     h('p.muted', 'Closing stock = Opening + Inward − Outward − Transfer + Return − Scrap − Job Work Outward + Job Work Inward. Issue slips, dispatch challans and transfers are saved as a draft and reduce the stock only when the store posts them. Numbers like 001/2026-27 are given per type and restart every April (Settings → Document numbers to continue your own series).'),
     tabs, body);
   render();
+  if (fromDept()) loadHeld(); // opened as "send from <department>": show what it holds
 }
 
 // ---------------------------------------------------------------- Stock summary

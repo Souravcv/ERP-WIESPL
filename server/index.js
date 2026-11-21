@@ -758,6 +758,7 @@ api.get('/project-store', wrap(req => projectStore.projectList(req.user)));
 // Department stores: what each department / place got from the store, returned, used and holds (server/deptstore.js)
 api.get('/dept-stores', wrap(req => deptStore.places(req.user)));
 api.get('/dept-stores/:place', wrap(req => deptStore.placeDetail(String(req.params.place), req.user)));
+api.post('/stock/dept-move', wrap(req => deptStore.deptMove(req.body, req.user)));
 // Company policies: sent by the admin, read and confirmed by each person (server/policies.js)
 api.get('/policies', wrap(req => policies.mine(req.user)));
 api.post('/policies/:id/read', wrap(req => policies.markRead(Number(req.params.id), req.user)));

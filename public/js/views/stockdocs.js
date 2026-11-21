@@ -8,7 +8,7 @@ import { itemPicker } from './form.js';
 const qs = () => Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
 const IN_TYPES = ['INWARD', 'JOB_IN', 'PRODUCED', 'RETURN', 'OPENING', 'ADJUST'], OUT_TYPES = ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'];
 const TABS = [['', 'All'], ['in', '⬇ All inward'], ['out', '⬆ All outward'], ['INWARD', '📥 Inward (GRN)'], ['OUTWARD', '📤 Issue / Outward'], ['TRANSFER', '🔀 Transfer (MTN)'], ['RETURN', '↩️ Return'],
-  ['SCRAP', '🗑️ Scrap'], ['ADJUST', '⚖️ Adjustment'], ['JOB_OUT', '🛠️ Job Work Outward'], ['JOB_IN', '🛠️ Job Work Inward'], ['PRODUCED', '🏭 Production'], ['OPENING', '🏁 Opening']];
+  ['SCRAP', '🗑️ Scrap'], ['ADJUST', '⚖️ Adjustment'], ['JOB_OUT', '🛠️ Job Work Outward'], ['JOB_IN', '🛠️ Job Work Inward'], ['PRODUCED', '🏭 Production'], ['MOVE', '🔄 Dept transfer'], ['OPENING', '🏁 Opening']];
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const printUrl = r => `#/print/stockdoc/${r.type}?doc=${encodeURIComponent(r.doc_no || '')}`;
 const editUrl = r => `#/grn-edit?doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`;

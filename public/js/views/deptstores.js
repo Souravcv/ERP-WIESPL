@@ -35,7 +35,7 @@ export async function deptStoresView(root) {
             h('td.num', n(r.in)), h('td.num', n(r.back)), p.place === 'Production' ? h('td.num', n(r.used)) : null,
             h('td.num', h('b', { style: { color: r.balance < 0 ? 'var(--bad)' : '' } }, r.balance ? round2(r.balance) : '0')), d.prices ? h('td.num', r.value ? money(r.value) : '') : null,
             h('td.num.muted', n(r.issued)), h('td.nowrap', fmtDate(r.last)))))))) : h('div.card', h('div.empty', onlyHeld ? `${p.place} holds nothing now. Untick “Only what it still holds” to see everything it received.` : `Nothing has gone to ${p.place} yet.`)),
-        h('p.muted', { style: { fontSize: '12px' } }, `Holds now = received from the main store (transfer / job work) − returned to the store${p.place === 'Production' ? ' − used in posted production entries' : ''}. “Issued to it” = issue slips to the department: handed over for use, not counted as held.`)];
+        h('p.muted', { style: { fontSize: '12px' } }, `Holds now = received (from the store or another department) − returned to the store − sent to another department / place${p.place === 'Production' ? ' − used in posted production entries' : ''}. “Issued to it” = issue slips to the department: handed over for use, not counted as held.`)];
     } else {
       body = [p.trail.length ? h('div.card.flush', h('div.table-wrap', h('table.data',
         h('thead', h('tr', ['Date', 'What', 'Slip', 'Item', 'Qty', 'To / from', 'Project'].map(x => h(x === 'Qty' ? 'th.num' : 'th', x)))),
@@ -44,7 +44,9 @@ export async function deptStoresView(root) {
           h('td.clip', t.item), h('td.num', `${round2(t.qty)} ${t.uom || ''}`), h('td.clip', t.where), h('td.clip', t.project)))))))
         : h('div.card', h('div.empty', 'No movements yet.'))];
     }
-    out.replaceChildren(h('h2', { style: { margin: '6px 0' } }, `${p.department ? '🏬' : '🚚'} ${p.place}`, d.prices && p.totals.value ? h('span.muted', { style: { fontSize: '13px', fontWeight: 400, marginLeft: '8px' } }, `holds ${money(p.totals.value)}`) : null), tabs, ...body);
+    out.replaceChildren(h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '6px 0' } },
+      h('a.btn.small.primary', { href: `#/stock-entry?type=TRANSFER&from=${encodeURIComponent(p.place)}` }, `🔀 Send from ${p.place} (to store or anywhere)`)),
+      h('h2', { style: { margin: '6px 0' } }, `${p.department ? '🏬' : '🚚'} ${p.place}`, d.prices && p.totals.value ? h('span.muted', { style: { fontSize: '13px', fontWeight: 400, marginLeft: '8px' } }, `holds ${money(p.totals.value)}`) : null), tabs, ...body);
   }
   drawCards();
   root.replaceChildren(h('div.page-head', h('h1', '🏬 Department Stores'), h('div.actions', h('a.btn.primary', { href: '#/stock-entry?type=TRANSFER' }, '🔀 Transfer to a department'), h('a.btn', { href: '#/stock-entry?type=RETURN' }, '↩️ Return to store'))),

@@ -56,6 +56,7 @@ export const MOVE_TYPES = {
   JOB_OUT: { label: 'Job Work Outward', sign: -1, doc: 'TRF' },
   JOB_IN: { label: 'Job Work Inward', sign: 1, doc: 'GRN' },
   PRODUCED: { label: 'Production (finished goods made)', sign: 1, doc: 'PRD' },
+  MOVE: { label: 'Department transfer (between departments / places)', sign: 0, doc: 'DMT' },
 };
 const SIGNED_QTY = m => `CASE WHEN ${m}.type IN ('INWARD','IN','RETURN','ADJUST','PRODUCED','JOB_IN') THEN ${m}.qty WHEN ${m}.type IN ('OUTWARD','OUT','TRANSFER','SCRAP','JOB_OUT') THEN -${m}.qty ELSE 0 END`;
 // Quantity of a BOQ line sent on challans with the given statuses (challan lines carry boq_item_id).
