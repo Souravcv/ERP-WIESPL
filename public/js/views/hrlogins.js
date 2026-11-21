@@ -9,7 +9,8 @@ const FULL_ACCESS = ['admin', 'manager'];
 export async function appLogins(box) {
   const [{ people = [], roles = [] }, holders] = await Promise.all([api('/hr/login-gaps').catch(e => { fail(e); return {}; }), api('/hr/login-holders').catch(() => ({ people: [], allowed: false }))]);
   const reprint = holdersPart(box, holders);
-  if (!people.length) return box.replaceChildren(h('p.muted', 'Every active employee has a login.'), reprint);
+  const first = holders.allowed ? await firstPasswordPart() : null;
+  if (!people.length) return box.replaceChildren(h('p.muted', 'Every active employee has a login.'), first, reprint);
   const labels = Object.fromEntries(roles.map(r => [r.name, r.label]));
   const roleLabel = r => labels[r] || r;
 
@@ -38,7 +39,35 @@ export async function appLogins(box) {
     h('p', `${people.length} active employee${people.length === 1 ? ' has' : 's have'} no login yet. Worker is the least access: own attendance and leave, own tasks. Choose another role for anyone who needs more.`),
     h('div.toolbar', go),
     h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Code'), h('th', 'Name'), h('th', 'Department'), h('th', 'Designation'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))),
-    reprint);
+    first, reprint);
+}
+
+// Installation days (administrators only): one first password, typed here by the administrator, for everyone ticked who
+// has never signed in. Each person must set their own password at the first sign-in; nothing is shown or printed.
+async function firstPasswordPart() {
+  const { people = [] } = await api('/hr/never-signed-in').catch(() => ({}));
+  if (!people.length) return null;
+  const rows = people.map(p => { const tick = h('input', { type: 'checkbox', checked: true, onchange: () => count() }); return { p, tick, tr: h('tr', h('td', tick), h('td', p.name), h('td', h('b', p.username)), h('td', p.role_label)) }; });
+  const all = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Tick everyone', onchange: () => { rows.forEach(r => { r.tick.checked = all.checked; }); count(); } });
+  const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'first password (8+ characters)' });
+  const pw2 = h('input', { type: 'password', autocomplete: 'new-password', placeholder: 'type it again' });
+  const go = h('button.btn', { type: 'button', onclick: busy(async () => {
+    const ids = rows.filter(r => r.tick.checked).map(r => r.p.user_id);
+    if (pw.value.length < 8) return fail(new Error('The password needs at least 8 characters'));
+    if (pw.value !== pw2.value) return fail(new Error('The two passwords are not the same'));
+    if (!(await modal('Set the first password?', h('p', `${ids.length} people who never signed in get this password. Each must set their own at the first sign-in. Anyone who knows the password and a username can sign in as that person until they do, so hand it out only for the installation.`),
+      [{ label: 'Cancel', value: false }, { label: 'Set password', cls: 'primary', value: true }]))) return;
+    const r = await api('/hr/first-password', { method: 'POST', body: { user_ids: ids, password: pw.value } });
+    pw.value = pw2.value = '';
+    toast(`First password set for ${r.done.length}`);
+  }) });
+  const count = () => { const n = rows.filter(r => r.tick.checked).length; go.textContent = `🔑 Set first password for ${n}`; go.disabled = !n; };
+  count();
+  return h('div', { style: { marginTop: '24px' } },
+    h('h3', `People who have never signed in (${people.length})`),
+    h('p.muted', 'For the installation: give everyone ticked one first password that you type here. Each person must set their own password at the first sign-in. People who have signed in before are not in this list.'),
+    h('div.toolbar', pw, pw2, go),
+    h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', all), h('th', 'Name'), h('th', 'Username'), h('th', 'Role'))), h('tbody', rows.map(r => r.tr)))));
 }
 
 // People who already have a login (administrators only): passwords are kept locked and can never be shown, so the ticked

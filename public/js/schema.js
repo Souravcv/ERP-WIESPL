@@ -2704,6 +2704,7 @@ export const ENTITIES = {
       { key: 'gst_rate', label: 'GST %', type: 'number', showIf: { type: ['INWARD'] } },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', showIf: { type: ['OUTWARD', 'RETURN', 'TRANSFER', 'SCRAP', 'JOB_OUT'] } },
       { key: 'issued_to', label: 'Issued To / Site / Department', type: 'text', showIf: { type: ['OUTWARD', 'RETURN', 'SCRAP'] } },
+      { key: 'department', label: 'Department', type: 'text', suggest: COMPANY_DEPARTMENTS, hint: 'Department this material is for (each line may have its own)' },
       { key: 'requested_by', label: 'Requested By', type: 'person', showIf: { type: ['OUTWARD', 'TRANSFER'] } },
       { key: 'from_location', label: 'From Location', type: 'text', suggest: ['Store', 'Production'], showIf: { type: ['TRANSFER'] } },
       { key: 'to_location', label: 'To Location', type: 'text', suggest: ['Production', 'VRS Engineering', 'Shree Perforater', 'Site'], showIf: { type: ['TRANSFER'] } },

@@ -816,6 +816,9 @@ api.get('/hr/people', wrap(req => { hrView(req); return hrf.peopleBoard(); }));
 api.get('/hr/logins', need('employees'), wrap(() => hrf.loginChoices()));
 const hrManage = req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator can create logins'); };
 // Sign-in / sign-out log and shared-phone warnings (buddy punching)
+// one first password (typed by the administrator) for people who never signed in; must change it at the first sign-in
+api.get('/hr/never-signed-in', requireRole(), wrap(req => ({ people: hrf.neverSignedIn(req.user) })));
+api.post('/hr/first-password', requireRole(), wrap(req => hrf.firstPassword(req.body?.user_ids, req.body?.password, req.user)));
 api.get('/hr/login-log', wrap(req => { if (!hasFunction(req.user.role, 'hr_manage')) throw new HttpError(403, 'Only HR, the GM and the administrator see the login log'); return loginlog.loginReport(req.query.days); }));
 api.get('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.loginGaps(req.user); }));
 api.post('/hr/login-gaps', wrap(req => { hrManage(req); return hrf.createLogins(req.body?.people, req.user); }));

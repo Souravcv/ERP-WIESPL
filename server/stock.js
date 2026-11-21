@@ -17,7 +17,7 @@ export function stockOf(itemId) {
 }
 
 // ---------------------------------------------------------------- multi-line entry (GRN / issue slip / transfer ...)
-const HEADER_KEYS = ['vendor_id', 'supplier', 'invoice_no', 'invoice_date', 'po_id', 'po_no', 'project_id', 'issued_to', 'requested_by',
+const HEADER_KEYS = ['vendor_id', 'supplier', 'invoice_no', 'invoice_date', 'po_id', 'po_no', 'project_id', 'issued_to', 'requested_by', 'department',
   'from_location', 'to_location', 'against_issue_no', 'reason', 'purpose', 'remarks'];
 
 // A challan or issue number typed by hand must be new: a repeated number would join two slips into one.
@@ -105,9 +105,13 @@ export function stockEntry(body, user) {
           if (want > 0) { portions.push({ project_id: s.project_id || null, qty: round2(want) }); s.received = round2((Number(s.received) || 0) + want); left = round2(left - want); }
         });
       } else portions.push({ project_id: lineProject ? Number(lineProject) : null, qty: Number(l.qty) });
+      // A department per line (blank = the one at the top). On an issue / return / scrap it is where the material
+      // went (issued to), on a transfer where it goes (to), so Department Stores count it there.
+      const dept = String(l.department || '').trim();
+      const deptPatch = dept ? { department: dept, ...(['OUTWARD', 'RETURN', 'SCRAP'].includes(type) ? { issued_to: dept } : type === 'TRANSFER' ? { to_location: dept } : {}) } : {};
       for (const part of portions) {
         const row = insertRow('stock_moves', {
-          ...header, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: part.qty,
+          ...header, ...deptPatch, type, date, doc_no: docNo, item_id: Number(l.item_id), qty: part.qty,
           rate: l.rate === '' || l.rate == null ? null : Number(l.rate), uom: l.uom || null,
           remarks: [l.remark, header.remarks].filter(Boolean).join(' · ') || null,
           hsn: l.hsn || null, gst_rate: l.gst ?? null, project_id: part.project_id, po_line: idx >= 0 ? idx : null,

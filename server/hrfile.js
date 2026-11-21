@@ -83,6 +83,32 @@ export function resetLogins(userIds, actor) {
   });
 }
 
+// People who have a login but have never signed in (no sign-in in the audit or the login log): for the installation
+// days, the administrator may give them all one first password, typed by the administrator; each must set their own at
+// the first sign-in. Administrator logins and the administrator's own are left out.
+const signedIn = id => db.prepare("SELECT 1 FROM audit WHERE entity = 'users' AND record_id = ? AND action = 'login' LIMIT 1").get(id)
+  || (db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'login_events'").get() && db.prepare("SELECT 1 FROM login_events WHERE user_id = ? AND kind = 'login' LIMIT 1").get(id));
+export const neverSignedIn = actor => (actor.role !== 'admin' ? [] : db.prepare(`SELECT u.id AS user_id, u.username, u.name, COALESCE(r.label, u.role) AS role_label
+  FROM users u LEFT JOIN roles r ON r.name = u.role WHERE u.active = 1 AND u.role <> 'admin' AND u.id <> ? ORDER BY u.name`).all(actor.id).filter(u => !signedIn(u.user_id)));
+export function firstPassword(userIds, password, actor) {
+  if (actor.role !== 'admin') throw new HttpError(403, 'Only an administrator can set first passwords');
+  const pw = String(password || '');
+  if (pw.length < 8) throw new HttpError(400, 'The password needs at least 8 characters');
+  if (!Array.isArray(userIds) || !userIds.length) throw new HttpError(400, 'Tick at least one person');
+  const open = new Map(neverSignedIn(actor).map(u => [u.user_id, u]));
+  return tx(() => {
+    const done = [];
+    for (const id of userIds) {
+      const u = open.get(Number(id));
+      if (!u) continue; // signed in meanwhile, or not allowed
+      db.prepare('UPDATE users SET pass_hash = ?, must_change = 1 WHERE id = ?').run(hashPassword(pw), u.user_id);
+      audit(actor.name, 'users', u.user_id, 'update', `${u.username}: first password set by the administrator (never signed in; must change at first sign-in)`);
+      done.push(u.username);
+    }
+    return { done };
+  });
+}
+
 // Logins for many people at once, all or none. The temporary passwords come back once, to the person who pressed the button.
 export function createLogins(list, actor) {
   if (!Array.isArray(list) || !list.length) throw new HttpError(400, 'Tick at least one employee');

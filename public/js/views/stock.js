@@ -191,6 +191,12 @@ export async function stockEntryView(root) {
       h('button.btn.small', { type: 'button', title: 'Part of this material is for another project: add a second line for it', style: { marginTop: '4px' },
         onclick: () => { lines.splice(i + 1, 0, { po_line: l.po_line, item_id: l.item_id, qty: '', rate: l.rate, gst: l.gst, hsn: l.hsn, uom: l.uom, poPending: l.poPending, project_id: null }); render(); } }, '+ Another project'));
   }
+  // Several departments on one slip: a department per line (blank = the one at the top: issued to / transfer to / department).
+  const lineDeptCell = (l, i) => h('td', { style: { minWidth: '160px' } },
+    h('select', { onchange: e => { l.department = e.target.value || null; } }, h('option', { value: '' }, '(as above)'), COMPANY_DEPARTMENTS.map(d => h('option', { value: d, selected: l.department === d }, d))),
+    h('button.btn.small', { type: 'button', title: 'Part of this material is for another department: add a second line for it', style: { marginTop: '4px' },
+      onclick: () => { lines.splice(i + 1, 0, { ...l, qty: '', department: null }); render(); } }, '+ Another department'));
+  const deptCol = () => !fromDept();
   function poPicker(l) {
     const cur = Number.isInteger(l.po_line) ? l.po_line + 1 : null;
     const used = new Set(lines.filter(x => x !== l && Number.isInteger(x.po_line)).map(x => x.po_line + 1));
@@ -280,6 +286,7 @@ export async function stockEntryView(root) {
     if (['OUTWARD', 'TRANSFER'].includes(type)) F.push(field('Requested By', sv('requested_by', state.people.map(x => x.name))), field('Purpose', v('purpose', h('input'))));
     // To a department (traced in Store → Department Stores), a job-work vendor or a site
     if (type === 'TRANSFER') F.push(field('From', (() => { const w = sv('from_location', ['Store', ...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating']); w.firstChild.addEventListener('change', () => loadHeld()); return w; })(), 'Store, or a department / place sending material on (to the store or anywhere)'), field('To (department / place) *', sv('to_location', [...COMPANY_DEPARTMENTS.filter(d => !['Management', 'Admin / HR', 'Accounts'].includes(d)), 'VRS Engineering', 'Shree Perforater', 'Aradhya Powder Coating', 'Site'])));
+    if (!['OUTWARD', 'RETURN', 'SCRAP', 'TRANSFER'].includes(type)) F.push(field('Department', sv('department', COMPANY_DEPARTMENTS), 'For all lines; for several departments choose it on each line below'));
     if (type === 'RETURN') F.push(field('Original Issue No', v('against_issue_no', h('input'))));
     if (type === 'RETURN') F.push(field('Reason for Entry *', v('reason', h('select', [''].concat(RETURN_REASONS).map(o => h('option', { value: o }, o || '— choose the reason —'))))));
     else if (['SCRAP', 'ADJUST'].includes(type)) F.push(field('Reason', sv('reason', type === 'SCRAP' ? ['Rusting', 'Expiry', 'Faulty', 'Cut', 'Damaged'] : ['Faulty', 'Rework', 'Excess', 'Physical count'])));
@@ -321,6 +328,7 @@ export async function stockEntryView(root) {
         type === 'INWARD' ? h('td', h('input', { value: l.batch_no || '', placeholder: 'batch / lot', style: { width: '100px' }, oninput: e => { l.batch_no = e.target.value; } })) : null,
         type === 'INWARD' ? h('td', h('input', { value: l.rack ?? it?.location ?? '', placeholder: 'rack / bin', style: { width: '90px' }, oninput: e => { l.rack = e.target.value; } })) : null,
         perLine() ? lineProjectCell(l, i) : null,
+        deptCol() ? lineDeptCell(l, i) : null,
         h('td', h('input', { value: l.remark || '', placeholder: 'remark', oninput: e => { l.remark = e.target.value; } })),
         h('td', h('button.icon-btn.del', { title: 'Remove', onclick: () => { lines.splice(i, 1); if (!lines.length) lines.push({ item_id: null, qty: '' }); render(); } }, '✕')));
     });
@@ -328,7 +336,7 @@ export async function stockEntryView(root) {
       h('div.card', h('div.form-grid', headerFields())),
       po && type === 'INWARD' ? poStatus(po) : null,
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), type === 'INWARD' ? h('th', 'HSN Code') : null, h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, perLine() ? h('th', 'Project') : null, h('th', 'Remark'), h('th'))),
+        h('thead', h('tr', h('th', '#'), (boq || bom) ? h('th', `${bom ? 'BOQ' : 'Work order'} material being sent *`) : null, po && type === 'INWARD' ? h('th', 'PO material received *') : null, h('th', (boq || bom || po) ? 'Store item *' : 'Item *'), type === 'INWARD' ? h('th', 'HSN Code') : null, h('th.num', 'In stock'), h('th', type === 'ADJUST' ? 'Qty (+/-) *' : 'Qty *'), priced ? h('th', type === 'JOB_IN' ? 'Price / piece' : 'Price / piece *') : null, priced ? h('th.num', 'Value') : null, type === 'INWARD' ? h('th', 'Batch / lot') : null, type === 'INWARD' ? h('th', 'Rack / bin') : null, perLine() ? h('th', 'Project') : null, deptCol() ? h('th', 'Department') : null, h('th', 'Remark'), h('th'))),
         h('tbody', rows))),
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', padding: '10px' } },
           h('button.btn.small', { onclick: () => { lines.push({ item_id: null, qty: '' }); render(); } }, '+ Add item'),
