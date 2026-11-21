@@ -25,6 +25,7 @@ import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
 import * as handover from './handover.js';
 import * as bod from './bod.js';
+import * as orderdocs from './orderdocs.js';
 import * as salesfin from './salesfin.js';
 import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
@@ -434,6 +435,8 @@ api.get('/enquiries/:id/bod', wrap(req => { if (!canView('enquiries', req.user.r
 api.get('/enquiries/:id/bod.xlsx', wrap(async (req, res) => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access');
   const wb = await bod.workbook(req.params.id); res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="Basis-of-Design-${req.params.id}.xlsx"`); await wb.xlsx.write(res); res.end(); return undefined; }));
 api.post('/enquiries/:id/bod/confirm', need('enquiries'), wrap(req => bod.confirm(req.params.id, req.user)));
+api.post('/quotations/:id/generate-order', need('sales_orders'), wrap(req => orderdocs.generate(req.params.id, req.user)));
+api.get('/sales_orders/:id/client-link', wrap(req => { if (!canView('sales_orders', req.user.role)) throw new HttpError(403, 'No access'); return orderdocs.linkInfo(req.params.id); }));
 api.post('/enquiries/:id/submit-to-sales', need('enquiries'), wrap(req => handover.submitToSales(req.params.id, req.user)));
 api.post('/enquiries/:id/contact', need('enquiries'), wrap(req => handover.recordContact(req.params.id, req.body, req.user)));
 api.get('/enquiries-waiting-contact', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return handover.waitingForContact(); }));

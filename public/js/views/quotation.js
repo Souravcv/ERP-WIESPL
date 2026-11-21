@@ -158,6 +158,12 @@ export async function quotationView(root, id) {
       const so = await post(`/quotations/${q.id}/convert`, { client_po_no: po.value, client_po_date: dt.value || null });
       location.hash = `#/view/sales_orders/${so.id}`;
     }) }, '🤝 Won → Sales Order'));
+    if (canWrite('sales_orders', state.user.role) && ['Approved', 'Sent', 'Won'].includes(q.status)) A.push(h('button.btn.primary', { title: 'Makes the client purchase order (with an approval link for the client) and the internal work order', onclick: act(async () => {
+      if (!(await confirmBox('Make the Purchase Order and the Work Order from this quotation? The client gets a link to approve the Purchase Order.', 'Make both'))) return;
+      const r = await post(`/quotations/${q.id}/generate-order`);
+      toast(`Purchase order ${r.sales_order.so_no}${r.work_order ? ` and work order ${r.work_order.boq_no} are ready` : ` is ready. Work order not made: ${r.work_order_error}`}`);
+      location.hash = `#/view/sales_orders/${r.sales_order.id}`;
+    }) }, '📑 Make Purchase Order + Work Order'));
     if (can && ['Approved', 'Sent'].includes(q.status)) A.push(h('button.btn.danger', { onclick: act(async () => { if (await confirmBox('Mark this quotation as Lost?')) { await post(`/quotations/${q.id}/status`, { status: 'Lost' }); reload(); } }) }, 'Mark Lost'));
     if (can && q.status !== 'Draft') A.push(h('button.btn', { onclick: act(async () => {
       if (!(await confirmBox('Create a new revision (R+1) of this quotation for editing?'))) return;

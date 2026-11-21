@@ -558,6 +558,14 @@ function actionsFor(entity, row, reload, ctx = {}) {
       break;
     }
     case 'sales_orders': {
+      if (can('sales_orders')) A.push(h('button.btn' + (row.client_approved_at ? '.good' : '.primary'), { onclick: go(async () => {
+        const info = await api(`/sales_orders/${id}/client-link`);
+        if (!info.token) { toast('Make the Purchase Order from the quotation first (📑 Make Purchase Order + Work Order)'); return; }
+        const url = `${location.origin}/po.html?t=${encodeURIComponent(info.token)}`;
+        const box = h('input', { value: url, readonly: true, style: { width: '100%' }, onfocus: e => e.target.select() });
+        await modal('Client approval link', h('div.grid', h('p', info.approved_at ? `✔ Approved on ${info.approved_at} by ${info.approved_by}, ${info.role}${info.po_no ? ` · client PO ${info.po_no}` : ''}.` : 'Send this link to the client. They check the order and approve it with their name, designation and signature.'), box),
+          [{ label: 'Close', value: false }, { label: '📋 Copy link', cls: 'primary', action: async () => { try { await navigator.clipboard.writeText(url); toast('Link copied'); } catch { box.select(); toast('Press Ctrl+C to copy'); } return false; } }]);
+      }) }, row.client_approved_at ? '✔ Client approved · link' : '🔗 Client approval link'));
       if (row.quotation_id) A.push(h('a.btn', { href: `#/quotation/${row.quotation_id}` }, 'Quotation'));
       const approved = ['Approved', 'In Execution', 'Completed'].includes(row.status);
       if (['Draft', 'Rejected'].includes(row.status) && can('sales_orders')) A.push(h('button.btn.primary', { onclick: submit }, '📤 Submit to GM'));

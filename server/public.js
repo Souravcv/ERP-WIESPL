@@ -1,5 +1,6 @@
 // Client-facing enquiry form (no login): progress is saved as the visitor goes, and on submit an
 // enquiry is created in the Enquiry Register with a lead score, and sales get a pop-up.
+import * as orderdocs from './orderdocs.js';
 import crypto from 'node:crypto';
 import express from 'express';
 import { db, getSettings } from './db.js';
@@ -145,6 +146,9 @@ export function publicRouter() {
   const wrap = fn => async (req, res, next) => { try { const out = await fn(req, res); if (out !== undefined && !res.headersSent) res.json(out); } catch (e) { next(e); } };
 
   r.get('/config', wrap(() => publicConfig()));
+  // the client's purchase order approval link (server/orderdocs.js)
+  r.get('/po/:token', wrap(req => { limit(req, 'po', 120, 10); return orderdocs.publicView(req.params.token); }));
+  r.post('/po/:token/approve', express.json({ limit: '250kb' }), wrap(req => { limit(req, 'poapprove', 10, 30); return orderdocs.publicApprove(req.params.token, req.body, req.ip); }));
   r.get('/part-photos', wrap(() => publicPhotos()));
   r.get('/part-photo/:id', (req, res, next) => { try { const p = photoFile(req.params.id); res.set('Cache-Control', 'public, max-age=86400'); res.type(p.mime).sendFile(p.full); } catch (e) { next(e); } });
 
