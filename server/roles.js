@@ -47,6 +47,15 @@ export function seedRoles() {
     if (r) { const p = parse(r.perms); p.functions = [...new Set([...(p.functions || []), 'notify_enquiry'])]; db.prepare("UPDATE roles SET perms = ? WHERE name = 'sales'").run(JSON.stringify(p)); }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_web_enquiry_v1', '\"1\"')").run();
   }
+  // Functions added in Nov 2026 (Sales Finance check, Accept & Publish, client PO pop-up): the built-in roles get their defaults once.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_sales_flow_v1'").get()) {
+    const NEW = ['sales_fin', 'sales_fin_rates', 'po_publish', 'notify_client_po'];
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const p = parse(r.perms), add = (DEFAULT_FUNCTIONS[r.name] || []).filter(fn => NEW.includes(fn) && !(p.functions || []).includes(fn));
+      if (add.length) db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...(p.functions || []), ...add] }), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_sales_flow_v1', '\"1\"')").run();
+  }
   // PO approval became Purchase Head check → GM → Commercial (prices, payment terms, due dates).
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_po_flow_v2'").get()) {
     for (const [name, fn] of [['purchase_head', 'po_check'], ['accounts', 'po_commercial'], ['manager', 'po_check'], ['manager', 'po_commercial']]) {

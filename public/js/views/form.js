@@ -557,7 +557,36 @@ function actionsFor(entity, row, reload, ctx = {}) {
       }
       break;
     }
+    case 'meetings': {
+      const attendees = Array.isArray(row.attendees) ? row.attendees : [];
+      if (row.sales_order_id) A.push(h('a.btn', { href: `#/view/sales_orders/${row.sales_order_id}` }, 'Sales order'));
+      if (can('meetings') && row.status === 'Scheduled') {
+        A.push(h('button.btn.good', { title: 'Saves the minutes, marks who came and sends the minutes to everyone invited', onclick: go(async () => {
+          if (ctx.save) await ctx.save({ quiet: true });
+          const fresh = await api(`/meetings/${id}`);
+          if (!String(fresh.minutes || '').trim()) { toast('Type the minutes of the meeting first'); return; }
+          const boxes = attendees.map(a => [a.name, h('input', { type: 'checkbox', checked: a.need === 'Mandatory' }), a]);
+          const r = await modal('Hold the meeting: who came?', h('div.grid', h('p.muted', 'Tick the people who came. The minutes are saved and sent to everyone who was invited.'),
+            ...boxes.map(([n, b, a]) => h('label', { style: { display: 'block' } }, b, ` ${n}${a.post ? ' · ' + a.post : ''} (${a.need})`))),
+            [{ label: 'Cancel', value: false }, { label: '✔ Hold and send minutes', cls: 'good', action: () => api(`/meetings/${id}/hold`, { method: 'POST', body: { attended: boxes.filter(([, b]) => b.checked).map(([n]) => n) } }) }]);
+          if (!r) return; toast(`Minutes saved and sent to ${r.notified} people`); reload();
+        }) }, '✔ Hold · save minutes'));
+        A.push(h('button.btn.danger', { onclick: go(async () => { if (!(await confirmBox('Cancel this meeting? Everyone invited is told.', 'Cancel the meeting'))) return; await post(`/meetings/${id}/cancel`); reload(); }) }, 'Cancel meeting'));
+      }
+      break;
+    }
     case 'sales_orders': {
+      if (row.published_at && can('meetings')) A.push(h('button.btn.primary', { onclick: go(async () => {
+        const info = await api(`/sales_orders/${id}/publish`);
+        const date = h('input', { type: 'date', value: today() }), time = h('input', { placeholder: 'For example 11:00' }), venue = h('input', { placeholder: 'Room or meeting link' });
+        const opt = info.optional.map(([k, l]) => [k, h('input', { type: 'checkbox' }), l]);
+        const r = await modal("📅 Schedule the heads' meeting", h('div.grid', h('label', 'Date', date), h('label', 'Time', time), h('label', 'Venue / link', venue),
+          h('p', h('b', 'Invited (always): '), info.mandatory.map(m => m[1]).join(', ')), h('b', 'Also invite (optional):'), ...opt.map(([, b, l]) => h('label', { style: { display: 'block' } }, b, ' ', l))),
+          [{ label: 'Cancel', value: false }, { label: 'Schedule and invite', cls: 'primary', action: () => api(`/sales_orders/${id}/meeting`, { method: 'POST', body: { date: date.value, time: time.value, venue: venue.value, optional: opt.filter(([, b]) => b.checked).map(([k]) => k) } }) }]);
+        if (!r) return;
+        toast(`Meeting scheduled. ${r.invited} invited${r.missing_heads.length ? `. No user found for: ${r.missing_heads.join(', ')}` : ''}`);
+        location.hash = `#/view/meetings/${r.id}`;
+      }) }, "📅 Schedule heads' meeting"));
       if (hasFunction(state.user.role, 'po_publish') && !row.published_at && !['Pending Approval', 'Cancelled', 'Completed'].includes(row.status)) A.push(h('button.btn.good', { title: 'Accounts & Finance: accept the client purchase order and tell the heads', onclick: go(async () => {
         const info = await api(`/sales_orders/${id}/publish`);
         const opt = info.optional.map(([k, l]) => [k, h('input', { type: 'checkbox' }), l]);

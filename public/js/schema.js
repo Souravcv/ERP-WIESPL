@@ -171,6 +171,8 @@ ROLE_SEES.store.push('production_orders');
 ROLE_SEES.production_manager = [...ROLE_SEES.production];
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
+// Office roles (the ones who see approvals) see the meetings.
+for (const list of Object.values(ROLE_SEES)) if (list.includes('approvals')) list.push('meetings');
 // Whoever sees projects sees their schedule (Project Planner).
 for (const list of Object.values(ROLE_SEES)) if (list.includes('projects')) list.push('schedule_activities', 'schedule_baselines');
 Object.assign(ROLE_SEES, { sales_head: ROLE_SEES.sales, marketing: ROLE_SEES.sales, finance_head: ROLE_SEES.accounts, chief_engineer: ROLE_SEES.technical, qc_head: ROLE_SEES.technical, design_head: ROLE_SEES.design_engineer,
@@ -547,6 +549,36 @@ export const ENTITIES = {
       { key: 'assigned_to', label: 'Assigned To', type: 'person', default: 'me' },
       { key: 'next_date', label: 'Next Follow-up Date', type: 'date' },
       { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Done'], default: 'Open' },
+    ],
+  },
+  // Meetings (management discussion, Nov 2026): the heads' meeting after a purchase order is published, and any other meeting.
+  // Scheduled from the sales order (attendees told), minutes typed here, then "Hold" saves them and tells everyone.
+  meetings: {
+    label: 'Meetings', singular: 'Meeting', group: 'CRM', icon: '📅', write: ['admin', 'manager', 'md', 'sales_head', 'finance_head', 'accounts', 'project_head', 'design_head', 'production_manager', 'marketing', 'chief_engineer', 'sales'],
+    display: "{t}.date || ' · ' || {t}.title",
+    search: ['title', 'venue', 'agenda', 'minutes', 'scheduled_by'],
+    list: ['date', 'time', 'title', 'kind', 'sales_order_id', 'venue', 'status'],
+    statusField: 'status',
+    fields: [
+      { key: 'title', label: 'Meeting Title', type: 'text', required: true, span: 2 },
+      { key: 'kind', label: 'Kind', type: 'select', options: ["Heads' meeting (new order)", 'Other'], default: "Heads' meeting (new order)" },
+      { key: 'date', label: 'Date', type: 'date', required: true, default: 'today' },
+      { key: 'time', label: 'Time', type: 'text', hint: 'For example 11:00 or 4:30 pm' },
+      { key: 'venue', label: 'Venue / Meeting Link', type: 'text' },
+      { key: 'sales_order_id', label: 'Sales Order', type: 'ref', ref: 'sales_orders' },
+      { key: 'enquiry_id', label: 'Enquiry', type: 'ref', ref: 'enquiries' },
+      { key: 'attendees', label: 'Attendees', type: 'lines', span: 2, amounts: false, addLabel: '+ Add attendee', newLine: { name: '', post: '', need: 'Optional', attended: '' }, columns: [
+        { key: 'name', label: 'Name', type: 'text', width: 170, required: true }, { key: 'post', label: 'Post', type: 'text', width: 150 },
+        { key: 'need', label: 'Needed', type: 'select', options: ['Mandatory', 'Optional'], width: 110 }, { key: 'attended', label: 'Attended', type: 'select', options: ['', 'Yes', 'No'], width: 100 }] },
+      { key: 'agenda', label: 'Agenda', type: 'textarea', span: 2, rows: 5, default: "1. Challenges of finishing before the deadline: material lead times, factory load, site readiness, manpower\n2. Acceptance date, date of the execution drawings and the client's drawing approval date\n3. Targets and who owns what" },
+      { key: 'minutes', label: 'Minutes of Meeting', type: 'textarea', span: 2, rows: 10, hint: 'Type what was discussed and decided. Then press Hold: the minutes are saved and sent to everyone.' },
+      { key: 'decisions', label: 'Action Points', type: 'lines', span: 2, amounts: false, addLabel: '+ Add action', newLine: { action: '', owner: '', due: '', status: 'Open' }, columns: [
+        { key: 'action', label: 'Action', type: 'text', width: 280 }, { key: 'owner', label: 'Owner', type: 'text', width: 140 },
+        { key: 'due', label: 'Due', type: 'date', width: 130 }, { key: 'status', label: 'Status', type: 'select', options: ['Open', 'Done'], width: 100 }] },
+      { key: 'status', label: 'Status', type: 'select', options: ['Scheduled', 'Held', 'Cancelled'], default: 'Scheduled', readonly: true },
+      { key: 'scheduled_by', label: 'Scheduled By', type: 'text', readonly: true },
+      { key: 'held_at', label: 'Held / Minutes Saved On', type: 'text', readonly: true },
+      { key: 'minutes_by', label: 'Minutes By', type: 'text', readonly: true },
     ],
   },
   quotations: {

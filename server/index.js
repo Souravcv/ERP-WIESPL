@@ -26,6 +26,7 @@ import * as wf from './workflows.js';
 import * as handover from './handover.js';
 import * as bod from './bod.js';
 import * as orderdocs from './orderdocs.js';
+import * as meetings from './meetings.js';
 import * as salesfin from './salesfin.js';
 import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
@@ -437,6 +438,9 @@ api.get('/enquiries/:id/bod.xlsx', wrap(async (req, res) => { if (!canView('enqu
 api.post('/enquiries/:id/bod/confirm', need('enquiries'), wrap(req => bod.confirm(req.params.id, req.user)));
 api.post('/quotations/:id/generate-order', need('sales_orders'), wrap(req => orderdocs.generate(req.params.id, req.user)));
 api.get('/sales_orders/:id/publish', wrap(req => { if (!canView('sales_orders', req.user.role)) throw new HttpError(403, 'No access'); return orderdocs.publishInfo(req.params.id); }));
+api.post('/sales_orders/:id/meeting', need('meetings'), wrap(req => meetings.scheduleForOrder(req.params.id, req.body, req.user)));
+api.post('/meetings/:id/hold', need('meetings'), wrap(req => meetings.hold(req.params.id, req.body, req.user)));
+api.post('/meetings/:id/cancel', need('meetings'), wrap(req => meetings.cancel(req.params.id, req.user)));
 api.post('/sales_orders/:id/publish', wrap(req => orderdocs.publish(req.params.id, req.body, req.user)));
 api.get('/sales_orders/:id/client-link', wrap(req => { if (!canView('sales_orders', req.user.role)) throw new HttpError(403, 'No access'); return orderdocs.linkInfo(req.params.id); }));
 api.post('/enquiries/:id/submit-to-sales', need('enquiries'), wrap(req => handover.submitToSales(req.params.id, req.user)));

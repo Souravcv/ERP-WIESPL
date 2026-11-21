@@ -33,7 +33,7 @@ export const STEPS = [
   S('s8a', 1, 'Tell Marketing, Technical Sales and Sales Finance: it is now an order', 'Sales Head', 'step', 'It is no longer a lead. Technical Sales details it as an order; Sales Finance tracks when money is due and when to bill.'),
   // 2 · Order acceptance
   S('s9', 2, 'Check the PO against the quotation', 'Finance', 'step', 'Price · terms · payment schedule.'),
-  S('s10', 2, 'Hold the heads\' meeting', 'All heads (Finance calls it)', 'step', 'Lead times · factory load · site · manpower. Minutes recorded.'),
+  S('s10', 2, 'Hold the heads\' meeting', 'All heads (Finance calls it)', 'step', 'Lead times · factory load · site · manpower. Schedule it from the sales order; minutes are typed in the meeting record.', { auto: 'meeting' }),
   S('s11', 2, 'Accept the order, send the acceptance letter', 'Management', 'gate', 'Drawing date · client approval date · late approval = client\'s delay.', { due: { after: 's8', days: 4 } }),
   S('s12', 2, 'Visit the site', 'Project / design team', 'step', 'Ducting route · AHU position · doors · windows · scrub area. Photos.'),
   S('s13', 2, 'Make the execution drawings', 'Project design', 'step', 'From the site visit, by the date in the letter. Upload DWG / PDF.', { auto: 'drawings' }),
