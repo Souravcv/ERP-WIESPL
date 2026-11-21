@@ -24,6 +24,7 @@ import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
 import * as handover from './handover.js';
+import * as bod from './bod.js';
 import * as salesfin from './salesfin.js';
 import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
@@ -429,6 +430,10 @@ const need = (entity) => (req, res, next) => canWrite(entity, req.user.role) ? n
 api.get('/costing_sheets/:id/sales-fin', wrap(req => salesfin.view(req.params.id, req.user)));
 api.post('/costing_sheets/:id/sales-fin', wrap(req => salesfin.check(req.params.id, req.body, req.user)));
 api.put('/sales-fin/rates', wrap(req => salesfin.saveRates(req.body || {}, req.user)));
+api.get('/enquiries/:id/bod', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return { ...bod.build(req.params.id), can_confirm: canWrite('enquiries', req.user.role) }; }));
+api.get('/enquiries/:id/bod.xlsx', wrap(async (req, res) => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access');
+  const wb = await bod.workbook(req.params.id); res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition', `attachment; filename="Basis-of-Design-${req.params.id}.xlsx"`); await wb.xlsx.write(res); res.end(); return undefined; }));
+api.post('/enquiries/:id/bod/confirm', need('enquiries'), wrap(req => bod.confirm(req.params.id, req.user)));
 api.post('/enquiries/:id/submit-to-sales', need('enquiries'), wrap(req => handover.submitToSales(req.params.id, req.user)));
 api.post('/enquiries/:id/contact', need('enquiries'), wrap(req => handover.recordContact(req.params.id, req.body, req.user)));
 api.get('/enquiries-waiting-contact', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return handover.waitingForContact(); }));

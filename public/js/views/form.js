@@ -1,4 +1,4 @@
-import { h, api, state, toast, fail, modal, confirmBox, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry, backLink, goBack, redirect } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, download, fieldInput, refOptions, clearRefCache, badge, money, fmtDate, today, busy, reservedRetry, backLink, goBack, redirect } from '../ui.js';
 import { ENTITIES, canWrite, canView, canDelete, hasFunction, APPROVAL_FLOWS, FUNCTIONS, ITEM_CATEGORIES, UOMS, WO_DEPARTMENTS, ROLE_INFO } from '../schema.js';
 import { linesTotals, inr, round2, poTotals, PO_CHARGES } from '../calc.js';
 import { table, newRecord, recordHref } from './list.js';
@@ -344,6 +344,25 @@ function commercialPanel(po, reload) {
     h('div.toolbar', { style: { marginTop: '10px' } }, atStep ? [h('button.btn', { onclick: saveCommercial }, '💾 Save'), h('button.btn.good', { onclick: approve }, '✔ Save & approve PO')] : h('button.btn.primary', { onclick: saveSchedule }, '💾 Save payment schedule')));
 }
 
+// Basis of Design of an enquiry: one row per OT from the OT list and the CAD drawing, the design figures of the detailed form
+async function bodDialog(id, reload) {
+  const d = await api(`/enquiries/${id}/bod`);
+  const n = v => (v == null || v === '' ? '' : Number(v).toLocaleString('en-IN'));
+  const cols = [['OT', r => r.name], ['Specialty', r => `${r.specialty} · Type ${r.type}`], ['Size (ft)', r => (r.length ? `${r.length} × ${r.width} × ${r.height}` : '—')], ['Size from', r => r.from],
+    ['Floor sq ft', r => n(r.area)], ['Air changes', r => r.acph], ['Supply cfm', r => n(r.cfm)], ['Fresh air cfm', r => n(r.fresh)], ['AC TR', r => r.tr], ['Wall panels sq ft', r => n(r.walls)], ['Ceiling sq ft', r => n(r.ceiling)]];
+  const body = h('div', d.rows.length
+    ? h('div.table-wrap', h('table.data', h('thead', h('tr', cols.map(c => h('th', c[0])))), h('tbody', d.rows.map(r => h('tr', cols.map(c => h('td', c[1](r)))))),
+        h('tfoot', h('tr', h('th', { colspan: 4 }, `Total · ${d.rows.length} OT(s)`), h('th.num', n(d.totals.floor)), h('th'), h('th.num', n(d.totals.cfm)), h('th.num', n(d.totals.fresh)), h('th.num', d.totals.tr), h('th.num', n(d.totals.walls)), h('th.num', n(d.totals.ceiling))))))
+    : h('p', 'No OTs yet. Add them in the OT List of the enquiry (name, kind, specialty), or upload the CAD drawing with the OT names and sizes in it.'),
+    d.missing.length ? h('p', { style: { color: 'var(--bad)' } }, `No size yet for: ${d.missing.join(', ')}. Enter the size in the OT list, or write the name and size in the CAD drawing.`) : null,
+    d.ducts.length ? h('p.muted', `Ducting in the CAD: about ${d.ducts.map(x => `${x.metres} m (${x.file})`).join(', ')} of duct lines in the whole drawing.`) : null,
+    h('p.muted', d.basis), d.confirmed ? h('p', `✔ Confirmed by ${d.confirmed.by} on ${d.confirmed.at}`) : null);
+  const btns = [{ label: 'Close', value: false }, { label: '⬇ Excel sheet', action: async () => { download(`/api/enquiries/${id}/bod.xlsx`); return false; } }];
+  if (d.can_confirm) btns.push({ label: d.confirmed ? 'Confirm again' : '✔ Confirm Basis of Design', cls: 'primary', action: () => api(`/enquiries/${id}/bod/confirm`, { method: 'POST' }) });
+  const r = await modal(`📐 Basis of Design · ${d.enquiry.no || ''} ${d.enquiry.hospital || ''}`, body, btns, { wide: true });
+  if (r) { toast('Basis of Design confirmed'); reload(); }
+}
+
 // Sales Finance rates (Finance Head): cost per day of each city, the standard manpower cost per day, the minimum profit %
 async function ratesDialog(rates, reload) {
   const city = h('input', { placeholder: 'City, e.g. Pune' }), rate = h('input', { type: 'number', placeholder: 'Cost per day ₹' });
@@ -454,6 +473,7 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
     case 'enquiries': {
+      A.push(h('button.btn' + (row.bod_at ? '.good' : ''), { title: 'Made by itself from the OT list and the CAD drawing', onclick: go(() => bodDialog(id, reload)) }, row.bod_at ? '📐 Basis of Design ✔' : '📐 Basis of Design'));
       if (can('enquiries') && !row.submitted_at) A.push(h('button.btn.primary', { onclick: go(async () => {
         if (!(await confirmBox('Are you sure you have reviewed everything, and all the data is correct to your knowledge? The enquiry goes to Sales, and Sales must contact the client within 24 hours.', 'Yes, submit to Sales'))) return;
         await post(`/enquiries/${id}/submit-to-sales`); toast('Submitted to Sales'); reload();
