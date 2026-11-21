@@ -23,6 +23,7 @@ import * as sig from './signatures.js';
 import { tx } from './db.js';
 import { nextItemCode } from './hooks.js';
 import * as wf from './workflows.js';
+import * as handover from './handover.js';
 import * as flow from './boqflow.js';
 import { myTasks } from './tasks.js';
 import * as pay from './payments.js';
@@ -424,6 +425,9 @@ api.get('/dashboard', wrap(req => {
 // ---------------------------------------------------------------- workflow actions
 const need = (entity) => (req, res, next) => canWrite(entity, req.user.role) ? next() : res.status(403).json({ error: 'You do not have permission for this action' });
 
+api.post('/enquiries/:id/submit-to-sales', need('enquiries'), wrap(req => handover.submitToSales(req.params.id, req.user)));
+api.post('/enquiries/:id/contact', need('enquiries'), wrap(req => handover.recordContact(req.params.id, req.body, req.user)));
+api.get('/enquiries-waiting-contact', wrap(req => { if (!canView('enquiries', req.user.role)) throw new HttpError(403, 'No access'); return handover.waitingForContact(); }));
 api.post('/enquiries/:id/quotation', need('quotations'), wrap(req => wf.quotationFromEnquiry(req.params.id, req.user)));
 // structured detailed-form data for the techno-commercial sheet
 api.get('/enquiries/:id/brief-data', wrap(req => {

@@ -443,6 +443,16 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (canView('invoices', state.user.role)) A.push(h('a.btn', { href: `#/receivables/statement/${id}` }, '📒 Statement'));
       break;
     case 'enquiries': {
+      if (can('enquiries') && !row.submitted_at) A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (!(await confirmBox('Are you sure you have reviewed everything, and all the data is correct to your knowledge? The enquiry goes to Sales, and Sales must contact the client within 24 hours.', 'Yes, submit to Sales'))) return;
+        await post(`/enquiries/${id}/submit-to-sales`); toast('Submitted to Sales'); reload();
+      }) }, '📤 Submit to Sales'));
+      if (can('enquiries') && row.submitted_at && !row.contact_at) A.push(h('button.btn.primary', { title: 'Sales: contact the client within 24 hours of the submit', onclick: go(async () => {
+        const mode = h('select', ['Call', 'Email', 'WhatsApp', 'Visit', 'Other'].map(o => h('option', { value: o }, o))), note = h('input', { placeholder: 'What was said (optional)' });
+        const r = await modal('Record the first contact with the client', h('div.grid', h('label', 'How did you contact the client?', mode), h('label', 'Note', note)),
+          [{ label: 'Cancel', value: false }, { label: 'Save contact', cls: 'primary', action: () => post(`/enquiries/${id}/contact`, { mode: mode.value, note: note.value }) }]);
+        if (!r) return; toast(r.late ? `Saved. This was ${r.hours} hours after the submit: later than 24 hours.` : 'First contact saved'); reload();
+      }) }, '☎ Record first contact'));
       if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { enquiry_id: id, customer_id: row.customer_id || undefined, hospital: row.hospital_name, site: row.place, title: [(row.type_of_work || []).join(', '), row.hospital_name].filter(Boolean).join(' – ') }) }, '🧮 Costing sheet'));
       if (can('quotations')) A.push(h('button.btn.primary', { onclick: go(() => post(`/enquiries/${id}/quotation`), q => (location.hash = `#/quotation/${q.id}`)) }, '🧾 Create Quotation'));
       if (can('followups')) A.push(h('button.btn', { onclick: () => newRecord('followups', { enquiry_id: id, ...(row.customer_id ? { customer_id: row.customer_id } : {}) }) }, '📞 Log Follow-up'));

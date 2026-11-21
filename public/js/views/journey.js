@@ -1,4 +1,4 @@
-// The order journey (public/js/journey.js): every order on a board by the phase it is in, and one order's 41 steps in
+// The order journey (public/js/journey.js): every order on a board by the phase it is in, and one order's 45 steps in
 // six columns, as on the End-to-End Flow sheet. Steps tick by hand (done / not needed, with a note) or by themselves
 // when the CRM already records the fact.
 import { h, api, toast, fail, busy, modal, fmtDate, today } from '../ui.js';
@@ -50,7 +50,7 @@ export async function journeyView(root, id) {
   if (id === 'guide') return guideView(root);
   if (id) return detail(root, Number(id));
   const { journeys, can_assign, pilot } = await api('/journeys');
-  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 41 steps'),
+  const head = h('div.page-head', h('h1', '🧭 Order Journey'), h('div.actions', h('span.muted', 'From the first enquiry to the OT handover: 6 phases, 45 steps'),
     h('a.btn', { href: '#/journey/guide' }, '📘 Pilot & my part'), h('a.btn', { href: '#/journey/dashboard' }, '📊 Dashboard'), can_assign ? h('a.btn', { href: '#/journey/team' }, '👥 Team') : null, h('a.btn', { href: '#/journey/raci' }, '📋 Who does what')));
   const cols = PHASES.map(p => {
     const here = journeys.filter(j => !j.done && j.phase === p.no);

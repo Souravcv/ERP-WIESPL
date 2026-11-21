@@ -1,5 +1,5 @@
 // The order journey: one modular OT project from the first enquiry to the OT handover, as in the End-to-End Flow
-// (A3, Nov 2026) and the Order-to-Execution Process Guide: 6 phases, 41 steps. Shared by the server (server/journey.js)
+// (A3, Nov 2026) and the Order-to-Execution Process Guide: 6 phases, 45 steps. Shared by the server (server/journey.js)
 // and the screen (views/journey.js).
 //
 // kind: start / step / gate (an approval or check: work stops until it passes) / client / vendor / site / end
@@ -19,14 +19,18 @@ export const PHASES = [
 const S = (key, phase, title, who, kind, hint, more = {}) => ({ key, phase, title, who, kind, hint, ...more });
 export const STEPS = [
   // 1 · Enquiry and estimation
-  S('s1', 1, 'Enter the enquiry', 'Marketing', 'start', 'Client, hospital, place, source, requirement.', { auto: 'enquiry' }),
-  S('s2', 1, 'Sales handover', 'Marketing › Sales Head', 'step', 'Marketing checks the type of enquiry, talks to the client, then hands it to the Sales Head. Call notes on the enquiry.'),
+  S('s1', 1, 'Enter the enquiry and submit it to Sales', 'Marketing', 'start', 'Client, hospital, place, source, requirement. Save, then Submit to Sales (Marketing checks their own work first).', { auto: 'enquiry' }),
+  S('s2', 1, 'Sales contacts the client (within 24 hours) and checks the data', 'Sales', 'step', 'Call, email or WhatsApp, recorded on the enquiry. Is anything missing: number of OTs, who does electrical, transport, civil? Missing data: ask Marketing or call the client.', { auto: 'contact' }),
   S('s3', 1, 'Show the sales design to the doctor', 'Sales design team', 'step', 'Layout / 3D / client film. Requirements agreed.'),
-  S('s4', 1, 'Prepare the costing', 'Technical Estimation', 'step', 'Engineering, HVAC, electrical, plumbing.', { auto: 'costing' }),
-  S('s5', 1, 'Review price, scope and request', 'Marketing · Estimation · Sales Head', 'gate', 'Marketing: price · Estimation: complete · Sales Head: matches the request.'),
-  S('s6', 1, 'Decide: take the order or not', 'Finance', 'gate', 'Profit · factory and site capacity · client\'s date. No: close the enquiry.'),
+  S('s3a', 1, 'Make the Basis of Design', 'Technical Sales', 'step', 'From the enquiry and the CAD file of each OT: area, supply CFM, TR, plenum size, temperature, dimensions, panel sq ft, ducting length.'),
+  S('s4', 1, 'Check the quantities and cost the extra scope', 'Technical Sales', 'step', 'Standard BOQ cost is automatic: check it, report a wrong rate to Costing. Cost the non-standard work (electrical, transport, civil, copper piping).', { auto: 'costing' }),
+  S('s5', 1, 'Technical Sales sign-off', 'Technical Sales', 'gate', 'Technically possible, engineering quantities right, heat load and panels checked.'),
+  S('s6', 1, 'Sales Finance check: take the order or not', 'Sales Finance', 'gate', 'Raw material profit · timeline cost (city rate, penalty clause) · manpower · logistics. Below the profit limit: ask a senior for approval. No: close the enquiry.'),
+  S('s6a', 1, 'Sales checks that everything is included', 'Sales Head', 'step', 'The final check from A to Z: scope, beneficiary or scheme terms, nothing missed.'),
+  S('s6b', 1, 'Marketing gives the final OK', 'Marketing', 'gate', 'Price and position of the quotation agreed.'),
   S('s7', 1, 'Send the final quotation', 'Sales Head', 'step', 'Approved quotation, every detail clear.', { auto: 'quotation' }),
   S('s8', 1, 'Receive the client PO', 'Client', 'client', 'PO copy · sales order made.', { auto: 'order' }),
+  S('s8a', 1, 'Tell Marketing, Technical Sales and Sales Finance: it is now an order', 'Sales Head', 'step', 'It is no longer a lead. Technical Sales details it as an order; Sales Finance tracks when money is due and when to bill.'),
   // 2 · Order acceptance
   S('s9', 2, 'Check the PO against the quotation', 'Finance', 'step', 'Price · terms · payment schedule.'),
   S('s10', 2, 'Hold the heads\' meeting', 'All heads (Finance calls it)', 'step', 'Lead times · factory load · site · manpower. Minutes recorded.'),
@@ -98,14 +102,18 @@ export const STATUS = { done: 'Done', na: 'Not needed', open: 'To do' };
 // A first draft from the Order-to-Execution guide and the End-to-End Flow: to be corrected by the MD and GM.
 const R = (r, a, c, i, due, doc) => ({ r, a, c, i, due, doc });
 export const RACI = {
-  s1: R(['marketing'], [], [], ['sales_head'], 'Same day the enquiry comes in', 'Enquiry with client, place, source and requirement'),
-  s2: R(['marketing'], ['sales_head'], ['client'], ['manager'], '1 day after the enquiry', 'Enquiry type and call notes on the enquiry; Sales Head named as owner'),
+  s1: R(['marketing'], [], [], ['sales_head'], 'Same day the enquiry comes in', 'Enquiry with client, place, source and requirement; submitted to Sales'),
+  s2: R(['sales', 'sales_head'], ['sales_head'], ['client', 'marketing'], ['manager'], '1 day (24 hours) after the enquiry is submitted', 'First contact recorded on the enquiry (call, email, WhatsApp or visit)'),
   s3: R(['design_engineer'], ['sales_head'], ['client', 'sales'], ['technical'], '7 days after the enquiry', 'Sales design: layout / 3D / client film shown to the doctor'),
-  s4: R(['technical'], ['chief_engineer'], ['design_engineer'], ['sales'], '5 days after the sales design', 'Costing sheet: engineering, HVAC, electrical, plumbing'),
-  s5: R(['sales_head'], ['marketing', 'technical', 'sales_head'], [], ['finance_head'], '2 days after the costing', 'Review notes: price (Marketing), completeness (Estimation), matches the request (Sales)'),
-  s6: R(['accounts'], ['finance_head'], ['manager', 'production_manager', 'project_head'], ['sales'], '2 days after the review', "Go / no-go note: profit, factory and site capacity, the client's date"),
-  s7: R(['sales_head'], ['manager'], ['technical', 'sales'], ['finance_head'], '2 days after Finance says go', 'Final quotation (approved in the CRM)'),
+  s3a: R(['technical'], ['technical'], ['design_engineer', 'sales'], ['sales_head'], '2 days after the sales design', 'Basis of Design sheet, from the enquiry and the CAD file'),
+  s4: R(['technical'], ['chief_engineer'], ['design_engineer'], ['sales'], '5 days after the sales design', 'Costing sheet: standard BOQ checked, extra scope costed'),
+  s5: R(['technical'], ['technical'], ['design_engineer', 'sales_head'], ['finance_head'], '1 day after the costing', 'Technical sign-off: feasibility, quantities, heat load, panels'),
+  s6: R(['accounts'], ['finance_head'], ['manager', 'production_manager', 'project_head'], ['sales'], '2 days after the technical sign-off', 'Sales Finance note: raw material profit, timeline cost, manpower, logistics, penalty clause; senior approval if the profit is low'),
+  s6a: R(['sales_head'], ['sales_head'], ['technical', 'sales'], ['marketing'], '1 day after Sales Finance says go', 'Final check note: scope complete, nothing missed'),
+  s6b: R(['marketing'], ['marketing'], ['sales_head'], ['finance_head'], '1 day after the final check', 'Final OK on the quotation'),
+  s7: R(['sales_head'], ['manager'], ['technical', 'sales'], ['finance_head'], '2 days after the final OK', 'Final quotation (approved in the CRM)'),
   s8: R(['sales_head'], [], ['client', 'sales'], ['accounts', 'manager'], 'From the client', 'Client PO copy; sales order made from the quotation'),
+  s8a: R(['sales_head'], [], ['marketing', 'technical', 'accounts'], ['manager'], 'Same day as the client PO', 'Marketing, Technical Sales and Sales Finance told: track it as an order'),
   s9: R(['accounts'], ['finance_head'], ['sales'], ['manager'], '1 day after the PO', 'PO checked against the quotation: price, terms, payment schedule'),
   s10: R(['finance_head'], ['manager'], ['project_head', 'design_head', 'purchase_head', 'production_manager', 'qc_head'], ['md'], '2 days after the PO', "Minutes of the heads' meeting: risks to the deadline"),
   s11: R(['manager'], ['md'], ['finance_head', 'project_head'], ['sales', 'design_head'], '4 days after the PO (at most)', 'Acceptance letter: drawing date, client approval date, delay clause'),

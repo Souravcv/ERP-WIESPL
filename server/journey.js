@@ -49,6 +49,7 @@ export function ensureJourneys() {
 // What the CRM already records, for the steps that tick by themselves: { date, text, href } or null
 const AUTO = {
   enquiry: j => { const e = j.enquiry; return e ? { date: e.date, text: `Enquiry ${e.enquiry_no || e.id}`, href: `#/view/enquiries/${e.id}` } : null; },
+  contact: j => { const e = j.enquiry; return e?.contact_at ? { date: String(e.contact_at).slice(0, 10), text: `Client contacted by ${e.contact_by || '?'} (${e.contact_mode || ''}) on ${e.contact_at}`, href: `#/view/enquiries/${e.id}` } : null; },
   costing: j => { const c = j.enquiry && one('SELECT id, cs_no, date FROM costing_sheets WHERE enquiry_id = ? ORDER BY id LIMIT 1', j.enquiry.id); return c ? { date: c.date, text: `Costing ${c.cs_no || c.id}`, href: `#/view/costing_sheets/${c.id}` } : null; },
   quotation: j => { const q = j.enquiry && one("SELECT id, quote_no, date, status FROM quotations WHERE enquiry_id = ? AND status IN ('Approved','Sent','Won') ORDER BY id DESC LIMIT 1", j.enquiry.id); return q ? { date: q.date, text: `Quotation ${q.quote_no || q.id} (${q.status})`, href: `#/view/quotations/${q.id}` } : null; },
   order: j => (j.order ? { date: j.order.client_po_date || j.order.date, text: `Sales order ${j.order.so_no || j.order.id}${j.order.client_po_no ? `, client PO ${j.order.client_po_no}` : ''}`, href: `#/view/sales_orders/${j.order.id}` }
