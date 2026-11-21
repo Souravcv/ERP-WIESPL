@@ -10,6 +10,8 @@ import { convertToSalesOrder } from './workflows.js';
 import { workOrderFromSalesOrder } from './boqflow.js';
 import { notify } from './notify.js';
 import { quoteTotals } from '../public/js/calc.js';
+import { hasFunction } from '../public/js/schema.js';
+import { clearStep, journeyFor } from './journey.js';
 
 const parse = (v, d) => { if (v == null || v === '') return d; if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return d; } };
 const stamp = () => new Date().toLocaleString('sv-SE').slice(0, 16);
@@ -70,4 +72,39 @@ export function publicApprove(tok, body, ip) {
   audit('client', 'sales_orders', so.id, 'client approval', `${name}, ${role}${po ? ', PO ' + po : ''}`);
   notify({ fn: 'notify_client_po', kind: 'order', title: `Client approved the purchase order ${so.so_no}`, body: `${name}, ${role}${po ? ` · client PO ${po}` : ''}. Check it and accept it.`, link: `#/view/sales_orders/${so.id}` }, null);
   return { approved: true, at };
+}
+
+// ---------------------------------------------------------------- Accept & Publish (Accounts & Finance)
+// Accounts & Finance reads the client's purchase order and presses Accept & Publish. The order becomes Approved and the heads are told:
+// Project, Design and Production heads always; MD, GM, Sales Head and Marketing Head when chosen.
+export const MANDATORY_HEADS = [['project_head', 'Project Head'], ['design_head', 'Design Head'], ['production_manager', 'Production Head']];
+export const OPTIONAL_HEADS = [['md', 'MD'], ['manager', 'GM'], ['sales_head', 'Sales Head'], ['marketing', 'Marketing Head']];
+
+export function publishInfo(soId) {
+  const so = getRow('sales_orders', soId);
+  return { published_at: so.published_at || null, published_by: so.published_by || null, client_approved: !!so.client_approved_at, client_po_no: so.client_po_no || null, status: so.status, mandatory: MANDATORY_HEADS, optional: OPTIONAL_HEADS };
+}
+
+export function publish(soId, body, user) {
+  if (!hasFunction(user.role, 'po_publish')) throw new HttpError(403, 'Only Accounts & Finance can accept and publish a purchase order');
+  const so = getRow('sales_orders', soId);
+  if (so.published_at) throw new HttpError(409, `Already published on ${so.published_at} by ${so.published_by}.`);
+  if (!so.client_approved_at && !so.client_po_no) throw new HttpError(409, 'The client has not approved the purchase order yet, and no client PO number is entered. Send the client approval link first.');
+  if (['Pending Approval', 'Cancelled', 'Completed'].includes(so.status)) throw new HttpError(409, `The sales order is ${so.status}: it cannot be published now.`);
+  const optional = (Array.isArray(body?.optional) ? body.optional : []).filter(r => OPTIONAL_HEADS.some(([k]) => k === r));
+  const roles = [...MANDATORY_HEADS.map(([k]) => k), ...optional];
+  const at = stamp();
+  const people = db.prepare(`SELECT name, role FROM users WHERE active = 1 AND role IN (${roles.map(() => '?').join(',')})`).all(...roles);
+  const missing = MANDATORY_HEADS.filter(([k]) => !people.some(p => p.role === k)).map(([, l]) => l);
+  db.prepare("UPDATE sales_orders SET status = 'Approved', approval_stage = NULL, published_at = ?, published_by = ?, approved_by = ? WHERE id = ?")
+    .run(at, user.name, [so.approved_by, `${user.name} (Accounts & Finance, ${at})`].filter(Boolean).join(' · '), so.id);
+  const cust = so.customer_id ? db.prepare('SELECT name FROM customers WHERE id = ?').get(so.customer_id)?.name : '';
+  const n = notify({ userNames: people.map(p => p.name), kind: 'order', title: `New order published: ${cust || so.so_no}`, body: `Sales order ${so.so_no}${so.client_po_no ? ` · client PO ${so.client_po_no}` : ''} · ₹${Math.round(so.order_value || 0).toLocaleString('en-IN')}. Heads' meeting to follow.`, link: `#/view/sales_orders/${so.id}` }, user);
+  // the journey step "Check the PO against the quotation" is this check
+  try {
+    const jid = so.enquiry_id ? journeyFor(so.enquiry_id) : db.prepare('SELECT id FROM journeys WHERE sales_order_id = ?').get(so.id)?.id;
+    if (jid) clearStep(jid, 's9', `PO checked and published by ${user.name} (Accounts & Finance)`, user);
+  } catch { /* no journey for this order */ }
+  audit(user.name, 'sales_orders', so.id, 'accept and publish', `told: ${people.map(p => p.name).join(', ') || 'nobody'}`);
+  return { published_at: at, notified: n, told: people.map(p => ({ name: p.name, role: p.role })), missing_heads: missing };
 }

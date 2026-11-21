@@ -558,6 +558,18 @@ function actionsFor(entity, row, reload, ctx = {}) {
       break;
     }
     case 'sales_orders': {
+      if (hasFunction(state.user.role, 'po_publish') && !row.published_at && !['Pending Approval', 'Cancelled', 'Completed'].includes(row.status)) A.push(h('button.btn.good', { title: 'Accounts & Finance: accept the client purchase order and tell the heads', onclick: go(async () => {
+        const info = await api(`/sales_orders/${id}/publish`);
+        const opt = info.optional.map(([k, l]) => [k, h('input', { type: 'checkbox' }), l]);
+        const body = h('div.grid',
+          info.client_approved ? h('p', `✔ The client approved this order${info.client_po_no ? ` (client PO ${info.client_po_no})` : ''}.`) : h('p', { style: { color: 'var(--bad)' } }, 'The client has not approved yet, and no client PO number is entered. Send the client approval link first.'),
+          h('p', h('b', 'These heads are told (always): '), info.mandatory.map(m => m[1]).join(', ')),
+          h('b', 'Also tell (optional):'), ...opt.map(([, box, l]) => h('label', { style: { display: 'block' } }, box, ' ', l)));
+        const r = await modal('✅ Accept & Publish the purchase order', body, [{ label: 'Cancel', value: false },
+          { label: 'Accept & Publish', cls: 'good', action: () => api(`/sales_orders/${id}/publish`, { method: 'POST', body: { optional: opt.filter(([, b]) => b.checked).map(([k]) => k) } }) }]);
+        if (!r) return;
+        toast(`Published. ${r.told.length} head(s) told${r.missing_heads.length ? `. No user found for: ${r.missing_heads.join(', ')}` : ''}`); reload();
+      }) }, '✅ Accept & Publish'));
       if (can('sales_orders')) A.push(h('button.btn' + (row.client_approved_at ? '.good' : '.primary'), { onclick: go(async () => {
         const info = await api(`/sales_orders/${id}/client-link`);
         if (!info.token) { toast('Make the Purchase Order from the quotation first (📑 Make Purchase Order + Work Order)'); return; }
