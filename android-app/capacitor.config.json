@@ -1,6 +1,6 @@
 {
   "appId": "com.wiespl.attendance",
-  "appName": "WIESPL Attendance",
+  "appName": "WIESPL HRA",
   "webDir": "www",
   "server": {
     "url": "https://rut-flattop-appear.ngrok-free.dev/#/attend",

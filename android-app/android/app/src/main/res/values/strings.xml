@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">WIESPL Attendance</string>
-    <string name="title_activity_main">WIESPL Attendance</string>
+    <string name="app_name">WIESPL HRA</string>
+    <string name="title_activity_main">WIESPL HRA</string>
     <string name="package_name">com.wiespl.attendance</string>
     <string name="custom_url_scheme">com.wiespl.attendance</string>
 

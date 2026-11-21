@@ -33,8 +33,17 @@ const IN = [
   ['🤳', { en: 'If the phone asks: take a selfie', mr: 'फोनने विचारले तर: सेल्फी घ्या', hi: 'फ़ोन पूछे तो: सेल्फ़ी लें' }],
   ['✅', { en: 'You see “Working since …” = done', mr: '“Working since …” दिसले = झाले', hi: '“Working since …” दिखे = हो गया' }],
 ];
+// In the WIESPL HRA Android app some steps differ: it opens straight on My Attendance, and its background service
+// notes the location with the phone locked (`n` = minutes between checks).
+const IN_APP = ['📱', { en: 'Open the WIESPL HRA app', mr: 'WIESPL HRA ॲप उघडा', hi: 'WIESPL HRA ऐप खोलें' }];
+const dayStep = (app, n) => (app
+  ? ['🔒', { en: `Lock the phone and work: the app notes your location every ${n} minutes`, mr: `फोन लॉक करून काम करा: ॲप दर ${n} मिनिटांनी तुमचे लोकेशन नोंदवते`, hi: `फ़ोन लॉक करके काम करें: ऐप हर ${n} मिनट आपकी लोकेशन दर्ज करता है` }]
+  : ['📲', { en: `Keep the CRM open: your location is noted every ${n} minutes`, mr: `CRM उघडे ठेवा: दर ${n} मिनिटांनी तुमचे लोकेशन नोंदवले जाते`, hi: `CRM खुला रखें: हर ${n} मिनट आपकी लोकेशन दर्ज होती है` }]);
+const HELP_APP = ['🚫', { en: '“Location is not allowed”: Settings → Apps → WIESPL HRA → Permissions → Location → Allow all the time',
+  mr: '“Location is not allowed”: Settings → Apps → WIESPL HRA → Permissions → Location → Allow all the time',
+  hi: '“Location is not allowed”: Settings → Apps → WIESPL HRA → Permissions → Location → Allow all the time' }];
 const DAY = [
-  ['📲', { en: 'Keep the CRM open: your location is noted every 15 minutes', mr: 'CRM उघडे ठेवा: दर 15 मिनिटांनी तुमचे लोकेशन नोंदवले जाते', hi: 'CRM खुला रखें: हर 15 मिनट आपकी लोकेशन दर्ज होती है' }],
+  null, // dayStep()
   ['🚶', { en: 'Going out for work or lunch? Press “🚶 Going out”', mr: 'कामासाठी / जेवणासाठी बाहेर जाताय? “🚶 Going out” दाबा', hi: 'काम या खाने के लिए बाहर जा रहे हैं? “🚶 Going out” दबाएँ' }],
   ['↩️', { en: 'Back? Press “↩ Back at site”', mr: 'परत आलात? “↩ Back at site” दाबा', hi: 'वापस आए? “↩ Back at site” दबाएँ' }],
 ];
@@ -59,7 +68,10 @@ const step = (n, [icon, text], lang, color) => h('div', { style: { display: 'fle
   h('div', { style: { fontSize: '40px', lineHeight: 1, minWidth: '48px', textAlign: 'center' }, 'aria-hidden': 'true' }, icon),
   h('div', { style: { fontSize: '17px', fontWeight: 600, lineHeight: 1.35 } }, text[lang] || text.en));
 
-export function attendGuide({ open = false } = {}) {
+export function attendGuide({ open = false, app = false, every = 15 } = {}) {
+  const inSteps = app ? IN.map((s, i) => (i === 2 ? IN_APP : s)) : IN;
+  const daySteps = [dayStep(app, every), ...DAY.slice(1)];
+  const helpSteps = app ? [HELP_APP, ...HELP.slice(1)] : HELP;
   const body = h('div');
   const langs = h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', margin: '6px 0 10px' } });
   const draw = () => {
@@ -68,7 +80,7 @@ export function attendGuide({ open = false } = {}) {
     const part = (title, steps, color, numbered = true) => h('div', { style: { marginBottom: '14px' } },
       h('div', { style: { fontSize: '19px', fontWeight: 700, margin: '4px 0 8px' } }, title[lang] || title.en),
       h('div.grid', { style: { gap: '8px' } }, steps.map((s, i) => step(numbered ? i + 1 : 0, s, lang, color))));
-    body.replaceChildren(part(T.morning, IN, '#1a7f37'), part(T.day, DAY, '#1f6feb', false), part(T.evening, OUT, '#cf222e'), part(T.help, HELP, '#9a6700', false));
+    body.replaceChildren(part(T.morning, inSteps, '#1a7f37'), part(T.day, daySteps, '#1f6feb', false), part(T.evening, OUT, '#cf222e'), part(T.help, helpSteps, '#9a6700', false));
   };
   draw();
   const det = h('details.card.no-i18n', { open },

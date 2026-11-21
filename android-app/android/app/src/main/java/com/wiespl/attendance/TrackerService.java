@@ -210,8 +210,8 @@ public class TrackerService extends Service {
         Intent open = new Intent(c, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
         nm.notify(STOPPED_NOTE_ID, new NotificationCompat.Builder(c, ALERT_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_location).setContentTitle("Location checks stopped")
-            .setContentText("You are clocked in: open WIESPL Attendance and set location to Allow all the time")
-            .setStyle(new NotificationCompat.BigTextStyle().bigText("You are clocked in: open WIESPL Attendance and set location to Allow all the time"))
+            .setContentText("You are clocked in: open WIESPL HRA and set location to Allow all the time")
+            .setStyle(new NotificationCompat.BigTextStyle().bigText("You are clocked in: open WIESPL HRA and set location to Allow all the time"))
             .setPriority(NotificationCompat.PRIORITY_HIGH).setOnlyAlertOnce(true).setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(c, 2, open, PendingIntent.FLAG_IMMUTABLE)).build());
     }
@@ -308,7 +308,7 @@ public class TrackerService extends Service {
             if (mock) mockReported = true;
             update("Clocked in · last check " + time + ": " + msg);
         } else if (code == 401) {
-            update("Open WIESPL Attendance and log in again: location checks are paused");
+            update("Open WIESPL HRA and log in again: location checks are paused");
         } else if (code == 409) {
             // Not clocked in any more (clocked out on another device, or the day was closed): stop.
             Config.clear(this);
@@ -324,7 +324,7 @@ public class TrackerService extends Service {
         PendingIntent pi = PendingIntent.getActivity(this, 0, open, PendingIntent.FLAG_IMMUTABLE);
         return new NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_location)
-            .setContentTitle("WIESPL attendance: location shared")
+            .setContentTitle("WIESPL HRA: location shared")
             .setContentText(text)
             .setStyle(new NotificationCompat.BigTextStyle().bigText(text))
             .setOngoing(true).setOnlyAlertOnce(true).setContentIntent(pi)

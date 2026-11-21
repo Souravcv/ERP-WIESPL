@@ -1,4 +1,4 @@
-# WIESPL Attendance – Android app
+# WIESPL HRA – Android app
 
 A small Android app (Capacitor 8) that opens the CRM's **My Attendance** page (`#/attend`) and adds what a browser cannot do:
 location checks **while the phone is locked or the app is closed**.
@@ -54,7 +54,7 @@ npx cap sync android
 Android Studio → *Open* → `android-app/android` → wait for Gradle → *Build → Build App Bundle(s) / APK(s) → Build APK(s)*.
 Or from a terminal in `android-app/android`: `gradlew.bat assembleDebug` (set `JAVA_HOME` to a JDK 21 and put
 `sdk.dir=D:/Android/sdk` – forward slashes – in `android/local.properties` if Android Studio did not create it).
-The APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
+The APK is `android/app/build/outputs/apk/debug/wiespl-debug.apk`.
 
 ### Signed release APK (for the technicians' phones)
 
@@ -73,24 +73,33 @@ The APK is `android/app/build/outputs/apk/debug/app-debug.apk`.
    keyPassword=…
    ```
 3. Build: Android Studio *Build → Generate Signed App Bundle / APK → APK → release*, or in `android-app/android`:
-   `gradlew.bat assembleRelease` → `android/app/build/outputs/apk/release/app-release.apk`.
+   `gradlew.bat assembleRelease` → `android/app/build/outputs/apk/release/wiespl.apk`.
+   Without `keystore.properties` the build gives `wiespl-unsigned.apk`; sign it in `android-app\android` without saving the
+   password in a file (it asks for it):
+   ```powershell
+   $env:JAVA_HOME='D:\Android\jdk21'; D:\Android\sdk\build-tools\36.0.0\apksigner.bat sign --ks wiespl-attendance.jks --ks-key-alias wiespl --out app\build\outputs\apk\release\wiespl.apk app\build\outputs\apk\release\wiespl-unsigned.apk
+   ```
+   A new build empties the release folder: copy `wiespl.apk` elsewhere before sending it.
 4. For a new version raise `versionCode` (and `versionName`) in `android/app/build.gradle`.
+5. App name on the phone: `app_name` in `android/app/src/main/res/values/strings.xml` (WIESPL HRA). Icons and splash are drawn from
+   `public/logo.jpeg`; after changing the logo run, in `android-app`:
+   `D:\Android\jdk21\bin\java tools\MakeIcons.java ..\public\logo.jpeg android\app\src\main\res`
 
 ## 5. Install on a phone
 
-Send `app-release.apk` (WhatsApp / e-mail / USB), open it and allow *Install unknown apps* for that app once.
+Send `wiespl.apk` (WhatsApp / e-mail / USB), open it and allow *Install unknown apps* for that app once.
 Then on the phone:
 
-1. Open **WIESPL Attendance**, read the privacy notice, tap *I understand*.
+1. Open **WIESPL HRA**, read the privacy notice, tap *I understand*.
 2. Log in with the CRM login (the one HR entered on the employee record).
 3. Clock in. Allow **Location** (*While using the app*), **Notifications**, and *Allow* when asked to let the app run in the background
    (battery optimisation).
-4. Required: tap *Set location to "Allow all the time"* on the attendance screen (or Settings → Apps → WIESPL Attendance → Permissions →
+4. Required: tap *Set location to "Allow all the time"* on the attendance screen (or Settings → Apps → WIESPL HRA → Permissions →
    Location → *Allow all the time*). Without it, if the phone kills the app tracking stays off until the app is opened again, and the phone shows *Location checks stopped*.
 5. Xiaomi / Redmi / POCO, Oppo, Vivo, Realme, OnePlus also stop background apps on their own, and removing the app from recents can force-stop it, which ends
-   the alarm too: set *Battery → No restrictions* and *Autostart* on for WIESPL Attendance.  *Force stop* in the phone settings always ends tracking until the app is opened. See <https://dontkillmyapp.com> for the exact steps per brand.
+   the alarm too: set *Battery → No restrictions* and *Autostart* on for WIESPL HRA.  *Force stop* in the phone settings always ends tracking until the app is opened. See <https://dontkillmyapp.com> for the exact steps per brand.
 
-While the person is clocked in a notification *"WIESPL attendance: location shared"* is always shown with the time of the last check.
+While the person is clocked in a notification *"WIESPL HRA: location shared"* is always shown with the time of the last check.
 
 ## 6. Test on the emulator with simulated locations
 
@@ -104,7 +113,7 @@ While the person is clocked in a notification *"WIESPL attendance: location shar
    For a test build set `server.url` to `http://localhost:3002/#/attend` (and `"cleartext": true`), `npx cap sync android`, build the
    **debug** APK, and run `adb reverse tcp:3002 tcp:3002`. Only debug builds allow plain http, and only to localhost / 10.0.2.2
    (`app/src/debug/`). **Put the https address back before building the APK for the phones.**
-3. Install the debug APK (`adb install -r app\build\outputs\apk\debug\app-debug.apk`), log in, set the emulator location to the site
+3. Install the debug APK (`adb install -r app\build\outputs\apk\debug\wiespl-debug.apk`), log in, set the emulator location to the site
    (*Extended controls (…) → Location*, or `adb emu geo fix <lng> <lat>` – longitude first), clock in.
 4. To skip the 30-min wait set *hr_auto_ping_minutes* to 5 **in the test copy** (the app's minimum), and open the attendance page again.
    Lock the screen (`adb shell input keyevent 26`) and force Doze (`adb shell dumpsys deviceidle force-idle`): checks keep coming every 5 min.

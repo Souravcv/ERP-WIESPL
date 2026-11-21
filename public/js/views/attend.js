@@ -140,7 +140,8 @@ export async function attendView(root) {
     me.sites.length ? h('optgroup', { label: 'My sites and offices' }, me.sites.map(s => h('option', { value: s.id }, s.name))) : null,
     (me.other_sites || []).length ? h('optgroup', { label: 'Other sites' }, me.other_sites.map(s => h('option', { value: s.id }, s.name))) : null);
   const siteLbl = h('label', 'Site', site);
-  mode.onchange = () => { siteLbl.style.display = mode.value === 'Travel / outstation' ? 'none' : ''; };
+  const noteLbl = h('label', { style: { display: 'none' } }, 'Note', note);   // only asked for travel / outstation
+  mode.onchange = () => { const travel = mode.value === 'Travel / outstation'; siteLbl.style.display = travel ? 'none' : ''; noteLbl.style.display = travel ? '' : 'none'; };
   const needPhoto = me.employee.photos === true; // field staff, and only while Settings → Field staff photos is On
   const send = async (path, extra = {}, withPhoto = needPhoto) => {
     const photo = withPhoto ? await selfie() : undefined;
@@ -154,9 +155,10 @@ export async function attendView(root) {
     h('div', { style: { fontSize: '18px', fontWeight: 700, color } }, text), sub ? h('div', { style: { fontSize: '15px', marginTop: '4px' } }, sub) : null);
   const offToday = me.holiday || me.weekly_off || (LT && !LT.part);
   const startAt = LT?.part ? LT.come_by : me.employee.shift_start;
+  const askIn = !a?.check_in && a?.status !== 'On Leave' && !offToday && startAt && nowHm >= startAt;
   const banners = [
     LT?.part ? banner(msg(LT.half ? 'half' : 'short', LT.come_by, LT.go_from), null, 'var(--info, #1f6feb)') : null,
-    !a?.check_in && a?.status !== 'On Leave' && !offToday && startAt && nowHm >= startAt ? banner(msg('clockIn'), msg('clockInSub', startAt), 'var(--bad)') : null,
+    askIn ? banner(msg('clockIn'), msg('clockInSub', startAt), 'var(--bad)') : null,
     working && !(me.out_wait_ms > 0) && nowHm >= (me.out_from || (LT?.part ? LT.go_from : me.employee.shift_end) || '99') ? banner(msg('clockOut'), msg('clockOutSub'), 'var(--bad)') : null,
   ];
 
@@ -168,17 +170,18 @@ export async function attendView(root) {
 
   card.replaceChildren(
     h('div', { style: { display: 'flex', justifyContent: 'space-between', gap: '8px', flexWrap: 'wrap' } },
-      h('div', h('b', me.employee.name), h('div.muted', `${me.employee.code || ''} · shift ${me.employee.shift_start || ''}–${me.employee.shift_end || ''}`)),
+      h('div', h('b', me.employee.name), h('div.muted', [me.employee.code, `shift ${me.employee.shift_start || ''}–${me.employee.shift_end || ''}`].filter(Boolean).join(' · '))),
       h('div', { style: { textAlign: 'right' } }, h('b', fmtDate(me.today)), me.holiday ? h('div', { style: { color: 'var(--warn)' } }, `Holiday: ${me.holiday}`) : me.weekly_off ? h('div.muted', 'Weekly off') : null)),
     ...banners,
-    h('div', { style: { margin: '14px 0', padding: '12px', borderRadius: '10px', background: 'var(--bg)' } },
+    // (no "Not clocked in yet" box under the red "Please clock in now": one message is enough on a phone)
+    askIn ? null : h('div', { style: { margin: '14px 0', padding: '12px', borderRadius: '10px', background: 'var(--bg)' } },
       !a?.check_in ? h('div', { style: { fontSize: '18px', fontWeight: 600 } }, a?.status === 'On Leave' ? `On leave today${a.note ? ' – ' + a.note : ''}` : 'Not clocked in yet')
         : h('div', h('div', { style: { fontSize: '18px', fontWeight: 600 } }, working ? `Working since ${hm(a.check_in)}` : `Clocked out at ${hm(a.check_out)} · ${a.hours} h`),
-          h('div.muted', `${a.location_id_label || a.mode} · ${a.checks || 0} location checks, ${a.photo_checks || 0} photo checks`),
+          h('div.muted', [a.location_id_label || a.mode, `${a.checks || 0} location check${a.checks === 1 ? '' : 's'}`, needPhoto || a.photo_checks ? `${a.photo_checks || 0} photo check${a.photo_checks === 1 ? '' : 's'}` : null].filter(Boolean).join(' · ')),
           a.review === 'To review' && !working ? h('div.muted', { style: { marginTop: '6px' } }, 'HR is checking this day') : null),
       nextPhoto ? h('div', { style: { marginTop: '6px', fontWeight: 600 } }, nextPhoto) : null, status),
     !a?.check_in && a?.status !== 'On Leave' ? h('div.grid', { style: { gap: '10px' } },
-      h('label', 'Where', mode), siteLbl, h('label', 'Note', note),
+      h('label', 'Where', mode), siteLbl, noteLbl,
       h('button.btn.primary', { style: { fontSize: '18px', padding: '14px' }, onclick: busy(async () => {
         try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value, site_id: mode.value === 'Travel / outstation' ? undefined : site.value || undefined }); toast(r.site ? `Clocked in at ${r.site}` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock in (selfie + location)' : '📍 Clock in')) : null,
@@ -220,7 +223,7 @@ export async function attendView(root) {
   // a short leave is 1½ h (no half-day tick); a half day is one date, taken from the leave type chosen (PL, comp-off …)
   const syncHalf = () => {
     const isShort = lt.value.startsWith('Short leave');
-    halfLbl.style.display = isShort ? 'none' : '';
+    halfLbl.style.display = isShort ? 'none' : 'flex';   // flex keeps the tick box beside "Half day"
     if (isShort) half.checked = false;
     if (half.checked || isShort) lto.value = lf.value;
     lto.disabled = half.checked || isShort;
@@ -241,6 +244,6 @@ export async function attendView(root) {
 
   syncHalf();
   // the guide opens by itself until the person has clocked in a few times
-  root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, attendGuide({ open: me.month.filter(d => d.check_in).length < 3 }), sites, leave, month);
+  root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, attendGuide({ open: me.month.filter(d => d.check_in).length < 3, app: !!app, every: R.pingMinutes }), sites, leave, month);
   if (working && !app) autoCheck();
 }

@@ -55,7 +55,7 @@ public class AttendanceTrackerPlugin extends Plugin {
 
     @PermissionCallback
     private void afterLocationForPosition(PluginCall call) {
-        if (!hasLocation()) { call.reject("Location is not allowed: allow location for WIESPL Attendance in the phone settings"); return; }
+        if (!hasLocation()) { call.reject("Location is not allowed: allow location for WIESPL HRA in the phone settings"); return; }
         fix(call);
     }
 
