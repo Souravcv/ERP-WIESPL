@@ -16,6 +16,7 @@ import { prepInspection, prepNcr } from './quality.js';
 import { prepPlan as prepQcPlan, prepRecord as prepQcRecord } from './qcplans.js';
 import { nextEnquiryNo } from './enquiries.js';
 import { prep as sfPrep } from './salesfin.js';
+import { rateWas, repriceDraftSheets } from './itemprice.js';
 import { HttpError } from './crud.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
@@ -492,6 +493,7 @@ export function beforeSave(name, row, existing, user) {
       break;
     }
     case 'items':
+      if (existing && 'rate' in row && Number(row.rate) !== Number(existing.rate)) rateWas.set(existing.id, existing.rate);
       if (!existing && !String(row.code ?? '').trim()) row.code = nextItemCode(row.category);
       if (row.code && db.prepare('SELECT 1 FROM items WHERE code = ? AND id <> ?').get(row.code, existing?.id ?? 0)) {
         throw Object.assign(new Error(`Item code ${row.code} is already used`), { status: 409 });
@@ -617,15 +619,30 @@ export function beforeSave(name, row, existing, user) {
         row.margin_pct = Number(kind === 'Service' ? s.service_margin_pct ?? 30 : s.sales_margin_pct ?? 20);
       }
       const lines = parse(v('lines'), []);
-      const rate = db.prepare('SELECT rate, hsn FROM items WHERE id = ?');
-      for (const l of lines) if (l.item_id && (l.cost === '' || l.cost == null)) { const it = rate.get(Number(l.item_id)); l.cost = it?.rate || 0; if (!l.hsn && it?.hsn) l.hsn = it.hsn; }
-      if ('lines' in row) row.lines = JSON.stringify(lines);
+      const rate = db.prepare('SELECT rate, hsn, margin_min_pct, margin_target_pct, margin_max_pct, name FROM items WHERE id = ?');
       const r2 = x => Math.round((Number(x) || 0) * 100) / 100;
+      const blank = x => x === '' || x == null;
+      const sheetPct = Number(row.margin_pct ?? existing?.margin_pct) || 0, warn = [];
+      for (const l of lines) {
+        const it = l.item_id ? rate.get(Number(l.item_id)) : null;
+        if (it && blank(l.cost)) { l.cost = it.rate || 0; if (!l.hsn && it.hsn) l.hsn = it.hsn; }
+        if (it && blank(l.margin) && it.margin_target_pct != null) l.margin = it.margin_target_pct; // the item's standard margin, until the line gets its own
+        const m = blank(l.margin) ? sheetPct : Number(l.margin) || 0;
+        l.sell = r2((Number(l.cost) || 0) * (1 + m / 100));
+        if (it && !blank(l.margin)) {
+          if (it.margin_min_pct != null && m < it.margin_min_pct) warn.push(`${it.name}: ${m}% is below the lowest ${it.margin_min_pct}%`);
+          else if (it.margin_max_pct != null && m > it.margin_max_pct) warn.push(`${it.name}: ${m}% is above the highest ${it.margin_max_pct}%`);
+        }
+      }
+      if ('lines' in row) row.lines = JSON.stringify(lines);
+      row.margin_warn = warn.slice(0, 6).join(' · ') || null;
       const material = r2(lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.cost) || 0), 0));
+      const materialSell = r2(lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.sell) || 0), 0));
       const visits = r2((Number(v('visit_days')) || 0) * (Number(v('day_rate')) || 0));
       const cost = r2(material + (Number(v('labour')) || 0) + visits + (Number(v('travel')) || 0) + (Number(v('other_cost')) || 0));
-      const margin = r2(cost * (Number(v('margin_pct')) || 0) / 100);
-      const selling = r2(cost + margin + (Number(v('transport')) || 0));
+      // material at each line's own margin; labour, visits, travel and other costs at the sheet's company %
+      const selling = r2(materialSell + (cost - material) * (1 + (Number(v('margin_pct')) || 0) / 100) + (Number(v('transport')) || 0));
+      const margin = r2(selling - cost - (Number(v('transport')) || 0));
       const gst = r2(selling * (Number(v('gst_rate') ?? 18) || 0) / 100);
       Object.assign(row, { material_cost: material, cost_total: cost, margin_amount: margin, selling_total: selling, gst_amount: gst, grand_total: r2(selling + gst) });
       sfPrep(row, v);
@@ -696,7 +713,11 @@ export function beforeSave(name, row, existing, user) {
       }
       if (type === 'TRANSFER' && !(row.from_location ?? existing?.from_location)) row.from_location = 'Store';
       // Inward at a new price updates the item's current price.
-      if (type === 'INWARD' && itemId && row.rate > 0) db.prepare('UPDATE items SET rate = ? WHERE id = ?').run(row.rate, itemId);
+      if (type === 'INWARD' && itemId && row.rate > 0) {
+        const was = db.prepare('SELECT rate FROM items WHERE id = ?').get(itemId)?.rate;
+        if (Number(was) !== Number(row.rate)) rateWas.set(itemId, was);
+        db.prepare('UPDATE items SET rate = ? WHERE id = ?').run(row.rate, itemId);
+      }
       break;
     }
   }
@@ -781,6 +802,7 @@ export function refreshBillNotes(poId) {
 
 // `deleted` is passed when a row was removed (id is null then).
 export function afterSave(name, id, user, deleted) {
+  if ((name === 'items' || name === 'stock_moves') && rateWas.size) repriceDraftSheets(rateWas, user);
   if (name === 'salaries') { // the newest revision already in force is "Current", the ones before it "Old"
     const emp = deleted ? deleted.employee_id : db.prepare('SELECT employee_id FROM salaries WHERE id = ?').get(id)?.employee_id;
     if (emp) {

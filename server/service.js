@@ -64,7 +64,7 @@ const sellRate = (cost, pct) => r2((Number(cost) || 0) * (1 + (Number(pct) || 0)
 // Selling lines of a costing sheet: material at cost + company %, labour / visits / travel / other the same, transport at cost.
 export function sellingLines(cs) {
   const pct = cs.margin_pct;
-  const out = (cs.lines || []).filter(l => Number(l.qty) > 0).map(l => ({ item_id: l.item_id || null, description: l.description || '', hsn: l.hsn || '', qty: Number(l.qty), uom: l.uom || 'Nos', rate: sellRate(l.cost, pct) }));
+  const out = (cs.lines || []).filter(l => Number(l.qty) > 0).map(l => ({ item_id: l.item_id || null, description: l.description || '', hsn: l.hsn || '', qty: Number(l.qty), uom: l.uom || 'Nos', rate: sellRate(l.cost, l.margin === '' || l.margin == null ? pct : l.margin) }));
   const visits = r2((Number(cs.visit_days) || 0) * (Number(cs.day_rate) || 0));
   const service = cs.kind === 'Service';
   if (Number(cs.labour) > 0) out.push({ description: service ? 'Service charges' : 'Installation, testing & commissioning', hsn: '9954', qty: 1, uom: 'Lot', rate: sellRate(cs.labour, pct) });
