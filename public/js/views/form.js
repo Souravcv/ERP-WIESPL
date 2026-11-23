@@ -1020,7 +1020,8 @@ function actionsFor(entity, row, reload, ctx = {}) {
         toast('Dispatched');
         reload();
       }) }, '🚚 Dispatch'));
-      if (can(entity) && st === 'Dispatched') A.push(h('button.btn.good', { onclick: go(async () => {
+      if (st === 'Dispatched' && row.project_id && !row.vendor_id) A.push(h('a.btn.good', { href: `#/site-material/${row.project_id}?tab=challans` }, '✓ Confirm receipt at site'));
+      if (can(entity) && st === 'Dispatched' && !(row.project_id && !row.vendor_id)) A.push(h('button.btn.good', { onclick: go(async () => {
         const who = h('input', { placeholder: 'Name of the person at site who received it' });
         const date = h('input', { type: 'date', value: today() });
         const ok = await modal(`Delivered – ${row.challan_no}`, h('div.grid', h('label', 'Received by', who), h('label', 'Delivered on', date),

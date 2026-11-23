@@ -116,8 +116,22 @@ export function modal(title, body, buttons = [], { wide = false } = {}) {
 }
 // Run a stock issue / dispatch; if it would take stock reserved for another project's Final BOQ, show which and
 // let the user issue anyway (sent again with allowReserved). Returns null when cancelled.
+// More than the project's BOQ: whoever may approve gives the reason and sends it anyway (null = cancelled; the error
+// is thrown again when the user may not approve).
+export async function overBoqReason(e) {
+  if (!/^More than the project's BOQ/.test(e.message)) return undefined;
+  const may = /Give the reason/.test(e.message);
+  const why = h('textarea', { rows: 3, placeholder: 'Why the site needs more than the BOQ (e.g. route changed after site visit, client added a room …)' });
+  const r = await modal('More than the project\'s BOQ', h('div', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message.replace(/\n(Give the reason.*|The Projects head approves.*)$/, '')),
+    may ? h('label', 'Reason (kept on the challan)', why) : h('p', 'The Projects head approves material above the BOQ. Ask them to dispatch it, or reduce the quantity.')),
+  may ? [{ label: 'Cancel', value: null }, { label: 'Approve and send', cls: 'danger solid', action: () => { if (!why.value.trim()) throw new Error('Write the reason'); return why.value.trim(); } }] : [{ label: 'OK', value: null }]);
+  return r || null;
+}
 export async function reservedRetry(call, body = {}) {
   try { return await call(body); } catch (e) {
+    const why = await overBoqReason(e);
+    if (why === null) return null;
+    if (why) return reservedRetry(call, { ...body, force: true, overrun_reason: why });
     if (!/^Reserved for other projects/.test(e.message) || body.allowReserved) throw e;
     const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message),
       [{ label: 'Cancel', value: false }, { label: 'Issue anyway', cls: 'danger solid', value: true }]);

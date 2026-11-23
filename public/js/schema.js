@@ -19,6 +19,7 @@ const ACC = ['admin', 'manager', 'accounts'];
 const PURCHASE = ['admin', 'manager', 'purchase', 'purchase_head', 'accounts', 'store'];
 const STORE = ['admin', 'manager', 'store', 'purchase', 'purchase_head', 'accounts'];
 const ENG = ['admin', 'manager', 'engineer', 'sales', 'technical'];
+export const SCRAP_MATERIALS = ['MS (mild steel)', 'GI', 'SS', 'PPGL / PUF panel', 'Aluminium', 'Copper', 'Cable', 'HDPE / plastic', 'Other'];
 const SERVICE = ['admin', 'manager', 'service', 'engineer'];
 const HR_ROLES = ['admin', 'manager', 'hr'];
 
@@ -171,6 +172,12 @@ ROLE_SEES.engineer.push('qc_plans', 'project_qc', 'ncrs');
 ROLE_SEES.hr.push('work_logs');
 ROLE_SEES.technical.push('production_orders', 'qc_inspections', 'ncrs', 'qc_plans', 'project_qc');
 ROLE_SEES.store.push('production_orders');
+// Site material: counts at site and the scrap register
+ROLE_SEES.store.push('site_checks', 'scrap_register');
+ROLE_SEES.engineer.push('site_checks', 'scrap_register');
+ROLE_SEES.planning.push('site_checks', 'scrap_register');
+ROLE_SEES.accounts.push('scrap_register');
+ROLE_SEES.purchase_head.push('scrap_register');
 ROLE_SEES.production_manager = [...ROLE_SEES.production];
 // Everyone works with the task scheduler (the server shows each person only their own tasks).
 for (const list of Object.values(ROLE_SEES)) list.push('work_tasks');
@@ -229,6 +236,8 @@ export const FUNCTIONS = {
   screen_news: 'Screen: News (hospital leads & industry news)',
   screen_taskboard: 'Screen: Task board',
   see_stock_value: 'Store: see prices, rates and stock value (hidden from everyone else)',
+  site_material: 'Site material: confirm challans on arrival at site, count the high-value items weekly (Projects → Site Material)',
+  site_recon: 'Projects head – site material: installed / billed quantities, wastage allowance, approve material above the BOQ, sign the site closure',
 };
 // Departments a BOQ section belongs to; each one is reviewed before the BOQ can be made Final.
 export const DEPARTMENTS = ['Design', 'HVAC', 'Electrical', 'Production / Panels', 'Doors', 'MGPS', 'Flooring / Civil', 'Lighting', 'Bought-out'];
@@ -239,18 +248,18 @@ export const DEFAULT_FUNCTIONS = {
   md: Object.keys(FUNCTIONS),
   sales_head: ['import', 'notify_enquiry', 'task_assign'],
   marketing: ['notify_enquiry'],
-  chief_engineer: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
+  chief_engineer: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close', 'site_recon'],
   finance_head: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record', 'pay_final', 'task_assign'],
   design_head: ['notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'task_assign', 'schedule_baseline', 'tds_design'],
   qc_head: ['qc_inspect', 'qc_site', 'ncr_close', 'iqc_inspect', 'task_assign', 'notify_work_order'],
-  project_head: ['notify_work_order', 'boq_review', 'qc_site', 'task_assign', 'schedule_baseline', 'notify_po'],
+  project_head: ['notify_work_order', 'boq_review', 'qc_site', 'task_assign', 'schedule_baseline', 'notify_po', 'site_material', 'site_recon'],
   purchase_head: ['vendor_approve', 'task_assign', 'approve_requisition', 'po_check', 'stock_opening', 'stock_post', 'import', 'notify_requisition', 'notify_po', 'notify_grn_without_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   technical: ['iqc_inspect', 'notify_work_order', 'notify_boq', 'boq_review', 'boq_final', 'po_technical', 'task_assign', 'schedule_baseline', 'qc_inspect', 'ncr_close'],
   accounts: ['po_commercial', 'import', 'notify_po', 'notify_grn_without_po', 'pay_approve', 'pay_record'],
   store: ['iqc_inspect', 'stock_opening', 'stock_post', 'production_post', 'notify_material_request', 'import', 'notify_po', 'notify_boq', 'notify_work_order', 'notify_store_check'],
   purchase: ['import', 'notify_requisition', 'notify_po', 'notify_boq', 'notify_grn_without_po'],
   sales: ['import', 'notify_enquiry'],
-  engineer: ['notify_work_order', 'boq_review', 'qc_site'],
+  engineer: ['notify_work_order', 'boq_review', 'qc_site', 'site_material'],
   production: ['production_post', 'production_release', 'qc_inspect', 'work_log', 'perf_all'],
   incharge: ['work_log'],
   design_engineer: ['notify_work_order', 'notify_boq'],
@@ -694,7 +703,9 @@ export const ENTITIES = {
       { key: 'po_value', label: 'PO Value (₹)', type: 'money', computed: "(SELECT COALESCE(SUM(p.total),0) FROM purchase_orders p WHERE p.project_id = {t}.id AND p.status NOT IN ('Cancelled','Rejected','Draft','Archived (old)'))" },
       { key: 'site_address', label: 'Site Address', type: 'textarea', span: 2 },
       { key: 'pmc', label: 'PMC / Consultant', type: 'text', hint: 'Shown on the printed project schedule' },
-      { key: 'engineer', label: 'Site Engineer', type: 'person' },
+      { key: 'engineer', label: 'Site Engineer', type: 'person', hint: 'The site supervisor: confirms the challans at site and answers for the material there' },
+      { key: 'site_distance', label: 'Site Distance (material)', type: 'select', options: ['', 'Near', 'Far'], hint: 'Near: send material in stages. Far: one dispatch, packed and labelled by stage, kept in a locked site store' },
+      { key: 'site_store', label: 'Site Store', type: 'text', hint: 'Where the material is kept at site, e.g. locked room given by the client, key with the supervisor' },
       { key: 'start_date', label: 'Start Date', type: 'date' },
       { key: 'target_date', label: 'Target Completion', type: 'date' },
       { key: 'completion_date', label: 'Actual Completion', type: 'date' },
@@ -702,6 +713,8 @@ export const ENTITIES = {
       { key: 'progress', label: 'Progress %', type: 'number', default: 0 },
       { key: 'status', label: 'Status', type: 'select', options: ['Active', 'On Hold', 'Completed', 'Cancelled'], default: 'Active' },
       { key: 'warranty_until', label: 'Warranty Until', type: 'date' },
+      { key: 'recon_supervisor_sign', label: 'Site Material Closed – Site Engineer', type: 'text', readonly: true },
+      { key: 'recon_head_sign', label: 'Site Material Closed – Projects Head', type: 'text', readonly: true },
       { key: 'notes', label: 'Site Notes', type: 'textarea', span: 2 },
     ],
   },
@@ -999,10 +1012,56 @@ export const ENTITIES = {
         { key: 'uom', label: 'UOM', type: 'text', width: 70 },
         { key: 'qty', label: 'Qty', type: 'number', width: 80 },
         { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+        { key: 'pack', label: 'Package / stage', type: 'text', width: 130 },
+        { key: 'spare', label: 'Spare?', type: 'select', options: ['', 'Spare'], width: 80 },
       ] },
       { key: 'dispatched_by', label: 'Dispatched By', type: 'text', readonly: true },
       { key: 'delivered_date', label: 'Delivered On', type: 'date', readonly: true },
       { key: 'received_by', label: 'Received By (site)', type: 'text', readonly: true },
+      { key: 'receipt', label: 'Site Receipt', type: 'json', hidden: true },
+      { key: 'overrun_ok', label: 'Above the BOQ – approved by', type: 'textarea', readonly: true, span: 2 },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // What the site supervisor counts at site (Projects → Site Material): weekly for the high-value items, a visit or video
+  // check by the Projects head, and the closure count when the work ends. The last count is "still at site".
+  site_checks: {
+    label: 'Site Material Counts', singular: 'Site Count', icon: '🔢', write: ENG.concat('store'), noCreate: true,
+    display: "{t}.kind || ' ' || {t}.date",
+    search: ['kind', 'checked_by', 'remarks'],
+    list: ['project_id', 'date', 'kind', 'checked_by'],
+    fields: [
+      { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects', required: true },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'Count', type: 'select', options: ['Weekly count', 'Visit check', 'Video check', 'Site closure count'], default: 'Weekly count' },
+      { key: 'checked_by', label: 'Counted By', type: 'person', default: 'me' },
+      { key: 'lines', label: 'Items', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
+        { key: 'uom', label: 'UOM', type: 'text', width: 70 },
+        { key: 'used', label: 'Used since last count', type: 'number', width: 110 },
+        { key: 'at_site', label: 'Left at site', type: 'number', width: 100 },
+        { key: 'note', label: 'Note', type: 'text', width: 200 },
+      ] },
+      { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
+    ],
+  },
+  // Scrap brought back from sites (and the factory's) is weighed into the scrap yard by material; sales go out by weight.
+  scrap_register: {
+    label: 'Scrap Register', singular: 'Scrap Entry', group: 'Store', icon: '♻️', write: STORE,
+    display: "{t}.entry_no",
+    search: ['entry_no', 'material', 'buyer', 'slip_no', 'remarks'],
+    list: ['entry_no', 'date', 'kind', 'project_id', 'material', 'weight_kg', 'buyer', 'amount'],
+    fields: [
+      { key: 'entry_no', label: 'Entry No', type: 'text', readonly: true, hint: 'Auto: SY-001/2026-27' },
+      { key: 'date', label: 'Date', type: 'date', default: 'today', required: true },
+      { key: 'kind', label: 'Entry', type: 'select', options: ['Received from site', 'Received from factory', 'Sold'], default: 'Received from site', required: true },
+      { key: 'project_id', label: 'Project (site)', type: 'ref', ref: 'projects', hint: 'The site the scrap came back from' },
+      { key: 'material', label: 'Material', type: 'select', options: SCRAP_MATERIALS, required: true },
+      { key: 'weight_kg', label: 'Weight (kg)', type: 'number', required: true, hint: 'Weighed at the factory' },
+      { key: 'slip_no', label: 'Weight Slip / Weighbridge No', type: 'text' },
+      { key: 'weighed_by', label: 'Weighed By', type: 'person', default: 'me' },
+      { key: 'buyer', label: 'Sold To (scrap dealer)', type: 'text' },
+      { key: 'rate', label: 'Rate per kg (₹)', type: 'money' },
+      { key: 'amount', label: 'Sale Amount (₹)', type: 'money', readonly: true },
       { key: 'remarks', label: 'Remarks', type: 'textarea', span: 2 },
     ],
   },
@@ -2195,6 +2254,7 @@ export const ENTITIES = {
       { key: 'stock', label: 'Current Stock', type: 'number', computed: STOCK_SQL },
       { key: 'stock_value', label: 'Stock Value (₹)', type: 'money', computed: `ROUND(${STOCK_SQL} * COALESCE({t}.rate, 0), 2)` },
       { key: 'notes', label: 'Notes', type: 'textarea', span: 2 },
+      { key: 'site_watch', label: 'High-value at site', type: 'yn', hint: 'Copper, cable, valves, instruments …: the site supervisor counts it every week and it is watched against the work done' },
       { key: 'iqc_norms', label: 'IQC checks for this item (one per line)', type: 'textarea', span: 2, hint: 'What incoming inspection checks, with the limits as written on the PO / TDS / drawing. Blank = the checks of its category (Settings → Incoming inspection)' },
     ],
   },

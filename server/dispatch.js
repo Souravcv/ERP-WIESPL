@@ -6,6 +6,7 @@ import { stockEntry } from './stock.js';
 import { saveAttachment } from './roles.js';
 import { hasFunction } from '../public/js/schema.js';
 import { qtyFromText } from './hooks.js';
+import { challanCheck } from './sitematerial.js';
 
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function cell(v) {
@@ -254,6 +255,8 @@ export function dispatchChallan(id, body, user) {
   if (ch.status !== 'Draft') throw new HttpError(400, `Challan is already ${ch.status}`);
   const lines = (ch.lines || []).filter(l => Number(l.qty) > 0);
   if (!lines.length) throw new HttpError(400, 'Add material with quantities first');
+  // site material: the challan names its project; above the project's BOQ needs the Projects head with a reason
+  const overrunOk = challanCheck(ch, lines, body, user);
   // Do not send more than the work order quantity, unless a manager overrides.
   const over = [];
   const need = {};
@@ -281,7 +284,7 @@ export function dispatchChallan(id, body, user) {
         allowNegative: !!body?.allowNegative && hasFunction(user.role, 'allow_negative'),
       }, user);
     }
-    updateRow('challans', id, { status: 'Dispatched', issue_no: stockDoc?.doc_no || null, issue_type: stockDoc ? 'OUTWARD' : null, dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
+    updateRow('challans', id, { ...(overrunOk ? { overrun_ok: overrunOk } : {}), status: 'Dispatched', issue_no: stockDoc?.doc_no || null, issue_type: stockDoc ? 'OUTWARD' : null, dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
     return { ...getRow('challans', id), stock_lines: stockLines.length, stock_doc: stockDoc?.doc_no || null };
   });
 }
@@ -289,6 +292,7 @@ export function dispatchChallan(id, body, user) {
 export function deliverChallan(id, body, user) {
   const ch = getRow('challans', id);
   if (ch.status !== 'Dispatched') throw new HttpError(400, 'Only a dispatched challan can be marked delivered');
+  if (ch.project_id && !ch.vendor_id) throw new HttpError(409, 'Material for a site is confirmed by the site engineer, line by line: Projects → Site Material → Challans');
   return updateRow('challans', id, { status: 'Delivered', received_by: body?.received_by || null, delivered_date: body?.delivered_date || new Date().toLocaleString('sv-SE').slice(0, 10) }, user, { system: true });
 }
 
@@ -517,10 +521,12 @@ export function challanForIssue(body, issue, user) {
   const c = body.challan || {};
   const extra = Object.fromEntries(CHALLAN_KEYS.filter(k => c[k]).map(k => [k, c[k]]));
   if (!extra.ship_to && !extra.vendor_id && body.type === 'TRANSFER' && body.to_location) extra.ship_to = body.to_location;
+  const overrunOk = body.type === 'TRANSFER' && !body.project_id ? null
+    : challanCheck({ project_id: body.project_id || null, vendor_id: extra.vendor_id || null }, lines, { force: body.force || c.force, overrun_reason: body.overrun_reason || c.overrun_reason }, user);
   const ch = insertRow('challans', {
     ...extra, ...(body.doc_no ? { challan_no: body.doc_no } : {}), date: body.date || undefined, project_id: body.project_id || null, issue_no: issue.doc_no, issue_type: body.type, status: 'Dispatched',
     challan_type: c.challan_type || (body.type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'),
-    remarks: c.remarks || body.purpose || null, lines,
+    remarks: c.remarks || body.purpose || null, lines, overrun_ok: overrunOk || null,
     dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})`,
   }, user, { system: true });
   return ch;

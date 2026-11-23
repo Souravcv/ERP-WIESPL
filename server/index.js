@@ -50,6 +50,7 @@ import * as projectStore from './projectstore.js';
 import * as policies from './policies.js';
 import * as iqc from './iqc.js';
 import * as deptStore from './deptstore.js';
+import * as siteMat from './sitematerial.js';
 import * as scheduleXlsx from './scheduleexcel.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
@@ -759,6 +760,17 @@ api.get('/project-store', wrap(req => projectStore.projectList(req.user)));
 api.get('/dept-stores', wrap(req => deptStore.places(req.user)));
 api.get('/dept-stores/:place', wrap(req => deptStore.placeDetail(String(req.params.place), req.user)));
 api.post('/stock/dept-move', wrap(req => deptStore.deptMove(req.body, req.user)));
+// Site material: sent → installed / returned / at site / wastage → unaccounted (server/sitematerial.js)
+api.get('/site-material', wrap(req => siteMat.overview(req.user)));
+api.get('/site-material/supervisors', wrap(req => siteMat.supervisors(req.user)));
+api.get('/site-material/scrap-yard', wrap(req => siteMat.scrapYard(req.user)));
+api.put('/site-material/allowances', wrap(req => siteMat.setAllowances(req.body, req.user)));
+api.post('/site-material/challans/:id/receive', wrap(req => siteMat.receive(req.params.id, req.body, req.user)));
+api.post('/site-material/photo/:entity/:id', express.raw({ type: () => true, limit: '25mb' }), wrap(req => siteMat.photo(req.params.entity, req.params.id, { ...req.query, type: req.headers['x-file-type'] }, req.body, req.user)));
+api.get('/site-material/:id', wrap(req => siteMat.reconcile(req.params.id, req.user)));
+api.post('/site-material/:id/installed', wrap(req => siteMat.setInstalled(req.params.id, req.body, req.user)));
+api.post('/site-material/:id/checks', wrap(req => siteMat.addCheck(req.params.id, req.body, req.user)));
+api.post('/site-material/:id/sign', wrap(req => siteMat.sign(req.params.id, req.body, req.user)));
 // Company policies: sent by the admin, read and confirmed by each person (server/policies.js)
 api.get('/policies', wrap(req => policies.mine(req.user)));
 api.post('/policies/:id/read', wrap(req => policies.markRead(Number(req.params.id), req.user)));
@@ -876,7 +888,7 @@ api.post('/stock/drafts/:id/post', wrap(req => {
 }));
 function postDraftNow(d, opts, user) {
   const p = d.payload || {};
-  const r = postStockEntry({ ...p, date: opts?.date || p.date, allowNegative: !!opts?.allowNegative, allowReserved: !!opts?.allowReserved }, user);
+  const r = postStockEntry({ ...p, date: opts?.date || p.date, allowNegative: !!opts?.allowNegative, allowReserved: !!opts?.allowReserved, force: !!opts?.force || p.force, overrun_reason: opts?.overrun_reason || p.overrun_reason }, user);
   updateRow('stock_drafts', d.id, { status: 'Posted', doc_no: r.doc_no, challan_id: r.challan?.id || null, posted_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
   return { ...r, draft_id: d.id };
 }

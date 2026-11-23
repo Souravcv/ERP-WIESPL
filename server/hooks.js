@@ -16,6 +16,7 @@ import { prepInspection, prepNcr } from './quality.js';
 import { prepPlan as prepQcPlan, prepRecord as prepQcRecord } from './qcplans.js';
 import { nextEnquiryNo } from './enquiries.js';
 import { HttpError } from './crud.js';
+import { completionCheck } from './sitematerial.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -230,7 +231,25 @@ export function beforeSave(name, row, existing, user) {
       break;
     case 'projects':
       if (!existing && !row.code) row.code = docNo('project', row.start_date || date, (n, fy) => `PRJ/${fy}/${n}`);
+      // handover only after the site material is reconciled and signed
+      if (existing && row.status === 'Completed' && existing.status !== 'Completed') completionCheck(existing.id, user);
       break;
+    case 'scrap_register': {
+      const kind = row.kind ?? existing?.kind, kg = Number(row.weight_kg ?? existing?.weight_kg);
+      if (!(kg > 0)) throw new HttpError(400, 'Enter the weight in kg');
+      if (kind === 'Received from site' && !(row.project_id ?? existing?.project_id)) throw new HttpError(400, 'Choose the project (site) the scrap came back from');
+      if (kind === 'Sold') {
+        if (!String(row.buyer ?? existing?.buyer ?? '').trim()) throw new HttpError(400, 'Enter who the scrap was sold to');
+        const rate = Number(row.rate ?? existing?.rate);
+        if (!(rate > 0)) throw new HttpError(400, 'Enter the rate per kg');
+        row.amount = Math.round(kg * rate * 100) / 100;
+        const mat = row.material ?? existing?.material;
+        const y = db.prepare("SELECT COALESCE(SUM(CASE WHEN kind = 'Sold' THEN -weight_kg ELSE weight_kg END), 0) kg FROM scrap_register WHERE material = ? AND id <> ?").get(mat, existing?.id || 0).kg;
+        if (kg > y + 1e-9) throw new HttpError(409, `Only ${Math.round(y * 1000) / 1000} kg of ${mat} is in the scrap yard: the sale cannot be more than what was weighed in`);
+      } else row.amount = null;
+      if (!existing && !row.entry_no) row.entry_no = docNo('scrap_yard', date, (n, fy) => `SY-${n}/20${fy}`);
+      break;
+    }
     case 'purchase_orders': {
       // WIESPL PO numbering: 008/2025-26, restarting every April.
       if (!existing && !row.po_no) row.po_no = docNo('po', date, (n, fy) => `${n}/20${fy}`);

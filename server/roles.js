@@ -274,6 +274,14 @@ export function seedRoles() {
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_grn_nopo_v1', '\"1\"')").run();
   }
+  // Site material (once): site engineers confirm and count; the Projects head / Technical head reconcile and close.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_site_material_v1'").get()) {
+    for (const r of db.prepare('SELECT name, perms FROM roles WHERE builtin = 1').all()) {
+      const add = (DEFAULT_FUNCTIONS[r.name] || []).filter(fn => ['site_material', 'site_recon'].includes(fn));
+      if (add.length) { const p = parse(r.perms); db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...new Set([...(p.functions || []), ...add])] }), r.name); }
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_site_material_v1', '\"1\"')").run();
+  }
   // Project Planner (once): whoever sees projects gets their schedule; the GM and Technical Manager approve baselines.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_planner_v1'").get()) {
     for (const r of db.prepare('SELECT name, perms FROM roles').all()) {

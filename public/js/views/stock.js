@@ -1,5 +1,5 @@
 // Store screens: multi-line stock entry, stock summary, PO line tracker.
-import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy, redirect, setHashQuery } from '../ui.js';
+import { h, api, state, toast, fail, modal, confirmBox, refOptions, clearRefCache, money, fmtDate, today, download, badge, busy, redirect, setHashQuery, overBoqReason } from '../ui.js';
 import { MOVE_TYPES, ITEM_CATEGORIES, canWrite, canView, hasFunction, COMPANY_DEPARTMENTS } from '../schema.js';
 import { inr, round2, fyOf } from '../calc.js';
 import { itemPicker, bomRows } from './form.js';
@@ -39,6 +39,9 @@ export async function withStockChecks(call, extra = {}) {
         may ? [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }] : [{ label: 'OK', value: false }]);
       return ok ? withStockChecks(call, { ...extra, allowNegative: true }) : null;
     }
+    const why = await overBoqReason(e);
+    if (why === null) return null;
+    if (why) return withStockChecks(call, { ...extra, force: true, overrun_reason: why });
     if (/^Reserved for other projects/.test(e.message) && !extra.allowReserved) {
       const ok = await modal('Stock reserved for other projects', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Post anyway', cls: 'danger solid', value: true }]);
       return ok ? withStockChecks(call, { ...extra, allowReserved: true }) : null;

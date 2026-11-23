@@ -28,11 +28,11 @@ const EXTRA_LINKS = {
   Purchase: [['#/project-store', '🏗️', 'Project Store (material per project)', 'purchase_orders'], ['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   Sales: [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
-  Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'projects']],
+  Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/site-material', '🧾', 'Site Material (sent · used · returned · lost)', 'projects'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'projects']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/lots?tab=iqc', '🔍', 'IQC – incoming inspection (GRN)', 'fn:iqc_inspect'], ['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'stock_moves'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'stock_moves'], ['#/site-material', '🧾', 'Site Material (per site)', 'stock_moves'], ['#/list/scrap_register', '♻️', 'Scrap Register (weighed in / sold)', 'scrap_register'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -153,6 +153,7 @@ async function route() {
       case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
       case 'project-store': { const { projectStoreView } = await import('./views/projectstore.js'); await projectStoreView(view, a); break; }
       case 'dept-stores': { const { deptStoresView } = await import('./views/deptstores.js'); await deptStoresView(view); break; }
+      case 'site-material': { const { siteMaterialView } = await import('./views/sitematerial.js'); await siteMaterialView(view, a); break; }
       case 'policies': { const { policiesView } = await import('./views/policies.js'); await policiesView(view); break; }
       case 'news': { const { newsView } = await import('./views/news.js'); await newsView(view); break; }
       case 'journey': { const { journeyView } = await import('./views/journey.js'); await journeyView(view, a); break; }
