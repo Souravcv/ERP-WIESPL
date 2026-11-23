@@ -2787,6 +2787,27 @@ export function fieldMap(entity) {
 let PERMS = {};
 export function setPermissions(map) { PERMS = { ...PERMS, ...map }; }
 
+// Stock value (owner, 23 Nov 2026): prices, rates and values of store material are only for roles with the function
+// "see_stock_value". The same rule leaves them out of the server's answers and Excel files and hides them on screen.
+const STOCK_VALUE_ENTITIES = new Set(['items', 'stock_moves', 'lots', 'stock_drafts', 'production_entries']);
+export const STOCK_VALUE_KEY = /rate|price|value|cost/i;
+export function isStockValueField(entity, key) {
+  if (entity === 'projects') return key === 'material_cost' || key === 'po_value'; // material issued at store rates; PO value
+  return STOCK_VALUE_ENTITIES.has(entity) && STOCK_VALUE_KEY.test(key);
+}
+// On the screens of a role without the right: those fields and columns are not shown at all (not left blank).
+export function hideStockValueFields() {
+  for (const [name, ent] of Object.entries(ENTITIES)) {
+    const hide = k => isStockValueField(name, k);
+    for (const f of ent.fields) {
+      if (hide(f.key)) f.hidden = true;
+      if (f.type === 'lines' && STOCK_VALUE_ENTITIES.has(name) && Array.isArray(f.columns)) f.columns = f.columns.filter(c => !hide(c.key));
+    }
+    if (Array.isArray(ent.list)) ent.list = ent.list.filter(k => !hide(k));
+    if (Array.isArray(ent.detail)) ent.detail = ent.detail.filter(k => !hide(k));
+  }
+}
+
 // Defaults for the built-in roles (also the starting point for a new role).
 // New roles that are not named in each module's write list.
 const ROLE_EDITS = {

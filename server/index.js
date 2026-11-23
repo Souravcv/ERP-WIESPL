@@ -58,7 +58,7 @@ import * as news from './news.js';
 import * as loginlog from './loginlog.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES } from '../public/js/schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES, isStockValueField } from '../public/js/schema.js';
 import * as roles from './roles.js';
 import { planFile, planReady, isCad, preparePlan, prepareMissingPlans } from './plans.js';
 import { fyOf } from '../public/js/calc.js';
@@ -166,13 +166,22 @@ api.use((req, res, next) => {
 
 // Stock value: prices, rates and values of the store are for roles with the function "see_stock_value" (Roles & Permissions).
 // Everyone else gets the same screens and the same quantities, with those figures left out of the answer.
-const STOCK_VALUE_SEGS = new Set(['stock', 'items', 'stock_moves', 'lots', 'iqc', 'dashboard', 'stock_drafts']);
+const STOCK_VALUE_SEGS = new Set(['stock', 'items', 'stock_moves', 'lots', 'iqc', 'dashboard', 'stock_drafts', 'production', 'production_entries', 'projects']);
 api.use((req, res, next) => {
   const role = req.user?.role;
   const [, seg, sub] = req.path.split('/');
   if (!STOCK_VALUE_SEGS.has(seg) || hasFunction(role, 'see_stock_value')) return next();
-  if (seg === 'dashboard' && sub !== 'store') return next();
   if (seg === 'items' && ['hsn-codes', 'next-code'].includes(sub)) return next();
+  if (seg === 'production' && sub === 'pareto') return next(); // quality counts, not money
+  // the home dashboard: only its store total; projects: only the material issued at store rates and the PO value
+  const only = seg === 'dashboard' && sub !== 'store' ? k => k === 'stock_value' : seg === 'projects' ? k => isStockValueField('projects', k) : null;
+  if (only && req.method === 'GET') {
+    const send = res.json.bind(res);
+    const strip = o => (Array.isArray(o) ? o.map(strip) : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => !only(k)).map(([k, x]) => [k, strip(x)])) : o);
+    res.json = body => send(strip(body));
+    return next();
+  }
+  if (only) return next();
   if (req.method !== 'GET') {
     // an edit made without seeing the price must not blank it
     if (['items', 'stock_moves'].includes(seg) && req.body && typeof req.body === 'object') delete req.body.rate;
@@ -1075,7 +1084,9 @@ api.post('/:entity/:id/status', wrap(req => {
 // ---------------------------------------------------------------- excel
 api.get('/export/:entity', wrap(async (req, res) => {
   viewable(req);
-  const buf = await exportEntity(req.params.entity, req.query, req.params.entity === 'work_tasks' ? rows => wt.visibleTasks(rows, req.user) : undefined);
+  // without the stock value right, the price / rate / value columns are left out of the file
+  const hide = hasFunction(req.user.role, 'see_stock_value') ? undefined : f => isStockValueField(req.params.entity, f.key);
+  const buf = await exportEntity(req.params.entity, req.query, req.params.entity === 'work_tasks' ? rows => wt.visibleTasks(rows, req.user) : undefined, hide);
   const fname = `${req.params.entity}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', `attachment; filename="${fname}"`);

@@ -29,7 +29,7 @@ function styleHeader(row) {
 
 const toDate = s => (s ? new Date(`${s}T00:00:00`) : null);
 
-export async function exportEntity(name, query, only = rows => rows) {
+export async function exportEntity(name, query, only = rows => rows, hideField = () => false) {
   const ent = ENTITIES[name];
   const rows = only(listRows(name, query));
   const wb = new ExcelJS.Workbook();
@@ -61,7 +61,7 @@ export async function exportEntity(name, query, only = rows => rows) {
     REGISTER.forEach((c, i) => { ws.getColumn(i + 1).width = [6, 14, 18, 12].at(i) || (c[1] === 'remarks' ? 40 : 18); });
     ws.views = [{ state: 'frozen', ySplit: 2 }];
   } else {
-    const fields = ent.fields.filter(f => !f.hidden && f.type !== 'json' && f.type !== 'lines');
+    const fields = ent.fields.filter(f => !f.hidden && f.type !== 'json' && f.type !== 'lines' && !hideField(f));
     const hdr = ws.addRow(fields.map(f => f.label));
     styleHeader(hdr);
     for (const r of rows) {

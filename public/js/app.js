@@ -1,7 +1,7 @@
 import { h, api, state, toast, fail, modal, markNav, redirect } from './ui.js';
 import { startI18n, getLang, setLang } from './i18n.js';
 import { initAssistant } from './assistant.js';
-import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES } from './schema.js';
+import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES, hideStockValueFields } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
 import { recordView } from './views/form.js';
@@ -243,6 +243,7 @@ async function start() {
     const me = await api('/me');
     state.user = me.user; state.settings = me.settings;
     if (me.perms) setPermissions({ [me.user.role]: me.perms });
+    if (!hasFunction(me.user.role, 'see_stock_value')) hideStockValueFields();
     state.people = await api('/people');
   } catch {
     $('app').classList.add('hidden');
