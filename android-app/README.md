@@ -80,6 +80,8 @@ The APK is `android/app/build/outputs/apk/debug/wiespl-debug.apk`.
    $env:JAVA_HOME='D:\Android\jdk21'; D:\Android\sdk\build-tools\36.0.0\apksigner.bat sign --ks wiespl-attendance.jks --ks-key-alias wiespl --out app\build\outputs\apk\release\wiespl.apk app\build\outputs\apk\release\wiespl-unsigned.apk
    ```
    A new build empties the release folder: copy `wiespl.apk` elsewhere before sending it.
+   **Since version 1.3 (23 Nov 2026) the key is `wiespl-attendance-2.jks`** (the password of the first key was lost, so phones uninstalled
+   the old app once). Use `--ks wiespl-attendance-2.jks` from now on; keep a copy of that file and its password with the MD.
 4. For a new version raise `versionCode` (and `versionName`) in `android/app/build.gradle`.
 5. App name on the phone: `app_name` in `android/app/src/main/res/values/strings.xml` (WIESPL HRA). Icons and splash are drawn from
    `public/logo.jpeg`; after changing the logo run, in `android-app`:
