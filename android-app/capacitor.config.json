@@ -3,7 +3,7 @@
   "appName": "WIESPL HRA",
   "webDir": "www",
   "server": {
-    "url": "https://rut-flattop-appear.ngrok-free.dev/#/attend",
+    "url": "https://wiespl-crm.tail67e013.ts.net/#/attend",
     "cleartext": false,
     "errorPath": "offline.html"
   },

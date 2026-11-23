@@ -37,9 +37,9 @@ The CRM page detects the app (`window.Capacitor`), so **changes to the attendanc
 
 ## 2. Set the CRM address
 
-`capacitor.config.json` → `server.url` (and the *Try again* link in `www/offline.html`). Today it is the ngrok address
-`https://rut-flattop-appear.ngrok-free.dev/#/attend`; change it to `https://crm.wiespl.com/#/attend` when the Cloudflare tunnel is live,
-then run step 3 again and build a new APK. It must be **https**.
+`capacitor.config.json` → `server.url` (and the *Try again* link in `www/offline.html`). Today it is the Tailscale Funnel address
+`https://wiespl-crm.tail67e013.ts.net/#/attend` (fixed; Tailscale on the office PC forwards it to port 3000). If the address ever changes
+(e.g. to `https://crm.wiespl.com/#/attend`), run step 3 again and build a new APK. It must be **https**.
 
 ## 3. Copy the settings into the Android project
 
@@ -132,7 +132,7 @@ While the person is clocked in a notification *"WIESPL HRA: location shared"* is
 
 ## Notes
 
-- The ngrok free address shows a "You are about to visit…" page the first time; tap *Visit Site* once. The background checks send the
-  `ngrok-skip-browser-warning` header and are not affected. The Cloudflare tunnel (`crm.wiespl.com`) has no such page.
+- The Tailscale Funnel address has no warning page. (The old ngrok address showed one; the background checks still send the harmless
+  `ngrok-skip-browser-warning` header.)
 - If the login runs out (7 days) the notification says *log in again*; checks resume after logging in.
 - Positions rougher than ±150 m (*hr_max_accuracy_m*) are not sent; the next fix is used.
