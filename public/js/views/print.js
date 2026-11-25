@@ -612,8 +612,15 @@ export async function printView(root, kind, id) {
     const w = await api(`/service_work_orders/${id}`);
     title = w.swo_no; doc = swoDoc(w, s);
   } else if (kind === 'servicereport') {
-    const r = await api(`/service_reports/${id}`);
+    const [r, files] = await Promise.all([api(`/service_reports/${id}`), api(`/attachments/service_reports/${id}`).catch(() => [])]);
     title = `${r.report_no} ${r.hospital || ''}`; doc = serviceReportDoc(r, s);
+    const ORDER = { Before: 0, After: 1 }; // before-work photos first, then after, then the others
+    const pics = files.filter(a => /^image\//.test(a.mime || '') || /\.(jpe?g|png|webp|gif)$/i.test(a.filename))
+      .sort((x, y) => (ORDER[x.note] ?? 2) - (ORDER[y.note] ?? 2) || x.id - y.id);
+    if (pics.length) doc.append(page(companyHead(s, 'PHOTOS'), grid([['Report No', r.report_no], ['Hospital', r.hospital], ['OT', r.ot_no], ['Date', fmtDate(r.date)]]),
+      h('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginTop: '8px' } }, pics.map(p => h('figure', { style: { margin: 0, breakInside: 'avoid' } },
+        h('img', { src: `/api/files/${p.id}?inline=1`, style: { width: '100%', maxHeight: '300px', objectFit: 'contain', border: '1px solid #999' } }),
+        h('figcaption', { style: { fontSize: '11px', textAlign: 'center' } }, [p.note === 'Before' ? 'Before work' : p.note === 'After' ? 'After work' : p.note, p.at ? fmtDate(String(p.at).slice(0, 10)) : ''].filter(Boolean).join(' · ')))))));
   } else if (kind === 'amc') {
     const a = await api(`/amc_contracts/${id}`);
     title = `AMC ${a.hospital || ''}`; doc = amcDoc(a, s);

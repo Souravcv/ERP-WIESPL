@@ -1131,6 +1131,7 @@ api.delete('/roles/:name', requireRole(), wrap(req => { roles.deleteRole(req.par
 api.get('/attachments/:entity/:id', wrap(req => { viewable(req); return roles.listAttachments(req.params.entity, req.params.id); }));
 api.post('/attachments/:entity/:id', express.raw({ type: () => true, limit: '200mb' }), wrap(req => {
   if (!canWrite(req.params.entity, req.user.role)) throw new HttpError(403, 'You do not have permission to add files here');
+  if (req.params.entity === 'service_reports' && db.prepare('SELECT status FROM service_reports WHERE id = ?').get(Number(req.params.id))?.status === 'Completed') throw new HttpError(409, 'This service report is signed: its photos cannot change');
   const saved = roles.saveAttachment(req.params.entity, req.params.id, { filename: req.query.name, mime: req.headers['x-file-type'], note: req.query.note }, req.body, req.user);
   if (isCad(saved.filename)) preparePlan(roles.attachmentFile(saved.id)); // ready before anyone opens it in 3D
   return saved;
@@ -1245,6 +1246,7 @@ api.post('/enquiries/:id/brief-rooms', need('enquiries'), express.json({ limit: 
 api.delete('/files/:id', wrap(req => {
   const a = roles.attachmentFile(req.params.id);
   if (a.entity.startsWith('journey:')) { journey.removeFile(a, req.user); return { ok: true }; }
+  if (a.entity === 'service_reports' && db.prepare('SELECT status FROM service_reports WHERE id = ?').get(a.record_id)?.status === 'Completed') throw new HttpError(409, 'This service report is signed: its photos cannot change');
   roles.deleteAttachment(req.params.id, req.user, canDelete(a.entity, req.user.role));
   return { ok: true };
 }));

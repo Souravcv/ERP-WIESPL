@@ -9,6 +9,24 @@ const RC = [['ot_temp', 'OT temp', '°C'], ['rh', 'RH', '%'], ['comp1', 'Compres
 const RGROUPS = [['🌡️ Room', ['ot_temp', 'rh']], ['⚙️ Compressor & blower', ['comp1', 'comp2', 'blower']], ['🔥 Heater', ['heater_r', 'heater_y', 'heater_b']], ['❄️ Coil & refrigerant', ['coil', 'suction', 'discharge']]];
 const AIR = [['r1', 'Return R1'], ['r2', 'Return R2'], ['r3', 'Return R3'], ['r4', 'Return R4'], ['h1', 'HEPA 1'], ['h2', 'HEPA 2'], ['h3', 'HEPA 3'], ['h4', 'HEPA 4'], ['h5', 'HEPA 5'], ['h6', 'HEPA 6'],
   ['return_open', 'Return damper open %'], ['fresh_open', 'Fresh air damper open %'], ['bypass_open', 'Bypass damper open %']];
+// A phone photo made smaller before it is sent (longest side 1600 px, JPEG): quick on mobile data, clear on the print.
+async function shrink(file) {
+  if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 400e3) return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
+    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
+    return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
+  } catch { return file; }
+}
+export const photoUrl = id => `/api/files/${id}?inline=1`;
+const ORDER = { Before: 0, After: 1 }; // before-work photos first, then after, then the others
+export async function reportPhotos(id) {
+  return (await api(`/attachments/service_reports/${id}`).catch(() => [])).filter(a => /^image\//.test(a.mime || '') || /\.(jpe?g|png|webp|gif)$/i.test(a.filename))
+    .sort((x, y) => (ORDER[x.note] ?? 2) - (ORDER[y.note] ?? 2) || x.id - y.id);
+}
 const CALLS = ['AMC Service Visit', 'Break Down Call', 'Warranty', 'Chargeable Basis'];
 const RESULTS = ['Solved', 'Not solved – revisit needed', 'Not solved – parts needed'];
 const EDIT = ['date', 'time_in', 'hospital', 'customer_id', 'call_type', 'ticket_id', 'amc_id', 'complaint_from', 'contact_name', 'mobile', 'email', 'ot_no', 'ahu_capacity', 'ac_tr', 'odu_count', 'plc_sr', 'gsm_sr',
@@ -51,6 +69,8 @@ function css() {
 .srv-bar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: flex; gap: 8px; justify-content: center; align-items: center; padding: 10px 12px; background: var(--card, #fff); border-top: 1px solid var(--border); box-shadow: 0 -2px 10px rgba(0,0,0,.06); }
 .srv-bar .btn { min-height: 42px; }
 .srv-bar .st { font-size: 12px; color: var(--muted, #64748b); }
+body:has(.srv-bar) .ai-fab { bottom: 96px !important; }
+@media (max-width: 600px) { body:has(.srv-bar) .ai-fab { bottom: 128px !important; } }
 @media (max-width: 600px) { .srv { padding-bottom: 120px; } .srv-bar { flex-wrap: wrap; gap: 6px; padding: 6px 8px 8px; } .srv-bar .st { width: 100%; text-align: center; } .srv-bar .btn { flex: 1 1 auto; padding: 6px 10px; font-size: 14px; } .srv-sec { padding: 12px 10px; } .srv-grid { grid-template-columns: repeat(2, 1fr); } .srv-grid.wide { grid-template-columns: 1fr; } .srv-check { flex-direction: column; align-items: stretch; } }
 `));
 }
@@ -59,9 +79,9 @@ const field = (label, el, unit) => h('label', label, unit ? h('span.unit', ` (${
 const num = (v, on) => { const i = h('input', { type: 'text', inputMode: 'decimal', value: v ?? '', autocomplete: 'off' }); i.oninput = () => on(i.value); return i; };
 const txt = (v, on, extra = {}) => { const i = h('input', { type: 'text', value: v ?? '', ...extra }); i.oninput = () => on(i.value); return i; };
 const area = (v, on, rows = 3, ph = '') => { const t = h('textarea', { rows, placeholder: ph }); t.value = v ?? ''; t.oninput = () => on(t.value); return t; };
-const seg = (opts, cur, on, cls = () => '') => {
+const seg = (opts, cur, on, cls = () => '', sticky = false) => {
   const wrap = h('div.srv-seg');
-  const draw = v => wrap.replaceChildren(...opts.map(([val, lab]) => h('button', { type: 'button', class: [val === v ? 'on' : '', cls(val)].join(' ').trim(), onclick: () => { const nv = v === val ? '' : val; on(nv); draw(nv); } }, lab)));
+  const draw = v => wrap.replaceChildren(...opts.map(([val, lab]) => h('button', { type: 'button', class: [val === v ? 'on' : '', cls(val)].join(' ').trim(), onclick: () => { const nv = v === val && !sticky ? '' : val; on(nv); draw(nv); } }, lab)));
   draw(cur);
   return wrap;
 };
@@ -84,6 +104,8 @@ export async function serviceReportView(root, idArg) {
   const amc = r.amc_id ? await api(`/amc_contracts/${r.amc_id}`).catch(() => null) : null;
   const ots = (amc?.ot_systems || []).filter(x => x.ot);
   const stock = writable ? await api('/service/stock').catch(() => []) : [];
+  let photos = r.id ? await reportPhotos(r.id) : [];
+  let photoTag = 'Before';
   r.readings = Array.isArray(r.readings) ? r.readings : [];
   r.airflow = Array.isArray(r.airflow) ? r.airflow : [];
   r.dampers = Array.isArray(r.dampers) ? r.dampers : [];
@@ -139,6 +161,34 @@ export async function serviceReportView(root, idArg) {
 
   sec('work', '🔧 Problem & work done', () => h('div.srv-grid.wide', field('Problem observed', area(r.problem, v => set('problem', v), 3, 'What the client reported and what you found')),
     field('Work done', area(r.work_done, v => set('work_done', v), 3, 'What you did to resolve it'))), () => !!(r.problem && r.work_done));
+
+  sec('photos', '📷 Photos', () => {
+    if (!r.id) return h('p.muted', 'Save the report once, then add the photos.');
+    const redraw = () => sections.find(x => x.key === 'photos').draw();
+    const upload = async files => {
+      let n = 0;
+      for (const f0 of files) {
+        const f = await shrink(f0);
+        const res = await fetch(`/api/attachments/service_reports/${r.id}?name=${encodeURIComponent(f.name)}&note=${encodeURIComponent(photoTag)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'x-file-type': f.type || 'image/jpeg' }, body: f });
+        if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || 'Photo not saved');
+        n++;
+      }
+      photos = await reportPhotos(r.id); toast(`${n} photo${n === 1 ? '' : 's'} added`); redraw();
+    };
+    const pickCam = h('input', { type: 'file', accept: 'image/*', capture: 'environment', style: { display: 'none' }, onchange: e => { const fl = [...e.target.files]; e.target.value = ''; if (fl.length) upload(fl).catch(fail); } });
+    const pickGal = h('input', { type: 'file', accept: 'image/*', multiple: true, style: { display: 'none' }, onchange: e => { const fl = [...e.target.files]; e.target.value = ''; if (fl.length) upload(fl).catch(fail); } });
+    const byTag = t => photos.filter(p => (p.note || 'Other') === t);
+    const tags = [...new Set(['Before', 'After', 'Other', ...photos.map(p => p.note || 'Other')])];
+    return [
+      writable ? [h('div.srv-sub', { style: { marginTop: 0 } }, 'This photo is'), seg([['Before', 'Before work'], ['After', 'After work'], ['Other', 'Other']], photoTag, v => { photoTag = v; }, () => '', true),
+        h('div.srv-seg', h('button', { type: 'button', style: { fontWeight: 700 }, onclick: () => pickCam.click() }, '📷 Take photo'), h('button', { type: 'button', onclick: () => pickGal.click() }, '🖼 From gallery'), pickCam, pickGal)] : null,
+      photos.length ? tags.filter(t => byTag(t).length).map(t => [h('div.srv-sub', `${t === 'Before' ? 'Before work' : t === 'After' ? 'After work' : t} (${byTag(t).length})`),
+        h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))', gap: '8px' } }, byTag(t).map(p => h('div', { style: { position: 'relative' } },
+          h('a', { href: photoUrl(p.id), target: '_blank', rel: 'noopener' }, h('img', { src: photoUrl(p.id), loading: 'lazy', alt: p.filename, style: { width: '100%', height: '110px', objectFit: 'cover', borderRadius: '8px', border: '1px solid var(--border)', display: 'block' } })),
+          writable && p.uploaded_by === state.user.name ? h('button', { type: 'button', title: 'Remove', style: { position: 'absolute', top: '4px', right: '4px', border: 0, borderRadius: '50%', width: '26px', height: '26px', background: 'rgba(0,0,0,.6)', color: '#fff', cursor: 'pointer' },
+            onclick: busy(async () => { if (!confirm('Remove this photo?')) return; await api(`/files/${p.id}`, { method: 'DELETE' }); photos = await reportPhotos(r.id); redraw(); }) }, '✕') : null)))])
+        : h('p.muted', writable ? 'No photos yet. Take a photo before the work and after it: the client sees them before signing.' : 'No photos.')];
+  }, () => photos.length > 0);
 
   sec('check', '✅ Checklist', () => {
     const list = Array.isArray(r.checklist) ? r.checklist : [];

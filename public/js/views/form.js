@@ -1820,11 +1820,30 @@ export async function completeServiceDialog(r) {
   const clear = h('button.btn.small', { type: 'button', onclick: () => { ctx2.clearRect(0, 0, pad.width, pad.height); drawn = false; } }, 'Clear');
   const box = (t, ...c) => h('div', { style: { border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px', margin: '8px 0' } }, h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, t), ...c);
   const used = (r.material_used || []).filter(l => l.item_id && Number(l.qty) > 0);
+  // what the client signs for: the report in short, with the photos
+  const { reportPhotos, photoUrl } = await import('./servicereport.js');
+  const photos = await reportPhotos(r.id);
+  const filledReadings = (r.readings || []).filter(x => Object.entries(x).some(([k, v]) => k !== 'timing' && v !== '' && v != null));
+  const line = (l, v) => (v ? h('div', { style: { margin: '2px 0' } }, h('b', `${l}: `), v) : null);
+  const review = box('1 · Review the report with the client',
+    line('Call', [r.call_type, r.ot_no && (/^ot/i.test(r.ot_no) ? r.ot_no : `OT ${r.ot_no}`)].filter(Boolean).join(' · ')),
+    line('System', [r.ahu_capacity && `AHU ${r.ahu_capacity} CFM`, r.ac_tr && `AC ${r.ac_tr} TR`, r.odu_count && `${r.odu_count} ODU`].filter(Boolean).join(' · ')),
+    line('Problem', r.problem), line('Work done', r.work_done),
+    line('Checklist', (r.checklist || []).length ? `${(r.checklist || []).filter(c => c.done === 'Yes').length} of ${(r.checklist || []).length} steps done` : ''),
+    line('Testing', [(r.tests_done || []).join(', '), filledReadings.length ? `${filledReadings.length} reading${filledReadings.length === 1 ? '' : 's'} taken` : ''].filter(Boolean).join(' · ')),
+    line('Dampers', (r.dampers || []).filter(d => d.damper).map(d => `${d.damper}${d.ot ? ' ' + d.ot : ''}${d.condition ? ': ' + d.condition : ''}`).join(' · ')),
+    line('Particle count', [r.particle_count, r.particle_result].filter(Boolean).join(' – ')),
+    line('Material used', used.map(l => `${l.description || l.item_id_label || ''} × ${l.qty} ${l.uom || ''}`).join(' · ')),
+    photos.length ? h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '6px', marginTop: '6px' } }, photos.map(p => h('a', { href: photoUrl(p.id), target: '_blank', rel: 'noopener', style: { position: 'relative', display: 'block' } },
+      h('img', { src: photoUrl(p.id), style: { width: '100%', height: '80px', objectFit: 'cover', borderRadius: '6px', display: 'block' } }),
+      h('span', { style: { position: 'absolute', left: '4px', bottom: '4px', background: 'rgba(0,0,0,.6)', color: '#fff', fontSize: '11px', padding: '1px 5px', borderRadius: '4px' } }, p.note || 'Photo'))))
+      : h('div.muted', { style: { marginTop: '4px' } }, 'No photos attached.'),
+    h('a', { href: `#/print/servicereport/${r.id}`, target: '_blank', style: { fontSize: '13px', display: 'inline-block', marginTop: '6px' } }, '🖨 Open the full report'));
   return modal(`Complete ${r.report_no} – ${r.hospital || ''}`, h('div',
-    box('1 · Result', h('label', 'Problem solved? *', result), notSolved),
-    used.length ? box('2 · Material used (comes off the Service stock)', h('div.muted', used.map(l => `${l.description || l.item_id_label || ''}: ${l.qty} ${l.uom || ''}`).join(' · '))) : null,
-    box(`${used.length ? 3 : 2} · Client feedback`, h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '6px' } }, FB.map(([k, l]) => h('label', l, fb[k]))), h('label', 'Remark', more)),
-    box(`${used.length ? 4 : 3} · Client signature (work done)`, pad, h('div', { style: { display: 'flex', gap: '8px', alignItems: 'end', flexWrap: 'wrap', marginTop: '6px' } }, h('label', { style: { flex: '2 1 200px' } }, 'Name *', name), h('label', { style: { flex: '1 1 160px' } }, 'Designation', desig, dl), clear))),
+    review,
+    box('2 · Result', h('label', 'Problem solved? *', result), notSolved),
+    box(`3 · Client feedback`, h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '6px' } }, FB.map(([k, l]) => h('label', l, fb[k]))), h('label', 'Remark', more)),
+    box('4 · Client signature: the work done and the report above', pad, h('div', { style: { display: 'flex', gap: '8px', alignItems: 'end', flexWrap: 'wrap', marginTop: '6px' } }, h('label', { style: { flex: '2 1 200px' } }, 'Name *', name), h('label', { style: { flex: '1 1 160px' } }, 'Designation', desig, dl), clear))),
   [{ label: 'Cancel', value: false }, { label: '✔ Complete & save signature', cls: 'primary', action: async () => {
     if (!drawn) throw new Error('The client signs in the box first');
     const out = await api(`/service_reports/${r.id}/complete`, { method: 'POST', body: { result: result.value, next_action: next.value, revisit_date: revisit.value || null, additional_feedback: more.value,
