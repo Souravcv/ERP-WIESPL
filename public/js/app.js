@@ -161,6 +161,7 @@ async function route() {
       case 'materials': { const { materialsView } = await import('./views/materials.js'); await materialsView(view, a); break; }
       case 'project-store': { const { projectStoreView } = await import('./views/projectstore.js'); await projectStoreView(view, a); break; }
       case 'dept-stores': { const { deptStoresView } = await import('./views/deptstores.js'); await deptStoresView(view); break; }
+      case 'service-report': { const { serviceReportView } = await import('./views/servicereport.js'); await serviceReportView(view, a); break; }
       case 'site-material': { const { siteMaterialView } = await import('./views/sitematerial.js'); await siteMaterialView(view, a); break; }
       case 'policies': { const { policiesView } = await import('./views/policies.js'); await policiesView(view); break; }
       case 'news': { const { newsView } = await import('./views/news.js'); await newsView(view); break; }

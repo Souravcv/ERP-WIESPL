@@ -1349,6 +1349,8 @@ export const ENTITIES = {
       { key: 'hepa_pa', label: 'HEPA Pressure (Pa)', type: 'text' },
       { key: 'positive_pa', label: 'Positive Pressure (Pa)', type: 'text' },
       { key: 'ambient_c', label: 'Ambient Temp (°C)', type: 'text' },
+      { key: 'reading_start', label: 'First Reading At', type: 'text', hidden: true },
+      { key: 'reading_every', label: 'Reading Every (minutes)', type: 'number', hidden: true },
       { key: 'readings', label: 'Testing Parameters', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
         {"key":"timing","label":"Timing","type":"text","width":62}, {"key":"ot_temp","label":"OT °C","type":"text","width":62}, {"key":"rh","label":"RH %","type":"text","width":62}, {"key":"comp1","label":"Comp AC1 A","type":"text","width":62}, {"key":"comp2","label":"Comp AC2 A","type":"text","width":62}, {"key":"blower","label":"Blower A","type":"text","width":62}, {"key":"heater_r","label":"Heater R","type":"text","width":62}, {"key":"heater_y","label":"Heater Y","type":"text","width":62}, {"key":"heater_b","label":"Heater B","type":"text","width":62}, {"key":"coil","label":"Coil °C","type":"text","width":62}, {"key":"suction","label":"Suction PSI","type":"text","width":62}, {"key":"discharge","label":"Discharge PSI","type":"text","width":62}, {"key":"remark","label":"Remark","type":"text","width":140}] },
       { key: 'airflow', label: 'Air Flow & Damper Opening (CFM / velocity m/s)', type: 'lines', span: 2, amounts: false, schedule: true, columns: [

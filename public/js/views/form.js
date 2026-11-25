@@ -1269,6 +1269,8 @@ export async function recordView(root, entity, id) {
   if (ent.editor === 'boq' && id !== 'new' && !/details=1/.test(location.hash)) { redirect(`#/boq/${id}`); return; }
   if (ent.editor === 'bom' && id !== 'new' && !/details=1/.test(location.hash)) { redirect(`#/bom/${id}`); return; }
   if (entity === 'stock_moves' && id === 'new') { redirect('#/stock-entry'); return; }
+  // the technician's service report screen (sections, phone-friendly); the full form stays at ?full=1
+  if (entity === 'service_reports' && !/[?&]full=1/.test(location.hash)) { const q = location.hash.split('?')[1]; redirect(`#/service-report/${id}${q ? '?' + q : ''}`); return; }
   let isNew = id === 'new';
   const presets = Object.fromEntries(new URLSearchParams(location.hash.split('?')[1] || ''));
   let row = {};
@@ -1792,7 +1794,7 @@ async function serviceStockDialog() {
   [{ label: 'Close', value: true }]);
 }
 // Complete a service report: result, feedback and the signature of the doctor / client's representative on the screen.
-async function completeServiceDialog(r) {
+export async function completeServiceDialog(r) {
   const RESULTS = ['Solved', 'Not solved – revisit needed', 'Not solved – parts needed'];
   const RATES = ['', 'Very Satisfied', 'Satisfied', 'Neutral', 'Dissatisfied', 'Very Dissatisfied'];
   const result = h('select', ['', ...RESULTS].map(o => h('option', { value: o, selected: o === (r.result || '') }, o || '— choose —')));
