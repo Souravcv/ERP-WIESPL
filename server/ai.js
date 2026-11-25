@@ -15,7 +15,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { db, getSettings, setSettings, DATA_DIR, audit } from './db.js';
-import { ENTITIES, canView, WORKER_ROLES, STOCK_SQL, hasFunction } from '../public/js/schema.js';
+import { ENTITIES, canView, WORKER_ROLES, STOCK_SQL, hasFunction, isStoreStockField } from '../public/js/schema.js';
 import { listRows, getRow, HttpError, options } from './crud.js';
 import { PART_UI, DOOR_TYPES, FLOOR_TYPES } from '../public/js/parts.js';
 import { VIDEOS } from '../public/js/explainers.js';
@@ -261,7 +261,7 @@ function cleanRow(module, row, role, full = false) {
   const keys = full ? ent.fields.filter(f => f.type !== 'section').map(f => f.key) : [...new Set(['date', ...(ent.list || []), ent.statusField].filter(Boolean))];
   for (const key of keys) {
     const f = ent.fields.find(x => x.key === key); if (!f || f.type === 'json' || f.type === 'image' || f.type === 'file' || HIDE.test(key)) continue;
-    if ((worker && (f.type === 'money' || MONEY.test(key))) || hidesValue(module, f, role)) continue;
+    if ((worker && (f.type === 'money' || MONEY.test(key))) || hidesValue(module, f, role) || (isStoreStockField(module, key) && !hasFunction(role, 'see_store_stock'))) continue;
     let v = f.type === 'ref' ? row[key + '_label'] ?? row[key] : row[key];
     if (v == null || v === '') continue;
     if (Array.isArray(v)) v = v.join(', ');

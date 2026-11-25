@@ -70,12 +70,13 @@ export async function rolesView(root) {
     };
     const setAll = lvl => { for (const s of Object.values(modSel)) s.value = lvl; };
     // screens and what the role sees: switched here, so they are easy to find (they are functions underneath)
-    const SCREENS = Object.keys(FUNCTIONS).filter(k => k.startsWith('screen_') || k === 'see_stock_value');
+    const SCREENS = Object.keys(FUNCTIONS).filter(k => k.startsWith('screen_') || k === 'see_stock_value' || k === 'see_store_stock');
     for (const k of SCREENS) funcChk[k] = h('input', { type: 'checkbox', checked: (base.functions || []).includes(k), style: { width: 'auto' } });
     const screens = isAdminRole ? null : h('div.role-screens', h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, '🖥️ Screens & visibility'),
       h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '6px 18px' } },
-        SCREENS.map(k => h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: k === 'see_stock_value' ? 600 : 400 } }, funcChk[k],
-          k === 'see_stock_value' ? '💰 See prices, rates and stock value (untick: hidden on screens and Excel)' : FUNCTIONS[k].replace(/^Screen: /, '📄 Show the screen: ')))));
+        SCREENS.map(k => h('label', { style: { display: 'flex', gap: '8px', alignItems: 'center', fontWeight: k.startsWith('see_') ? 600 : 400 } }, funcChk[k],
+          k === 'see_stock_value' ? '💰 See prices, rates and stock value (untick: hidden on screens and Excel)'
+            : k === 'see_store_stock' ? '📦 See the store stock: quantities, stock movements, store screens (untick: hidden)' : FUNCTIONS[k].replace(/^Screen: /, '📄 Show the screen: ')))));
     const matrix = isAdminRole ? h('p', 'The Administrator always has full access to everything.') : h('div', screens,
       h('div.toolbar', h('b', 'Module access'), h('span.muted', 'Set all to:'), Object.entries(ACCESS_LEVELS).map(([k, v]) => h('button.btn.small', { type: 'button', onclick: () => setAll(k) }, v))),
       h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '6px 18px' } },

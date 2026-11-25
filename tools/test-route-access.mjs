@@ -89,9 +89,9 @@ const admin = r => r === 'admin';
 await allowed('/users', admin);
 await allowed('/roles', admin);
 await allowed('/dashboard', r => view(r, 'enquiries'));
-await allowed('/stock/summary', r => view(r, 'items'));
-await allowed('/stock/available/1', r => view(r, 'items'));
-await allowed('/export/stock-summary', r => view(r, 'items'));
+await allowed('/stock/summary', r => view(r, 'items') && fn(r, 'see_store_stock'));
+await allowed('/stock/available/1', r => view(r, 'items') && fn(r, 'see_store_stock'));
+await allowed('/export/stock-summary', r => view(r, 'items') && fn(r, 'see_store_stock'));
 await allowed('/items/next-code?category=Hardware', r => write(r, 'items'));
 await allowed('/reports/po-lines', r => view(r, 'purchase_orders'));
 await allowed('/media/or', r => view(r, 'enquiries'));
@@ -141,7 +141,7 @@ ok(await status('store', '/settings', { method: 'PUT', body: '{}', headers: { 'c
 const gm = await json('manager', '/dashboard'), sales = await json('sales', '/dashboard');
 ok(gm.kpi.receivable !== undefined && gm.kpi.open_tickets !== undefined && gm.pending_po !== undefined && gm.stock_value !== undefined, 'GM: every tile');
 ok(sales.kpi.receivable === undefined && sales.kpi.collected === undefined && sales.kpi.open_tickets === undefined && sales.pending_po === undefined && sales.pending_req === undefined, 'sales: no receivable, service or purchase figures');
-ok(sales.kpi.enquiries !== undefined && sales.kpi.open_quote_value !== undefined && sales.kpi.order_value !== undefined && Array.isArray(sales.followups_due) && Array.isArray(sales.low_stock), 'sales: enquiries, quotes, orders, follow-ups stay');
+ok(sales.kpi.enquiries !== undefined && sales.kpi.open_quote_value !== undefined && sales.kpi.order_value !== undefined && Array.isArray(sales.followups_due) && sales.low_stock === undefined, 'sales: enquiries, quotes, orders, follow-ups stay; no store stock');
 
 // the Excel export of tasks follows the task rules
 const ExcelJS = (await import('exceljs')).default;

@@ -236,6 +236,7 @@ export const FUNCTIONS = {
   screen_news: 'Screen: News (hospital leads & industry news)',
   screen_taskboard: 'Screen: Task board',
   see_stock_value: 'Store: see prices, rates and stock value (hidden from everyone else)',
+  see_store_stock: 'Store: see the store stock – quantities in the store, stock movements and the store screens (hidden from everyone else)',
   site_material: 'Site material: confirm challans on arrival at site, count the high-value items weekly (Projects → Site Material)',
   site_recon: 'Projects head – site material: installed / billed quantities, wastage allowance, approve material above the BOQ, sign the site closure',
 };
@@ -270,9 +271,13 @@ export const DEFAULT_FUNCTIONS = {
 };
 // Screens and the stock value: roles that had them before they became selectable keep them (a one-off migration in server/roles.js does the same for the saved roles).
 const STOCK_VALUE_ROLES = ['finance_head', 'accounts', 'purchase_head', 'purchase', 'store', 'technical', 'chief_engineer', 'planning'];
+// The store stock (quantities): the store, purchase, accounts, the heads, planning and production. Not the site engineers,
+// sales, design, quality or service (owner, 25 Nov 2026); switchable per role on Roles & Permissions.
+export const STORE_STOCK_ROLES = [...STOCK_VALUE_ROLES, 'production', 'production_manager', 'project_head'];
 for (const r of Object.keys(ROLE_INFO)) {
   const worker = WORKER_ROLES.includes(r);
-  const add = [...(worker ? [] : ['screen_news', 'screen_taskboard']), ...(['admin', 'manager', 'md'].includes(r) || STOCK_VALUE_ROLES.includes(r) ? ['see_stock_value'] : [])];
+  const add = [...(worker ? [] : ['screen_news', 'screen_taskboard']), ...(['admin', 'manager', 'md'].includes(r) || STOCK_VALUE_ROLES.includes(r) ? ['see_stock_value'] : []),
+    ...(['admin', 'manager', 'md'].includes(r) || STORE_STOCK_ROLES.includes(r) ? ['see_store_stock'] : [])];
   if (add.length && r !== 'admin') DEFAULT_FUNCTIONS[r] = [...new Set([...(DEFAULT_FUNCTIONS[r] || []), ...add])];
 }
 export const ACCESS_LEVELS = { none: 'No access', view: 'View', edit: 'View + add / edit', full: 'Full (incl. delete)' };
@@ -2794,6 +2799,15 @@ export const STOCK_VALUE_KEY = /rate|price|value|cost/i;
 export function isStockValueField(entity, key) {
   if (entity === 'projects') return key === 'material_cost' || key === 'po_value'; // material issued at store rates; PO value
   return STOCK_VALUE_ENTITIES.has(entity) && STOCK_VALUE_KEY.test(key);
+}
+// Store stock: without "see_store_stock" the store's own modules are closed and an item's stock is not shown.
+export const STORE_STOCK_MODULES = ['stock_moves', 'stock_drafts', 'lots'];
+export const isStoreStockField = (entity, key) => entity === 'items' && ['stock', 'opening_stock', 'stock_value'].includes(key);
+export function hideStoreStockFields() {
+  const it = ENTITIES.items;
+  for (const f of it.fields) if (isStoreStockField('items', f.key)) f.hidden = true;
+  if (Array.isArray(it.list)) it.list = it.list.filter(k => !isStoreStockField('items', k));
+  if (Array.isArray(it.detail)) it.detail = it.detail.filter(k => !isStoreStockField('items', k));
 }
 // On the screens of a role without the right: those fields and columns are not shown at all (not left blank).
 export function hideStockValueFields() {

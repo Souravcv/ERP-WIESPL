@@ -1,7 +1,7 @@
 import { h, api, state, toast, fail, modal, markNav, redirect } from './ui.js';
 import { startI18n, getLang, setLang } from './i18n.js';
 import { initAssistant } from './assistant.js';
-import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES, hideStockValueFields } from './schema.js';
+import { ENTITIES, GROUPS, canView, hasFunction, setPermissions, WORKER_ROLES, hideStockValueFields, hideStoreStockFields } from './schema.js';
 import { dashboardView } from './views/dashboard.js';
 import { listView } from './views/list.js';
 import { recordView } from './views/form.js';
@@ -25,14 +25,14 @@ if ('serviceWorker' in navigator && window.isSecureContext) navigator.serviceWor
 // Screens that are not a single module list, shown at the top of their menu group (visible with access to the module).
 const EXTRA_LINKS = {
   CRM: [['#/panels', '🖥️', 'Control Panels & OR App', 'enquiries']],
-  Purchase: [['#/project-store', '🏗️', 'Project Store (material per project)', 'purchase_orders'], ['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
+  Purchase: [['#/project-store', '🏗️', 'Project Store (material per project)', 'fn:see_store_stock'], ['#/materials', '📦', 'Material Tracker (needed by / promised)', 'purchase_orders'], ['#/po-tracker', '🔎', 'PO Tracker', 'purchase_orders'], ['#/vendor-performance', '🏅', 'Vendor Performance & Approved List', 'vendors'], ['#/project-analysis', '📈', 'Project Analysis', 'projects'],
     ['#/payables', '💼', 'Payables & Vendor Ledger', 'vendor_payments'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'vendor_payments']],
   Sales: [['#/receivables', '📒', 'Receivables & Customer Statement', 'invoices'], ['#/bank-reco', '🏦', 'Bank Reconciliation', 'payments']],
-  Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/site-material', '🧾', 'Site Material (sent · used · returned · lost)', 'projects'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'projects']],
+  Projects: [['#/journey', '🧭', 'Order Journey (enquiry → handover)', 'fn:screen_journey'], ['#/planner', '📅', 'Project Planner (Gantt)', 'schedule_activities'], ['#/site-material', '🧾', 'Site Material (sent · used · returned · lost)', 'projects'], ['#/project-store', '🏗️', 'Project Store (material per project)', 'fn:see_store_stock']],
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/lots?tab=iqc', '🔍', 'IQC – incoming inspection (GRN)', 'fn:iqc_inspect'], ['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'stock_moves'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'stock_moves'], ['#/site-material', '🧾', 'Site Material (per site)', 'stock_moves'], ['#/list/scrap_register', '♻️', 'Scrap Register (weighed in / sold)', 'scrap_register'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'stock_moves'], ['#/stock-summary', '📊', 'Stock Summary', 'items'], ['#/store-check', '📦', 'BOQ Store Check', 'boms'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'fn:see_store_stock'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'fn:see_store_stock'], ['#/site-material', '🧾', 'Site Material (per site)', 'stock_moves'], ['#/list/scrap_register', '♻️', 'Scrap Register (weighed in / sold)', 'scrap_register'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'fn:see_store_stock'], ['#/stock-summary', '📊', 'Stock Summary', 'fn:see_store_stock'], ['#/store-check', '📦', 'BOQ Store Check', 'fn:see_store_stock'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -244,6 +244,7 @@ async function start() {
     state.user = me.user; state.settings = me.settings;
     if (me.perms) setPermissions({ [me.user.role]: me.perms });
     if (!hasFunction(me.user.role, 'see_stock_value')) hideStockValueFields();
+    if (!hasFunction(me.user.role, 'see_store_stock')) hideStoreStockFields();
     state.people = await api('/people');
   } catch {
     $('app').classList.add('hidden');

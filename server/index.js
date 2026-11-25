@@ -58,7 +58,7 @@ import * as news from './news.js';
 import * as loginlog from './loginlog.js';
 const { draftRow } = sf;
 import { exportEntity, importEnquiries } from './excel.js';
-import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES, isStockValueField } from '../public/js/schema.js';
+import { ENTITIES, canWrite, canView, canDelete, hasFunction, STOCK_SQL, WORKER_ROLES, MOVE_TYPES, isStockValueField, isStoreStockField } from '../public/js/schema.js';
 import * as roles from './roles.js';
 import { planFile, planReady, isCad, preparePlan, prepareMissingPlans } from './plans.js';
 import { fyOf } from '../public/js/calc.js';
@@ -166,6 +166,23 @@ api.use((req, res, next) => {
 
 // Stock value: prices, rates and values of the store are for roles with the function "see_stock_value" (Roles & Permissions).
 // Everyone else gets the same screens and the same quantities, with those figures left out of the answer.
+// Store stock: without "see_store_stock" the store's screens and reports are closed and an item's stock is left out.
+const STORE_SCREENS = new Set(['stock', 'dept-stores', 'project-store', 'lots', 'store']);
+api.use((req, res, next) => {
+  const role = req.user?.role;
+  if (!role || hasFunction(role, 'see_store_stock')) return next();
+  const [, seg, sub] = req.path.split('/');
+  if (STORE_SCREENS.has(seg) || (seg === 'dashboard' && sub === 'store') || (seg === 'export' && /^stock/.test(sub || '')) || (seg === 'stock_moves' || seg === 'stock_drafts'))
+    return res.status(403).json({ error: 'The store stock is not shown to your role' });
+  const bomCheck = seg === 'boms' && req.path.endsWith('/stock-check'); // a BOQ's components: what the store holds for them
+  if (req.method === 'GET' && (seg === 'items' || (seg === 'dashboard' && !sub) || bomCheck)) {
+    const drop = seg === 'items' ? k => isStoreStockField('items', k) : bomCheck ? k => k === 'in_store' || k === 'free_stock' : k => k === 'low_stock' || k === 'stock_value';
+    const send = res.json.bind(res);
+    const strip = o => (Array.isArray(o) ? o.map(strip) : o && typeof o === 'object' ? Object.fromEntries(Object.entries(o).filter(([k]) => !drop(k)).map(([k, x]) => [k, strip(x)])) : o);
+    res.json = body => send(strip(body));
+  }
+  next();
+});
 const STOCK_VALUE_SEGS = new Set(['stock', 'items', 'stock_moves', 'lots', 'iqc', 'dashboard', 'stock_drafts', 'production', 'production_entries', 'projects']);
 api.use((req, res, next) => {
   const role = req.user?.role;
@@ -1085,7 +1102,8 @@ api.post('/:entity/:id/status', wrap(req => {
 api.get('/export/:entity', wrap(async (req, res) => {
   viewable(req);
   // without the stock value right, the price / rate / value columns are left out of the file
-  const hide = hasFunction(req.user.role, 'see_stock_value') ? undefined : f => isStockValueField(req.params.entity, f.key);
+  const noValue = !hasFunction(req.user.role, 'see_stock_value'), noStock = !hasFunction(req.user.role, 'see_store_stock');
+  const hide = !noValue && !noStock ? undefined : f => (noValue && isStockValueField(req.params.entity, f.key)) || (noStock && isStoreStockField(req.params.entity, f.key));
   const buf = await exportEntity(req.params.entity, req.query, req.params.entity === 'work_tasks' ? rows => wt.visibleTasks(rows, req.user) : undefined, hide);
   const fname = `${req.params.entity}-${new Date().toISOString().slice(0, 10)}.xlsx`;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

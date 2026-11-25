@@ -4,7 +4,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { db, audit, DATA_DIR } from './db.js';
 import { HttpError } from './crud.js';
-import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, ROLE_SEES, WORKER_ROLES, defaultPermissions, setPermissions } from '../public/js/schema.js';
+import { ROLE_INFO, ENTITIES, FUNCTIONS, ACCESS_LEVELS, DEFAULT_FUNCTIONS, ROLE_SEES, WORKER_ROLES, defaultPermissions, setPermissions, STORE_STOCK_MODULES } from '../public/js/schema.js';
 
 const parse = s => { try { return JSON.parse(s || '{}'); } catch { return {}; } };
 
@@ -23,6 +23,8 @@ export function loadRoles() {
     // Modules added in later versions get the built-in default for that role.
     const d = defaultPermissions(r.name);
     for (const m of Object.keys(ENTITIES)) if (!p.modules?.[m]) (p.modules ||= {})[m] = ROLE_INFO[r.name] ? d.modules[m] : 'none';
+    // without "see the store stock" the store's own modules are closed (stock movements, draft slips, lots)
+    if (r.name !== 'admin' && !(p.functions || []).includes('see_store_stock')) for (const m of STORE_STOCK_MODULES) p.modules[m] = 'none';
     map[r.name] = { modules: p.modules, functions: p.functions || [] };
   }
   setPermissions(map);
@@ -281,6 +283,15 @@ export function seedRoles() {
       if (add.length) { const p = parse(r.perms); db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...new Set([...(p.functions || []), ...add])] }), r.name); }
     }
     db.prepare("INSERT INTO settings (key, value) VALUES ('roles_site_material_v1', '\"1\"')").run();
+  }
+  // Store stock (once, 25 Nov 2026): built-in roles get their default; a role made here keeps the store if it sees its value.
+  if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_store_stock_v1'").get()) {
+    for (const r of db.prepare('SELECT name, perms, builtin FROM roles').all()) {
+      const p = parse(r.perms);
+      const give = r.builtin ? (DEFAULT_FUNCTIONS[r.name] || []).includes('see_store_stock') : (p.functions || []).includes('see_stock_value');
+      if (give) db.prepare('UPDATE roles SET perms = ? WHERE name = ?').run(JSON.stringify({ ...p, functions: [...new Set([...(p.functions || []), 'see_store_stock'])] }), r.name);
+    }
+    db.prepare("INSERT INTO settings (key, value) VALUES ('roles_store_stock_v1', '\"1\"')").run();
   }
   // Project Planner (once): whoever sees projects gets their schedule; the GM and Technical Manager approve baselines.
   if (!db.prepare("SELECT 1 FROM settings WHERE key = 'roles_planner_v1'").get()) {
