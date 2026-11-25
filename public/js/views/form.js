@@ -719,11 +719,14 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (can('service_work_orders')) A.push(h('button.btn', { onclick: () => newRecord('service_work_orders', { ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined, location: row.city }) }, '🧰 Parts (work order)'));
       if (can('costing_sheets')) A.push(h('button.btn', { onclick: () => newRecord('costing_sheets', { kind: 'Service', ticket_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, amc_id: row.amc_id || undefined, site: row.city, title: `Service – ${row.equipment || 'system'} – ${row.hospital || ''}` }) }, '🧮 Service costing'));
       if (can('rca_reports')) A.push(h('button.btn', { onclick: () => newRecord('rca_reports', pre) }, '🔍 RCA'));
+      if (row.invoice_id) A.push(h('a.btn', { href: `#/view/invoices/${row.invoice_id}` }, `🧾 PI · ${row.payment || ''}`));
       break;
     }
     case 'amc_contracts':
       if (can('service_tickets')) A.push(h('button.btn', { onclick: () => newRecord('service_tickets', { amc_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, city: row.city, contact_person: row.contact_person, contact_no: row.mobile, under_warranty: 'Yes' }) }, '🛠️ New complaint'));
       if (can('service_reports')) A.push(h('button.btn.primary', { onclick: () => newRecord('service_reports', { amc_id: id, hospital: row.hospital, customer_id: row.customer_id || undefined, call_type: row.cover_status === 'In Warranty' ? 'Warranty' : 'AMC Service Visit', contact_name: row.contact_person, mobile: row.mobile, email: row.email }) }, '📋 Service visit report'));
+      A.push(h('a.btn', { href: `#/print/amc/${id}`, target: '_blank' }, '🖨 AMC format'));
+      if (row.mobile) A.push(h('a.btn', { href: waLink(row.mobile, amcReminderText(row)), target: '_blank', rel: 'noopener' }, '💬 Remind client'));
       if (can('amc_contracts') && row.amc_amount > 0) A.push(h('button.btn', { onclick: go(async () => {
         if (!(await confirmBox(`Make a proforma invoice for the AMC of ${row.hospital}: ₹ ${inr(row.amc_amount)} incl. GST?`, 'Make PI'))) return;
         const inv = await post(`/amc_contracts/${id}/proforma`); toast(`Proforma ${inv.invoice_no} made`); location.hash = `#/view/invoices/${inv.id}`;
@@ -739,7 +742,13 @@ function actionsFor(entity, row, reload, ctx = {}) {
       if (row.mr_id) A.push(h('a.btn', { href: `#/view/material_requests/${row.mr_id}` }, '🙋 Its material request'));
       break;
     case 'service_reports':
+      if (row.status !== 'Completed' && can('service_reports')) A.push(h('button.btn.primary', { onclick: go(async () => {
+        if (ctx.save) await ctx.save({ quiet: true });
+        if (await completeServiceDialog(await api(`/service_reports/${id}`))) reload();
+      }) }, '✍️ Complete – client signs'));
+      if (row.status === 'Completed') A.push(h('span.badge', { style: { background: '#dcfce7', color: '#166534' } }, `✔ Signed by ${row.signed_by || row.customer_rep || 'client'}`));
       A.push(h('a.btn', { href: `#/print/servicereport/${id}`, target: '_blank' }, '🖨 Print service report'));
+      if (can('service_reports')) A.push(h('button.btn', { onclick: go(serviceStockDialog) }, '📦 Our Service stock'));
       break;
     case 'rca_reports':
       A.push(h('a.btn', { href: `#/print/rca/${id}`, target: '_blank' }, '🖨 Print RCA'));
@@ -1175,6 +1184,8 @@ function actionsFor(entity, row, reload, ctx = {}) {
         await post(`/invoices/${id}/cancel`, { reason: why.value }); toast('Invoice cancelled'); reload();
       }) }, '✖ Cancel (GM)'));
       if (row.customer_id) A.push(h('a.btn', { href: `#/receivables/statement/${row.customer_id}` }, '📒 Statement'));
+      if (st !== 'Cancelled') A.push(h('button.btn.good', { onclick: go(async () => { if (await sendInvoiceDialog(await api(`/invoices/${id}`))) reload(); }) }, '📤 Send to client'));
+      if (row.sent_to_client) A.push(h('span.muted', { style: { fontSize: '12px' } }, `Sent: ${row.sent_to_client}`));
       break;
     }
     case 'payments': {
@@ -1760,4 +1771,93 @@ function suggestList(key) {
   const dl = h('datalist', { id });
   document.body.append(dl);
   api(SUGGEST_SOURCES[key]).then(rows => dl.replaceChildren(...rows.map(r => h('option', { value: r.value, label: r.label })))).catch(() => dl.remove());
+}
+
+// ---------------------------------------------------------------- service (owner, 25 Nov 2026)
+const waLink = (phone, text) => { const p = String(phone || '').replace(/\D/g, ''); return `https://wa.me/${p.length === 10 ? '91' + p : p}?text=${encodeURIComponent(text)}`; };
+const dmy = d => (d ? String(d).split('-').reverse().join('-') : '');
+function amcReminderText(a) {
+  const next = (a.service_plan || []).find(p => p.planned && !p.done);
+  return [`Dear ${a.contact_person || a.customer_name || 'Sir / Madam'},`, '',
+    next ? `Your ${next.visit} service visit for ${a.system_details || 'the OT system'} at ${a.hospital} is planned on ${dmy(next.planned)}. Please confirm a convenient date and time.` : null,
+    a.amc_end ? `Your AMC is valid till ${dmy(a.amc_end)}.` : null,
+    a.particle_next ? `Particle count due: ${dmy(a.particle_next)}.` : null, '', `Regards,\n${state.user.name}\n${state.settings?.company_short || 'WIESPL'}`].filter(x => x !== null).join('\n');
+}
+// The Service department's own stock: what the engineers can use at the client's site.
+async function serviceStockDialog() {
+  const rows = await api('/service/stock');
+  await modal('📦 Our Service stock', rows.length ? h('div.table-wrap', h('table.data', h('thead', h('tr', h('th', 'Material'), h('th.num', 'We hold'))),
+    h('tbody', rows.map(r => h('tr', h('td', [r.code, r.name].filter(Boolean).join(' · ')), h('td.num', `${round2(r.holds)} ${r.uom || ''}`))))))
+    : h('p', 'The Service department holds nothing. The store transfers material to “Service” first (Stock Entry → Material Transfer, To: Service).'),
+  [{ label: 'Close', value: true }]);
+}
+// Complete a service report: result, feedback and the signature of the doctor / client's representative on the screen.
+async function completeServiceDialog(r) {
+  const RESULTS = ['Solved', 'Not solved – revisit needed', 'Not solved – parts needed'];
+  const RATES = ['', 'Very Satisfied', 'Satisfied', 'Neutral', 'Dissatisfied', 'Very Dissatisfied'];
+  const result = h('select', ['', ...RESULTS].map(o => h('option', { value: o, selected: o === (r.result || '') }, o || '— choose —')));
+  const next = h('textarea', { rows: 2, placeholder: 'What happens next (parts to send, revisit, …)' }); next.value = r.next_action || '';
+  const revisit = h('input', { type: 'date', value: r.revisit_date || '' });
+  const notSolved = h('div.grid', h('label', 'Next step *', next), h('label', 'Revisit on', revisit));
+  const showNext = () => { notSolved.style.display = result.value && result.value !== 'Solved' ? '' : 'none'; };
+  result.onchange = showNext; showNext();
+  const FB = [['fb_overall', 'Overall service'], ['fb_resolution', 'Your problem solved'], ['fb_courtesy', 'Courtesy of our staff'], ['fb_information', 'Information given'], ['fb_wait', 'Waiting time']];
+  const fb = Object.fromEntries(FB.map(([k]) => [k, h('select', RATES.map(o => h('option', { value: o, selected: o === (r[k] || '') }, o || '—')))]));
+  const more = h('textarea', { rows: 2, placeholder: 'Any remark from the client' }); more.value = r.additional_feedback || '';
+  const name = h('input', { value: r.customer_rep || r.contact_name || '', placeholder: 'Name of the doctor / representative' });
+  const desig = h('input', { list: 'dl-sign-desig', placeholder: 'Doctor, OT in-charge …' });
+  const dl = h('datalist', { id: 'dl-sign-desig' }, ['Doctor', 'OT In-charge', 'Biomedical Engineer', 'Hospital Administrator', 'Hospital Representative'].map(x => h('option', { value: x })));
+  // the signature pad
+  const pad = h('canvas', { width: 600, height: 180, style: { width: '100%', height: '160px', border: '2px dashed var(--border)', borderRadius: '8px', background: '#fff', touchAction: 'none', cursor: 'crosshair' } });
+  const ctx2 = pad.getContext('2d'); ctx2.lineWidth = 2.5; ctx2.lineCap = 'round'; ctx2.strokeStyle = '#0f172a';
+  let drawing = false, drawn = false;
+  const at = e => { const b = pad.getBoundingClientRect(); return [(e.clientX - b.left) * pad.width / b.width, (e.clientY - b.top) * pad.height / b.height]; };
+  pad.onpointerdown = e => { drawing = true; pad.setPointerCapture(e.pointerId); ctx2.beginPath(); ctx2.moveTo(...at(e)); };
+  pad.onpointermove = e => { if (!drawing) return; ctx2.lineTo(...at(e)); ctx2.stroke(); drawn = true; };
+  pad.onpointerup = () => { drawing = false; };
+  const clear = h('button.btn.small', { type: 'button', onclick: () => { ctx2.clearRect(0, 0, pad.width, pad.height); drawn = false; } }, 'Clear');
+  const box = (t, ...c) => h('div', { style: { border: '1px solid var(--border)', borderRadius: '10px', padding: '10px 12px', margin: '8px 0' } }, h('div', { style: { fontWeight: 700, marginBottom: '6px' } }, t), ...c);
+  const used = (r.material_used || []).filter(l => l.item_id && Number(l.qty) > 0);
+  return modal(`Complete ${r.report_no} – ${r.hospital || ''}`, h('div',
+    box('1 · Result', h('label', 'Problem solved? *', result), notSolved),
+    used.length ? box('2 · Material used (comes off the Service stock)', h('div.muted', used.map(l => `${l.description || l.item_id_label || ''}: ${l.qty} ${l.uom || ''}`).join(' · '))) : null,
+    box(`${used.length ? 3 : 2} · Client feedback`, h('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '6px' } }, FB.map(([k, l]) => h('label', l, fb[k]))), h('label', 'Remark', more)),
+    box(`${used.length ? 4 : 3} · Client signature (work done)`, pad, h('div', { style: { display: 'flex', gap: '8px', alignItems: 'end', flexWrap: 'wrap', marginTop: '6px' } }, h('label', { style: { flex: '2 1 200px' } }, 'Name *', name), h('label', { style: { flex: '1 1 160px' } }, 'Designation', desig, dl), clear))),
+  [{ label: 'Cancel', value: false }, { label: '✔ Complete & save signature', cls: 'primary', action: async () => {
+    if (!drawn) throw new Error('The client signs in the box first');
+    const out = await api(`/service_reports/${r.id}/complete`, { method: 'POST', body: { result: result.value, next_action: next.value, revisit_date: revisit.value || null, additional_feedback: more.value,
+      ...Object.fromEntries(FB.map(([k]) => [k, fb[k].value])), name: name.value, designation: desig.value, sign: pad.toDataURL('image/png') } });
+    toast(`Completed${out.slip ? ` · Service stock slip ${out.slip}` : ''}${out.rca ? ` · RCA due ${dmy(out.rca.due_date)}` : ''}`);
+    return true;
+  } }], { wide: true });
+}
+// A proforma / tax invoice to the client: email from the CRM, or WhatsApp with the summary.
+async function sendInvoiceDialog(inv) {
+  const c = inv.customer_id ? await api(`/customers/${inv.customer_id}`).catch(() => null) : null;
+  const kind = inv.type === 'Proforma Invoice' ? 'Proforma Invoice' : 'Tax Invoice';
+  const to = h('input', { value: c?.email || '', placeholder: 'client@hospital.com' });
+  const cc = h('input', { placeholder: 'optional' });
+  const phone = h('input', { value: c?.phone || c?.mobile || '', placeholder: 'Mobile number' });
+  const lines = (inv.lines || []).filter(l => Number(l.qty) || l.description);
+  const summary = [`Dear Sir / Madam,`, '', `Please find our ${kind.toLowerCase()} ${inv.invoice_no || ''} dated ${dmy(inv.date)}${inv.milestone ? ` for ${inv.milestone}` : ''}:`,
+    ...lines.slice(0, 8).map(l => `• ${String(l.description || '').split('\n')[0].slice(0, 70)} – ${l.qty} ${l.uom || ''} × ₹ ${inr(l.rate)}`),
+    '', `Total incl. GST: ₹ ${inr(inv.total)}`, inv.notes ? `\n${inv.notes}` : null, '', `Regards,\n${state.user.name}\n${state.settings?.company_short || 'WIESPL'}`].filter(x => x !== null).join('\n');
+  const msg = h('textarea', { rows: 8 }); msg.value = summary;
+  const status = h('div.muted');
+  return modal(`📤 Send ${kind} ${inv.invoice_no || ''}`, h('div.grid',
+    h('p', `₹ ${inr(inv.total)} to ${inv.customer_id_label || ''}. ${inv.status === 'Draft' ? 'Still a Draft: issue it first if the client needs the final number.' : ''}`),
+    h('label', 'Message', msg),
+    h('div', { style: { display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '8px' } }, h('label', 'Email to', to), h('label', 'Cc', cc)),
+    h('div.toolbar', h('button.btn.primary', { type: 'button', onclick: busy(async () => {
+      const r = await api(`/invoices/${inv.id}/send-mail`, { method: 'POST', body: { to: to.value, cc: cc.value, message: msg.value.split(/\n\nTotal incl/)[0] } });
+      status.textContent = '✔ ' + r.sent; toast('Email sent');
+    }) }, '✉️ Send email')),
+    h('label', 'WhatsApp to', phone),
+    h('div.toolbar', h('button.btn.good', { type: 'button', onclick: busy(async () => {
+      if (!String(phone.value).replace(/\D/g, '')) throw new Error('Enter the mobile number');
+      window.open(waLink(phone.value, msg.value), '_blank', 'noopener');
+      const r = await api(`/invoices/${inv.id}/sent`, { method: 'POST', body: { how: 'WhatsApp', to: phone.value } });
+      status.textContent = '✔ ' + r.sent;
+    }) }, '💬 Send on WhatsApp'), h('a.btn', { href: `#/print/invoice/${inv.id}`, target: '_blank' }, '🖨 PDF to attach')),
+    status), [{ label: 'Done', value: true }], { wide: true });
 }

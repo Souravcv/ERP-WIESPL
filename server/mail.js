@@ -67,3 +67,17 @@ export async function sendEnquiryMail(enquiry, d) {
     failed(String(e.message).slice(0, 200));
   }
 }
+
+// A document (proforma invoice …) to a client, with the mail server set up under Settings → client website.
+export async function sendDocument({ to, cc, subject, html, text }) {
+  const s = getSettings();
+  const list = String(to || '').split(/[,;\s]+/).filter(Boolean);
+  if (!list.length || list.some(x => !EMAIL.test(x))) throw new Error('Enter the client\'s email address');
+  if (!s.web_mail_host || !EMAIL.test(s.web_mail_from || '')) throw new Error('The CRM has no mail server yet (Settings → Company & Quotation Settings → client website email). Use WhatsApp, or set the mail server up first.');
+  const port = Number(s.web_mail_port) || 587;
+  const mailer = nodemailer.createTransport({ host: s.web_mail_host, port, secure: port === 465, connectionTimeout: 20000, greetingTimeout: 20000, socketTimeout: 60000,
+    ...(s.web_mail_user ? { auth: { user: s.web_mail_user, pass: s.web_mail_pass || '' } } : {}) });
+  const ccList = String(cc || '').split(/[,;\s]+/).filter(x => EMAIL.test(x));
+  await mailer.sendMail({ from: { name: s.company_short || 'WIESPL', address: s.web_mail_from }, to: list, ...(ccList.length ? { cc: ccList } : {}), subject, text, html,
+    ...(EMAIL.test(s.web_mail_bcc || '') ? { bcc: s.web_mail_bcc } : {}) });
+}

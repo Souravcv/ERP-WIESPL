@@ -3,8 +3,12 @@
 import ExcelJS from 'exceljs';
 import { db, tx, audit, getSettings } from './db.js';
 import { getRow, insertRow, updateRow, listRows, HttpError } from './crud.js';
-import { canWrite } from '../public/js/schema.js';
+import { canWrite, canView } from '../public/js/schema.js';
 import { submitMR } from './storeflow.js';
+import { stockEntry } from './stock.js';
+import { placeDetail } from './deptstore.js';
+import { notify } from './notify.js';
+import { sendDocument } from './mail.js';
 
 const today = () => new Date().toLocaleString('sv-SE').slice(0, 10);
 const r2 = n => Math.round((Number(n) || 0) * 100) / 100;
@@ -50,7 +54,7 @@ export function amcPI(id, user) {
     const customer_id = a.customer_id || customerFor(a.hospital, { city: a.city, state: a.state, contact: a.contact_person, phone: a.mobile, email: a.email, address: a.address }, user);
     if (!a.customer_id) updateRow('amc_contracts', id, { customer_id }, user, { system: true });
     const inv = insertRow('invoices', {
-      type: 'Proforma Invoice', customer_id, status: 'Draft', place_of_supply: a.state || 'Maharashtra', milestone: 'AMC',
+      type: 'Proforma Invoice', customer_id, status: 'Draft', place_of_supply: a.state || 'Maharashtra', milestone: 'AMC', amc_id: a.id,
       notes: 'Payment should be 100% advance with P.O.',
       lines: [{ description: `AMC of ${a.system_details || 'system'}${a.amc_start ? `\nPeriod ${fmt(a.amc_start)} – ${fmt(a.amc_end)}` : ''}`, hsn: '9954', qty: 1, uom: 'No', rate: r2(a.amc_amount / 1.18), gst: 18 }],
     }, user, { system: true });
@@ -109,11 +113,13 @@ export function costingPI(id, user) {
     const customer_id = cs.customer_id || customerFor(cs.hospital, {}, user);
     const c = getRow('customers', customer_id);
     const inv = insertRow('invoices', {
-      type: 'Proforma Invoice', customer_id, status: 'Draft', place_of_supply: c.state || 'Maharashtra', milestone: cs.title,
+      type: 'Proforma Invoice', customer_id, status: 'Draft', place_of_supply: c.state || 'Maharashtra', milestone: cs.title, amc_id: cs.amc_id || null, ticket_id: cs.ticket_id || null,
       notes: cs.terms || 'Payment should be 100% advance with P.O.',
       lines: lines.map(l => ({ description: l.description, hsn: l.hsn, qty: l.qty, uom: l.uom, rate: l.rate, gst: cs.gst_rate ?? 18 })),
     }, user, { system: true });
     updateRow('costing_sheets', id, { invoice_id: inv.id, customer_id, status: 'Quoted' }, user, { system: true });
+    // the complaint shows its proforma and whether it is paid
+    if (cs.ticket_id) updateRow('service_tickets', cs.ticket_id, { invoice_id: inv.id, charges: inv.total ?? null }, user, { system: true });
     audit(user.name, 'costing_sheets', cs.id, 'proforma', inv.invoice_no);
     return inv;
   });
@@ -150,6 +156,13 @@ export function serviceDashboard() {
       particle_due: amc.filter(a => a.particle_next && a.particle_next <= in60).map(a => ({ id: a.id, hospital: a.hospital, particle_next: a.particle_next })),
       visits_due: visits,
     },
+    amc_invoices: amc.filter(a => ['AMC Active', 'Renewal Due'].includes(a.cover_status) && a.amc_invoice !== 'Paid').map(a => ({ id: a.id, hospital: a.hospital, amount: a.amc_amount, invoice: a.amc_invoice })),
+    breakdowns: amc.filter(a => Number(a.breakdowns_allowed) > 0 && ['AMC Active', 'Renewal Due', 'In Warranty'].includes(a.cover_status)).map(a => ({ id: a.id, hospital: a.hospital, used: a.breakdowns_used })),
+    rca_due: db.prepare("SELECT id, rca_no, hospital, action_by, due_date FROM rca_reports WHERE status = 'Draft' AND due_date IS NOT NULL ORDER BY due_date").all(),
+    revisits: db.prepare(`SELECT s.id, s.report_no, s.hospital, s.result, s.next_action, s.revisit_date, s.attended_by FROM service_reports s JOIN service_tickets k ON k.id = s.ticket_id
+      WHERE s.status = 'Completed' AND s.result LIKE 'Not solved%' AND k.status NOT IN ('Resolved', 'Closed') ORDER BY COALESCE(s.revisit_date, '9999')`).all(),
+    unsigned: db.prepare("SELECT COUNT(*) n FROM service_reports WHERE status = 'Draft'").get().n,
+    chargeable_unpaid: tickets.filter(x => /chargeable/.test(x.cover || '') && x.payment !== 'Paid' && x.status !== 'Closed').map(x => ({ id: x.id, no: x.ticket_no, hospital: x.hospital, charges: x.charges, payment: x.payment || 'No PI yet' })),
     swo_pending: db.prepare("SELECT COUNT(*) n FROM service_work_orders WHERE status IN ('Draft', 'Sent to Store')").get().n,
     reports_month: db.prepare("SELECT COUNT(*) n FROM service_reports WHERE date >= ?").get(t.slice(0, 8) + '01').n,
     rca_open: db.prepare("SELECT COUNT(*) n FROM rca_reports WHERE status <> 'Accepted by Client'").get().n,
@@ -236,4 +249,161 @@ export async function importAmc(buffer, user) {
   });
   audit(user.name, 'amc_contracts', null, 'import', `${added} added, ${updated} updated`);
   return { added, updated };
+}
+
+// ================================================================ service team (owner, 25 Nov 2026)
+const READER = { name: 'system', role: 'admin' }; // reads the Service department's holdings for the service team
+const team = () => db.prepare('SELECT name, role FROM users WHERE active = 1').all().filter(u => !['admin', 'manager', 'md'].includes(u.role) && canWrite('service_reports', u.role)).map(u => u.name);
+const mayService = user => { if (!canWrite('service_reports', user.role)) throw new HttpError(403, 'Only the service team does this'); };
+
+// What the Service department holds (material the store transferred to it): the engineers use it at the client's site.
+export function serviceStock(user) {
+  if (!canView('service_reports', user.role)) throw new HttpError(403, 'No access');
+  return placeDetail('Service', READER).rows.filter(r => r.balance > 0).map(r => ({ item_id: r.item_id, code: r.code, name: r.name, uom: r.uom, holds: r.balance }));
+}
+
+// Complete a service report: the client's representative (doctor / OT in-charge) signs the work done and gives the
+// feedback; the complaint follows the result; material used comes off the Service stock; a breakdown call needs its RCA
+// within 4 days; an AMC visit is ticked off; a particle count updates the AMC register.
+export function completeReport(id, body, user) {
+  mayService(user);
+  const r = getRow('service_reports', id);
+  if (r.status === 'Completed') throw new HttpError(409, 'This service report is already completed and signed');
+  const result = body?.result || r.result;
+  if (!result) throw new HttpError(400, 'Say whether the problem is solved');
+  if (!String(r.work_done || '').trim()) throw new HttpError(400, 'Write the work done first');
+  const nextAction = String(body?.next_action ?? r.next_action ?? '').trim(), revisit = body?.revisit_date || r.revisit_date || null;
+  if (result !== 'Solved' && !nextAction) throw new HttpError(400, 'Not solved: write the next step');
+  if (result === 'Not solved – revisit needed' && !revisit) throw new HttpError(400, 'Not solved: give the revisit date');
+  const sign = String(body?.sign || '');
+  if (!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(sign) || sign.length < 200) throw new HttpError(400, 'The client signs in the box first');
+  if (sign.length > 400000) throw new HttpError(400, 'The signature is too large');
+  const name = String(body?.name || '').trim();
+  if (!name) throw new HttpError(400, 'Enter the name of the person signing');
+  const RATES = ['', 'Very Satisfied', 'Satisfied', 'Neutral', 'Dissatisfied', 'Very Dissatisfied'];
+  const fb = {};
+  for (const k of ['fb_courtesy', 'fb_information', 'fb_wait', 'fb_overall', 'fb_resolution']) if (body?.[k] !== undefined) { if (!RATES.includes(body[k])) throw new HttpError(400, 'Choose a feedback rating'); fb[k] = body[k] || null; }
+  const used = (r.material_used || []).filter(l => l.item_id && Number(l.qty) > 0);
+  const t = r.ticket_id ? getRow('service_tickets', r.ticket_id) : null;
+  return tx(() => {
+    let slip = null;
+    if (used.length) {
+      const held = new Map(placeDetail('Service', READER).rows.map(x => [x.item_id, x.balance]));
+      const want = new Map();
+      for (const l of used) want.set(Number(l.item_id), r2((want.get(Number(l.item_id)) || 0) + Number(l.qty)));
+      const short = [...want].filter(([iid, q]) => q > (held.get(iid) || 0) + 1e-9).map(([iid, q]) => {
+        const it = db.prepare('SELECT code, name, uom FROM items WHERE id = ?').get(iid) || {};
+        return `${it.code || ''} ${it.name || iid}: the Service stock holds ${r2(held.get(iid) || 0)} ${it.uom || ''}, used ${q}`;
+      });
+      if (short.length) throw new HttpError(409, `More than the Service stock holds (ask the store to transfer it to Service first):\n${short.join('\n')}`);
+      slip = stockEntry({ type: 'MOVE', date: r.end_date || r.date || today(), from_location: 'Service', to_location: `Used at ${r.hospital || 'client'}`, purpose: `Service report ${r.report_no}`,
+        remarks: t ? `Complaint ${t.ticket_no}` : null, lines: used.map(l => ({ item_id: Number(l.item_id), qty: Number(l.qty), uom: l.uom || null, remark: l.remark || null })) }, user);
+    }
+    const now = new Date().toLocaleString('sv-SE').slice(0, 16);
+    updateRow('service_reports', r.id, { ...fb, status: 'Completed', result, next_action: nextAction || null, revisit_date: revisit, end_date: r.end_date || today(),
+      additional_feedback: body?.additional_feedback ?? r.additional_feedback ?? null, customer_rep: name, signed_by: name, signed_designation: String(body?.designation || '').trim() || null,
+      signed_at: now, client_sign: JSON.stringify({ png: sign }), stock_slip: slip?.doc_no || null, attended_by: r.attended_by || user.name }, user, { system: true });
+    // the complaint follows the result
+    if (t && !['Closed'].includes(t.status)) {
+      const patch = result === 'Solved' ? { status: 'Resolved', closed_date: r.end_date || today(), resolution: [t.resolution, r.work_done].filter(Boolean).join('\n') }
+        : { status: result === 'Not solved – parts needed' ? 'Waiting for Parts' : 'In Progress', remark: `Next: ${nextAction}${revisit ? ` (revisit ${revisit})` : ''}`.slice(0, 250) };
+      updateRow('service_tickets', t.id, patch, user, { system: true });
+    }
+    // a breakdown call: RCA within 4 days of the service, by the engineer who attended
+    let rca = null;
+    if ((r.call_type === 'Break Down Call' || t?.category === 'Breakdown') && !(t && db.prepare('SELECT 1 FROM rca_reports WHERE ticket_id = ?').get(t.id))) {
+      const due = addDays(r.end_date || r.date || today(), 4);
+      rca = insertRow('rca_reports', { ticket_id: t?.id || null, hospital: r.hospital, customer_id: r.customer_id || null, date: today(), complaint_date: t?.date || r.date,
+        complaint_details: t?.complaint || r.problem || null, action_date: r.end_date || r.date, action_by: r.attended_by || user.name, observation: r.problem || null,
+        corrective_action: r.work_done || null, due_date: due, status: 'Draft' }, user, { system: true });
+      notify({ userNames: [r.attended_by || user.name, ...team()], kind: 'service', title: `RCA due by ${due.split('-').reverse().join('-')}: ${r.hospital || ''}`,
+        body: `Breakdown call ${t?.ticket_no || ''} attended (${r.report_no}). Fill the root cause analysis within 4 days.`, link: `#/view/rca_reports/${rca.id}` }, null);
+    }
+    // an AMC visit is ticked off in the register; a particle count gives the AMC its date and the next one
+    if (r.amc_id) {
+      const a = getRow('amc_contracts', r.amc_id);
+      const patch = {};
+      if (r.call_type === 'AMC Service Visit' || r.call_type === 'Warranty') {
+        const plan = (a.service_plan || []).map(p => ({ ...p }));
+        const v = plan.find(p => p.planned && !p.done);
+        if (v) { v.done = r.end_date || r.date || today(); v.report = r.report_no; patch.service_plan = plan; patch.next_service = plan.find(p => p.planned && !p.done)?.planned || null; }
+      }
+      if (r.particle_count === 'Done') { patch.particle_count_date = r.date || today(); patch.particle_next = null; }
+      if (Object.keys(patch).length) updateRow('amc_contracts', a.id, patch, user, { system: true });
+      if (r.particle_count === 'Done') notify({ userNames: team(), kind: 'service', title: `Particle count recorded: ${r.hospital || ''}`, body: `${r.report_no}${r.particle_result ? ' – ' + r.particle_result : ''}`, link: `#/view/service_reports/${r.id}` }, user);
+    }
+    audit(user.name, 'service_reports', r.id, 'completed and signed', `${result} · signed by ${name}`);
+    return { report: getRow('service_reports', r.id), rca, slip: slip?.doc_no || null };
+  });
+}
+
+// A proforma (or tax) invoice to the client by email: the lines, totals, terms and bank details in the mail.
+const esc = v => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const inr = n => (Number(n) || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+export async function mailInvoice(id, body, user) {
+  if (!canWrite('invoices', user.role) && !canWrite('costing_sheets', user.role)) throw new HttpError(403, 'No permission');
+  const inv = getRow('invoices', id);
+  if (inv.status === 'Cancelled') throw new HttpError(409, 'This invoice is cancelled');
+  const s = getSettings();
+  const kind = inv.type === 'Proforma Invoice' ? 'Proforma Invoice' : 'Tax Invoice';
+  const lines = (inv.lines || []).filter(l => Number(l.qty) || l.description);
+  const rows = lines.map((l, i) => `<tr><td>${i + 1}</td><td>${esc(l.description).replace(/\n/g, '<br>')}</td><td>${esc(l.hsn || '')}</td><td style="text-align:right">${esc(l.qty)} ${esc(l.uom || '')}</td><td style="text-align:right">${inr(l.rate)}</td><td style="text-align:right">${inr((Number(l.qty) || 0) * (Number(l.rate) || 0))}</td></tr>`).join('');
+  const total = inv.total ?? lines.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.rate) || 0) * (1 + (Number(l.gst ?? 18) || 0) / 100), 0);
+  const td = 'style="border:1px solid #cbd5e1;padding:6px 8px"';
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#15202f;line-height:1.5">
+<p>${esc(body?.message || `Dear Sir / Madam,\n\nPlease find our ${kind.toLowerCase()} below.`).replace(/\n/g, '<br>')}</p>
+<h2 style="margin:16px 0 4px">${esc(kind)} ${esc(inv.invoice_no || '')}</h2>
+<p style="margin:0 0 10px">Date: ${esc((inv.date || '').split('-').reverse().join('/'))}<br>To: ${esc(inv.customer_id_label || '')}${inv.milestone ? `<br>For: ${esc(inv.milestone)}` : ''}</p>
+<table style="border-collapse:collapse;font-size:13px" cellpadding="0"><thead><tr>${['#', 'Description', 'HSN / SAC', 'Qty', 'Rate (₹)', 'Amount (₹)'].map(x => `<th ${td} align="left">${x}</th>`).join('')}</tr></thead>
+<tbody>${rows.replace(/<td/g, `<td ${td}`)}</tbody></table>
+<p style="font-size:15px;margin:10px 0"><b>Total incl. GST: ₹ ${inr(total)}</b></p>
+${inv.notes ? `<p><b>Terms</b><br>${esc(inv.notes).replace(/\n/g, '<br>')}</p>` : ''}
+${s.bank_details ? `<p><b>Bank details</b><br>${esc(s.bank_details).replace(/\n/g, '<br>')}</p>` : ''}
+<p>Regards,<br>${esc(user.name)}<br>${esc(s.company_name || 'WIESPL')}</p></div>`;
+  const text = html.replace(/<br>/g, '\n').replace(/<\/(p|tr|h2)>/g, '\n').replace(/<[^>]+>/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n /g, '\n').trim();
+  await sendDocument({ to: body?.to, cc: body?.cc, subject: `${kind} ${inv.invoice_no || ''} – ${s.company_short || 'WIESPL'}`, html, text });
+  const note = `Email to ${body.to} by ${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})`;
+  db.prepare('UPDATE invoices SET sent_to_client = ? WHERE id = ?').run(note, inv.id);
+  audit(user.name, 'invoices', inv.id, 'emailed to client', body.to);
+  return { ok: true, sent: note };
+}
+export function markInvoiceSent(id, body, user) {
+  if (!canWrite('invoices', user.role) && !canWrite('costing_sheets', user.role)) throw new HttpError(403, 'No permission');
+  const inv = getRow('invoices', id);
+  const note = `${body?.how || 'WhatsApp'} to ${String(body?.to || '').slice(0, 60)} by ${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})`;
+  db.prepare('UPDATE invoices SET sent_to_client = ? WHERE id = ?').run(note, inv.id);
+  audit(user.name, 'invoices', inv.id, 'sent to client', note);
+  return { ok: true, sent: note };
+}
+
+// Daily reminders to the service team (each once): AMC renewals (60 / 30 / 7 / 0 days), visits due in a week or
+// overdue, particle counts due, RCAs past their 4 days, revisits due, active AMCs without an invoice.
+export function dailyService() {
+  const t = today();
+  const sent = (() => { try { return JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'service_reminders_sent'").get()?.value || '{}'); } catch { return {}; } })();
+  const to = team();
+  if (!to.length) return 0;
+  let n = 0;
+  const once = (key, msg) => { if (sent[key]) return; sent[key] = t; n += notify({ userNames: to, kind: 'service', ...msg }, null); };
+  const days = d => Math.round((Date.parse(d) - Date.parse(t)) / 864e5);
+  for (const a of listRows('amc_contracts', { limit: 20000 })) {
+    const live = ['AMC Active', 'Renewal Due', 'In Warranty'].includes(a.cover_status);
+    if (a.amc_end && a.cover_status !== 'Expired') for (const m of [60, 30, 7, 0]) if (days(a.amc_end) <= m && days(a.amc_end) > m - (m ? 23 : 1) && days(a.amc_end) >= 0)
+      once(`renew:${a.id}:${a.amc_end}:${m}`, { title: `AMC renewal${m ? ` in ${days(a.amc_end)} days` : ' today'}: ${a.hospital}`, body: `AMC ends ${a.amc_end.split('-').reverse().join('-')}${a.amc_amount ? ` · ₹ ${Math.round(a.amc_amount).toLocaleString('en-IN')}` : ''}. Send the renewal proforma.`, link: `#/view/amc_contracts/${a.id}` });
+    if (!live) continue;
+    for (const p of a.service_plan || []) if (p.planned && !p.done) {
+      const dd = days(p.planned);
+      if (dd >= 0 && dd <= 7) once(`visit:${a.id}:${p.visit}:${p.planned}`, { title: `${p.visit} service visit in ${dd} day${dd === 1 ? '' : 's'}: ${a.hospital}`, body: `Planned ${p.planned.split('-').reverse().join('-')}. Fix the date with the client.`, link: `#/view/amc_contracts/${a.id}` });
+      else if (dd < 0) once(`visitlate:${a.id}:${p.visit}:${p.planned}`, { title: `${p.visit} service visit overdue: ${a.hospital}`, body: `It was planned for ${p.planned.split('-').reverse().join('-')}.`, link: `#/view/amc_contracts/${a.id}` });
+    }
+    if (a.particle_next && days(a.particle_next) <= 15) once(`particle:${a.id}:${a.particle_next}`, { title: `Particle count ${days(a.particle_next) < 0 ? 'overdue' : 'due'}: ${a.hospital}`, body: `Due ${a.particle_next.split('-').reverse().join('-')}. Do it on the next visit and mark it on the service report.`, link: `#/view/amc_contracts/${a.id}` });
+    if (a.cover_status === 'AMC Active' && a.amc_invoice === 'Not raised' && a.amc_amount > 0) once(`amcinv:${a.id}:${a.amc_start || ''}`, { title: `AMC invoice not raised: ${a.hospital}`, body: 'Make the AMC proforma invoice from the AMC register.', link: `#/view/amc_contracts/${a.id}` });
+  }
+  for (const r of db.prepare("SELECT id, rca_no, hospital, action_by, due_date FROM rca_reports WHERE status = 'Draft' AND due_date IS NOT NULL AND due_date < ?").all(t))
+    if (!sent[`rca:${r.id}`]) { sent[`rca:${r.id}`] = t; n += notify({ userNames: [...new Set([r.action_by, ...to].filter(Boolean))], kind: 'service', title: `RCA overdue: ${r.hospital || r.rca_no}`, body: `It was due ${r.due_date.split('-').reverse().join('-')}.`, link: `#/view/rca_reports/${r.id}` }, null); }
+  for (const r of db.prepare(`SELECT s.id, s.report_no, s.hospital, s.revisit_date, s.attended_by FROM service_reports s JOIN service_tickets k ON k.id = s.ticket_id
+      WHERE s.revisit_date IS NOT NULL AND s.revisit_date <= ? AND k.status NOT IN ('Resolved', 'Closed')`).all(t))
+    if (!sent[`revisit:${r.id}`]) { sent[`revisit:${r.id}`] = t; n += notify({ userNames: [...new Set([r.attended_by, ...to].filter(Boolean))], kind: 'service', title: `Revisit due: ${r.hospital || ''}`, body: `Not solved on ${r.report_no}; revisit ${r.revisit_date.split('-').reverse().join('-')}.`, link: `#/view/service_reports/${r.id}` }, null); }
+  db.prepare("INSERT INTO settings (key, value) VALUES ('service_reminders_sent', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(sent));
+  return n;
 }

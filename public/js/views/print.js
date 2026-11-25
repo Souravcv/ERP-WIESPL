@@ -218,6 +218,7 @@ function serviceReportDoc(r, s) {
   const check = (r.checklist || []).filter(c => c.step);
   const read = (r.readings || []).filter(x => Object.values(x).some(v => v !== '' && v != null));
   const air = (r.airflow || []).filter(x => Object.values(x).some(v => v !== '' && v != null));
+  const dampers = (r.dampers || []).filter(x => x.damper && Object.entries(x).some(([k, v]) => k !== 'damper' && v !== '' && v != null));
   const RC = ['timing', 'ot_temp', 'rh', 'comp1', 'comp2', 'blower', 'heater_r', 'heater_y', 'heater_b', 'coil', 'suction', 'discharge', 'remark'];
   const AC = ['ot', 'r1', 'r2', 'r3', 'r4', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'return_open', 'fresh_open', 'bypass_open'];
   return h('div.doc',
@@ -225,23 +226,49 @@ function serviceReportDoc(r, s) {
       grid([['Report No', r.report_no], ['Date / Time', [fmtDate(r.date), r.time_in].filter(Boolean).join(' ')], ['Hospital Name', r.hospital], ['Complaint From', r.complaint_from],
         ['Mr. / Ms.', r.contact_name], ['Mobile No', r.mobile], ['Email Id', r.email], ['Complaint No', r.ticket_id_label]]),
       h('div', { style: { margin: '6px 0' } }, h('b', 'Status of call: '), ['AMC Service Visit', 'Chargeable Basis', 'Break Down Call', 'Warranty'].map(x => tick(x, r.call_type === x))),
-      grid([['AHU Capacity', r.ahu_capacity], ['AC (TR)', r.ac_tr], ['No of ODU', r.odu_count], ['PLC Sr No', r.plc_sr], ['GSM Model Sr No', r.gsm_sr]]),
+      grid([['OT / Room', r.ot_no], ['AHU Capacity', r.ahu_capacity], ['AC (TR)', r.ac_tr], ['No of ODU', r.odu_count], ['PLC Sr No', r.plc_sr], ['GSM Model Sr No', r.gsm_sr],
+        ['Testing done', (r.tests_done || []).join(', ')], ['Particle count', [r.particle_count, r.particle_result].filter(Boolean).join(' – ')]]),
       box('Problem Observation', r.problem), box('Work done during service / Resolving issue', r.work_done),
+      r.result ? h('div', { style: { margin: '6px 0', padding: '6px 8px', border: '2px solid ' + (r.result === 'Solved' ? '#16a34a' : '#d97706') } }, h('b', 'Result: '), r.result,
+        r.result !== 'Solved' && r.next_action ? [h('br'), h('b', 'Next step: '), r.next_action, r.revisit_date ? ` (revisit ${fmtDate(r.revisit_date)})` : ''] : null) : null,
+      (r.material_used || []).some(l => Number(l.qty) > 0) ? h('table', { style: { marginTop: '6px' } }, h('thead', h('tr', ['Material used', 'Qty', 'Remark'].map(x => h('th', x)))),
+        h('tbody', (r.material_used || []).filter(l => Number(l.qty) > 0).map(l => h('tr', h('td', l.description || l.item_id_label || ''), h('td.num', `${l.qty} ${l.uom || ''}`), h('td', l.remark || ''))))) : null,
       grid([['End of Service Date', fmtDate(r.end_date)], ['Time', r.end_time], ['Call Attended By', r.attended_by]]),
       h('div', { style: { fontWeight: 700, marginTop: '8px' } }, 'Customer Feedback'),
       h('table', h('thead', h('tr', h('th', 'Particulars'), RATES.map(x => h('th', { style: { fontSize: '10px' } }, x)))),
         h('tbody', fb.map(([q, v]) => h('tr', h('td', q), RATES.map(x => h('td', { style: { textAlign: 'center' } }, v === x ? '●' : '○')))))),
       box('Additional Feedback / Information', r.additional_feedback),
-      signRow(['Customer / Representative – Name, Seal & Signature', r.customer_rep], ['Engineer / Technician – Name & Signature', r.attended_by])),
+      signRow(['Customer / Representative – Name, Seal & Signature', r.client_sign?.png ? h('div', h('img', { src: r.client_sign.png, style: { height: '56px', display: 'block' } }),
+        [r.signed_by || r.customer_rep, r.signed_designation].filter(Boolean).join(', '), r.signed_at ? h('div', { style: { fontSize: '10px', color: '#555' } }, `Signed ${r.signed_at}`) : null) : r.customer_rep],
+        ['Engineer / Technician – Name & Signature', r.attended_by])),
     check.length ? page(companyHead(s, 'ANNEXURE I : CHECK LIST'),
       h('table', h('thead', h('tr', ['Sr. No', 'Service Protocol Steps', 'Yes / No'].map(x => h('th', x)))), h('tbody', check.map((c, i) => h('tr', h('td', i + 1), h('td', c.step), h('td', { style: { textAlign: 'center' } }, c.done || '')))))) : null,
-    read.length || air.length ? page(companyHead(s, 'TESTING PARAMETERS / AIR FLOW AND DAMPER OPENING STATUS'),
+    read.length || air.length || dampers.length ? page(companyHead(s, 'TESTING PARAMETERS / AIR FLOW AND DAMPER OPENING STATUS'),
       grid([['Client Name', r.hospital], ['OT No', r.ot_no], ['VFD Freq (Hz)', r.vfd_hz], ['HEPA Pressure (Pa)', r.hepa_pa], ['Positive Pressure (Pa)', r.positive_pa], ['Ambient Temp (°C)', r.ambient_c], ['Date', fmtDate(r.date)]]),
       read.length ? h('table', { style: { marginTop: '8px', fontSize: '10px' } }, h('thead', h('tr', ['Timing', 'OT °C', 'RH %', 'Comp AC1 A', 'Comp AC2 A', 'Blower A', 'Heater R', 'Heater Y', 'Heater B', 'Coil °C', 'Suction PSI', 'Discharge PSI', 'Remark'].map(x => h('th', x)))),
         h('tbody', read.map(x => h('tr', RC.map(k => h('td', x[k] ?? '')))))) : null,
       air.length ? h('table', { style: { marginTop: '10px', fontSize: '10px' } }, h('thead', h('tr', ['OT', 'Return R1', 'R2', 'R3', 'R4', 'Supply HEPA 1', 'HEPA 2', 'HEPA 3', 'HEPA 4', 'HEPA 5', 'HEPA 6', 'Return open %', 'Fresh open %', 'Bypass open %'].map(x => h('th', x)))),
         h('tbody', air.map(x => h('tr', AC.map(k => h('td', x[k] ?? '')))))) : null,
+      dampers.length ? h('table', { style: { marginTop: '10px', fontSize: '10px' } }, h('thead', h('tr', ['OT', 'Damper', 'Size', 'Qty', 'Opening %', 'Velocity / CFM', 'Condition', 'Remark'].map(x => h('th', x)))),
+        h('tbody', dampers.map(x => h('tr', ['ot', 'damper', 'size', 'qty', 'opening', 'velocity', 'condition', 'remark'].map(k => h('td', x[k] ?? '')))))) : null,
       signRow(['Prepared By – Designation – Signature', r.attended_by])) : null);
+}
+
+// The AMC / warranty format: the client, the cover, the system OT by OT, the service visits and the breakdown calls.
+function amcDoc(a, s) {
+  const ots = (a.ot_systems || []).filter(x => Object.values(x).some(v => v !== '' && v != null));
+  const visits = (a.service_plan || []).filter(p => p.visit || p.planned);
+  return h('div.doc', page(companyHead(s, 'AMC / WARRANTY – SYSTEM DETAILS & SERVICE PLAN'),
+    grid([['Client ID', a.client_id], ['Hospital', a.hospital], ['Doctor / Customer', a.customer_name], ['City', a.city], ['Contact Person', a.contact_person], ['Mobile', a.mobile], ['Email', a.email], ['Address', a.address],
+      ['System', a.system_details], ['Cover', a.coverage], ['Warranty', [fmtDate(a.warranty_start), fmtDate(a.warranty_end)].filter(Boolean).join(' – ')], ['AMC Period', [fmtDate(a.amc_start), fmtDate(a.amc_end)].filter(Boolean).join(' – ')],
+      ['AMC Amount (incl. GST)', a.amc_amount ? `₹ ${Number(a.amc_amount).toLocaleString('en-IN')}` : ''], ['Service Visits per Year', a.services_covered], ['Breakdown Calls Included', a.breakdowns_allowed ? `${a.breakdowns_allowed} a year (used: ${a.breakdowns_used || 0})` : 'As per agreement'],
+      ['Particle Count', [a.particle_count_date && `last ${fmtDate(a.particle_count_date)}`, a.particle_next && `next ${fmtDate(a.particle_next)}`].filter(Boolean).join(', ')], ['Status', a.cover_status]]),
+    ots.length ? [h('div', { style: { fontWeight: 700, marginTop: '10px' } }, 'System details – OT wise'), h('table', { style: { fontSize: '10px' } }, h('thead', h('tr', ['OT / Room', 'AHU (CFM)', 'AC (TR)', 'ODU', 'Return air dampers', 'Fresh air dampers', 'HEPA filters', 'PLC Sr', 'GSM Sr', 'Remark'].map(x => h('th', x)))),
+      h('tbody', ots.map(x => h('tr', ['ot', 'ahu_cfm', 'ac_tr', 'odu', 'return_dampers', 'fresh_dampers', 'hepa', 'plc_sr', 'gsm_sr', 'remark'].map(k => h('td', x[k] ?? ''))))))] : null,
+    visits.length ? [h('div', { style: { fontWeight: 700, marginTop: '10px' } }, 'Service visits'), h('table', h('thead', h('tr', ['Visit', 'Planned', 'Done on', 'Service report', 'Remark'].map(x => h('th', x)))),
+      h('tbody', visits.map(p => h('tr', h('td', p.visit || ''), h('td', fmtDate(p.planned)), h('td', fmtDate(p.done)), h('td', p.report || ''), h('td', p.remark || '')))))] : null,
+    box('Notes', a.notes),
+    signRow(['For ' + (s.company_name || 'WIESPL') + ' – Authorised Signatory', ''], ['Client – Name, Seal & Signature', a.contact_person || ''])));
 }
 
 function rcaDoc(r, s) {
@@ -587,6 +614,9 @@ export async function printView(root, kind, id) {
   } else if (kind === 'servicereport') {
     const r = await api(`/service_reports/${id}`);
     title = `${r.report_no} ${r.hospital || ''}`; doc = serviceReportDoc(r, s);
+  } else if (kind === 'amc') {
+    const a = await api(`/amc_contracts/${id}`);
+    title = `AMC ${a.hospital || ''}`; doc = amcDoc(a, s);
   } else if (kind === 'rca') {
     const r = await api(`/rca_reports/${id}`);
     title = `${r.rca_no} ${r.hospital || ''}`; doc = rcaDoc(r, s);

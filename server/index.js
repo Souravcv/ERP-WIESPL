@@ -874,6 +874,11 @@ api.post('/attendance/:id/review', wrap(req => hr.review(req.params.id, req.body
 // ---------------------------------------------------------------- service and costing sheets
 api.post('/service_work_orders/:id/to-store', wrap(req => svc.swoToStore(req.params.id, req.user)));
 api.post('/amc_contracts/:id/proforma', wrap(req => svc.amcPI(req.params.id, req.user)));
+// Service (owner, 25 Nov 2026): complete a report with the client's signature; the Service stock; a PI to the client.
+api.post('/service_reports/:id/complete', wrap(req => svc.completeReport(req.params.id, req.body, req.user)));
+api.get('/service/stock', wrap(req => svc.serviceStock(req.user)));
+api.post('/invoices/:id/send-mail', wrap(req => svc.mailInvoice(req.params.id, req.body, req.user)));
+api.post('/invoices/:id/sent', wrap(req => svc.markInvoiceSent(req.params.id, req.body, req.user)));
 api.post('/costing_sheets/:id/to-quotation', wrap(req => svc.costingToQuotation(req.params.id, req.body?.quotation_id, req.user)));
 api.post('/costing_sheets/:id/proforma', wrap(req => svc.costingPI(req.params.id, req.user)));
 api.get('/costing_sheets/:id/selling', wrap(req => { if (!canView('costing_sheets', req.user.role)) throw new HttpError(403, 'No access'); return svc.sellingLines(getRow('costing_sheets', req.params.id)); }));
@@ -1402,6 +1407,7 @@ setInterval(() => {
   try { if (new Date().getHours() >= 10) prod.dailyProduction(); } catch (e) { console.error('production reminders', e.message); }
   try { if (new Date().getHours() >= 9) journey.dailyJourney(); } catch (e) { console.error('order journey reminders', e.message); }
   try { if (new Date().getHours() >= 9) pofollow.dailyPoFollowups(); } catch (e) { console.error('PO follow-up reminders', e.message); }
+  try { if (new Date().getHours() >= 9) svc.dailyService(); } catch (e) { console.error('service reminders', e.message); }
   try { if (new Date().getHours() >= 10) news.dailyNews(); } catch (e) { console.error('news pop-up', e.message); }
 }, 60 * 60 * 1000);
 

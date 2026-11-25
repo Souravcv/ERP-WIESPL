@@ -13,7 +13,7 @@ const DEPTS = COMPANY_DEPARTMENTS.map(d => ({ name: d, key: norm(d) }));
 // The place a location text belongs to: the department it starts with, else the text itself.
 export function placeOf(text) {
   const t = norm(text);
-  if (!t || t === 'store' || t === 'main store') return null;
+  if (!t || t === 'store' || t === 'main store' || t.startsWith('used at ')) return null; // used at a client's site (service): consumed
   const d = DEPTS.find(x => t === x.key || t.startsWith(`${x.key} `) || t.startsWith(`${x.key}-`) || t.startsWith(`${x.key} -`));
   return d ? d.name : String(text).trim();
 }

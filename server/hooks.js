@@ -593,6 +593,28 @@ export function beforeSave(name, row, existing, user) {
       const amc = row.amc_id ?? existing?.amc_id;
       if (amc && !(row.hospital ?? existing?.hospital)) row.hospital = db.prepare('SELECT hospital FROM amc_contracts WHERE id = ?').get(Number(amc))?.hospital || null;
       if ((row.status === 'Resolved' || row.status === 'Closed') && !(row.closed_date ?? existing?.closed_date)) row.closed_date = today();
+      // Cover from the AMC / warranty register by the complaint date (owner, 25 Nov 2026): a new complaint, or one whose
+      // AMC, date or category changed. Breakdowns beyond those included in the AMC are chargeable.
+      const tv = k => (row[k] !== undefined ? row[k] : existing?.[k]);
+      if (tv('amc_id') && (!existing || ['amc_id', 'date', 'category'].some(k => k in row && String(row[k] ?? '') !== String(existing[k] ?? '')) || !tv('cover'))) {
+        const a = db.prepare('SELECT warranty_start, warranty_end, amc_start, amc_end, breakdowns_allowed FROM amc_contracts WHERE id = ?').get(Number(tv('amc_id')));
+        const d = tv('date') || today();
+        const within = (s, e) => !!(s || e) && (!s || d >= s) && (!e || d <= e);
+        if (a) {
+          let cover = 'Out of warranty (chargeable)';
+          if (within(a.warranty_start, a.warranty_end)) cover = 'Within warranty';
+          else if (within(a.amc_start, a.amc_end)) {
+            cover = 'In AMC';
+            if (tv('category') === 'Breakdown' && Number(a.breakdowns_allowed) > 0) {
+              const used = db.prepare("SELECT COUNT(*) n FROM service_tickets WHERE amc_id = ? AND category = 'Breakdown' AND id <> ? AND date >= COALESCE(?, '0000') AND date <= COALESCE(?, '9999')")
+                .get(Number(tv('amc_id')), existing?.id || 0, a.amc_start, a.amc_end).n;
+              if (used >= Number(a.breakdowns_allowed)) cover = 'AMC – breakdown calls used up (chargeable)';
+            }
+          }
+          row.cover = cover;
+        }
+      }
+      if ('cover' in row) row.under_warranty = ['Within warranty', 'In AMC'].includes(row.cover) ? 'Yes' : row.cover ? 'No' : (existing?.under_warranty ?? null);
       break;
     }
     case 'amc_contracts': {
@@ -618,6 +640,18 @@ export function beforeSave(name, row, existing, user) {
     case 'service_reports':
       if (!existing && !row.report_no) row.report_no = docNo('service_report', date, (n, fy) => `SR-${n}/20${fy}`);
       fillFromTicket(row, existing, 'service_reports');
+      {
+        // the OT of the complaint, and that OT's system details from the AMC register (only into blank boxes)
+        const rv = k => (row[k] !== undefined ? row[k] : existing?.[k]);
+        const tid = rv('ticket_id');
+        if (!rv('ot_no') && tid) { const ot = db.prepare('SELECT ot FROM service_tickets WHERE id = ?').get(Number(tid))?.ot; if (ot) row.ot_no = ot; }
+        const otName = String(rv('ot_no') || '').trim().toLowerCase();
+        const amcId = rv('amc_id');
+        if (otName && amcId) {
+          const sys = parse(db.prepare('SELECT ot_systems FROM amc_contracts WHERE id = ?').get(Number(amcId))?.ot_systems, []).find(x => String(x.ot || '').trim().toLowerCase() === otName);
+          if (sys) for (const [to, from] of [['ahu_capacity', 'ahu_cfm'], ['ac_tr', 'ac_tr'], ['odu_count', 'odu'], ['plc_sr', 'plc_sr'], ['gsm_sr', 'gsm_sr']]) if (!rv(to) && sys[from]) row[to] = sys[from];
+        }
+      }
       break;
     case 'rca_reports':
       if (!existing && !row.rca_no) row.rca_no = docNo('rca', date, (n, fy) => `RCA-${n}/20${fy}`);

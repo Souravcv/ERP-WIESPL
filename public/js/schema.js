@@ -19,6 +19,10 @@ const ACC = ['admin', 'manager', 'accounts'];
 const PURCHASE = ['admin', 'manager', 'purchase', 'purchase_head', 'accounts', 'store'];
 const STORE = ['admin', 'manager', 'store', 'purchase', 'purchase_head', 'accounts'];
 const ENG = ['admin', 'manager', 'engineer', 'sales', 'technical'];
+// Service (owner, 25 Nov 2026): the cover of a call decides whether it is charged.
+export const SERVICE_COVERS = ['', 'Within warranty', 'In AMC', 'AMC – breakdown calls used up (chargeable)', 'Out of warranty (chargeable)'];
+export const SERVICE_TESTS = ['Temperature & RH', 'Air velocity / CFM (air changes)', 'Room pressure', 'HEPA filter pressure', 'Particle count', 'HEPA integrity (PAO / DOP)', 'Electrical currents', 'Refrigerant pressures'];
+export const SERVICE_RESULTS = ['', 'Solved', 'Not solved – revisit needed', 'Not solved – parts needed'];
 export const SCRAP_MATERIALS = ['MS (mild steel)', 'GI', 'SS', 'PPGL / PUF panel', 'Aluminium', 'Copper', 'Cable', 'HDPE / plastic', 'Other'];
 const SERVICE = ['admin', 'manager', 'service', 'engineer'];
 const HR_ROLES = ['admin', 'manager', 'hr'];
@@ -1093,6 +1097,9 @@ export const ENTITIES = {
       { key: 'sales_order_id', label: 'Sales Order', type: 'ref', ref: 'sales_orders' },
       { key: 'project_id', label: 'Project', type: 'ref', ref: 'projects' },
       { key: 'milestone', label: 'Milestone', type: 'text', hint: 'From the sales order billing milestones' },
+      { key: 'amc_id', label: 'AMC / Warranty', type: 'ref', ref: 'amc_contracts', hidden: true },
+      { key: 'ticket_id', label: 'Complaint', type: 'ref', ref: 'service_tickets', hidden: true },
+      { key: 'sent_to_client', label: 'Sent to Client', type: 'text', readonly: true },
       { key: 'milestone_no', label: 'Milestone No', type: 'number', hidden: true },
       { key: 'place_of_supply', label: 'Place of Supply', type: 'select', options: STATES, default: 'Maharashtra' },
       { key: 'due_date', label: 'Due Date', type: 'date', hint: 'Blank = invoice date + the client\'s credit days, set when issued' },
@@ -1176,7 +1183,7 @@ export const ENTITIES = {
     label: 'Complaint Register', singular: 'Complaint', group: 'Service', icon: '🛠️', write: SERVICE.concat('store'),
     display: "{t}.ticket_no || ' ' || COALESCE({t}.hospital, '')",
     search: ['ticket_no', 'hospital', 'city', 'equipment', 'complaint', 'assigned_to', 'resolution'],
-    list: ['ticket_no', 'date', 'hospital', 'city', 'mode', 'equipment', 'complaint', 'assigned_to', 'status', 'closed_date'],
+    list: ['ticket_no', 'date', 'hospital', 'ot', 'category', 'cover', 'complaint', 'assigned_to', 'charges', 'payment', 'status', 'closed_date'],
     statusField: 'status',
     fields: [
       { key: 'ticket_no', label: 'Ticket No', type: 'text', readonly: true },
@@ -1192,7 +1199,9 @@ export const ENTITIES = {
       { key: 'category', label: 'Category', type: 'select', options: ['Breakdown', 'Preventive Maintenance', 'Warranty', 'AMC Visit', 'Validation', 'Installation Support', 'Other'], default: 'Breakdown' },
       { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'], default: 'Medium' },
       { key: 'equipment', label: 'Instrument Name', type: 'text', suggest: ['ODU', 'AHU', 'AHU Control Panel', 'PLC', 'LAF System', 'Surgeon Control Panel', 'Door', 'Sky Light', 'VMR', 'VFD', 'Motor', 'Pendant', 'MGPS', 'Pass Box', 'Other'] },
-      { key: 'under_warranty', label: 'Under Warranty / AMC', type: 'yn' },
+      { key: 'under_warranty', label: 'Under Warranty / AMC', type: 'yn', hidden: true },
+      { key: 'cover', label: 'Cover', type: 'select', options: SERVICE_COVERS, hint: 'Filled from the AMC / warranty register by the complaint date; out of warranty or AMC breakdowns used up = chargeable' },
+      { key: 'ot', label: 'OT / Room', type: 'text', hint: 'Which OT of the system (as in the AMC register)' },
       { key: 'complaint', label: 'Problem', type: 'textarea', span: 2, required: true },
       { key: 'reported_by', label: 'Reported By (client)', type: 'text' },
       { key: 'assigned_to', label: 'Assigned Person', type: 'person' },
@@ -1200,7 +1209,10 @@ export const ENTITIES = {
       { key: 'closed_date', label: 'Date of Completion', type: 'date' },
       { key: 'resolution', label: 'Solution', type: 'textarea', span: 2 },
       { key: 'remark', label: 'Remark', type: 'text' },
-      { key: 'charges', label: 'Charges (₹)', type: 'money' },
+      { key: 'charges', label: 'Charges (₹)', type: 'money', hint: 'For a chargeable call: the amount on the proforma invoice' },
+      { key: 'client_po', label: 'Client PO / PR No', type: 'text', hint: 'The client\'s purchase order / request for a chargeable call' },
+      { key: 'invoice_id', label: 'Proforma / Invoice', type: 'ref', ref: 'invoices' },
+      { key: 'payment', label: 'Payment', type: 'text', computed: "(SELECT CASE WHEN i.id IS NULL THEN NULL WHEN i.status = 'Draft' THEN 'PI not sent yet' WHEN i.status = 'Paid' THEN 'Paid' WHEN i.status = 'Cancelled' THEN 'PI cancelled' ELSE 'Payment pending' END FROM invoices i WHERE i.id = {t}.invoice_id)" },
       { key: 'days_open', label: 'Days Open', type: 'number', computed: "CAST(julianday(COALESCE(NULLIF({t}.closed_date, ''), date('now', 'localtime'))) - julianday({t}.date) AS INTEGER)" },
     ],
   },
@@ -1213,7 +1225,7 @@ export const ENTITIES = {
     label: 'AMC / Warranty Register', singular: 'AMC / Warranty', group: 'Service', icon: '🛡️', write: SERVICE,
     display: "COALESCE({t}.hospital, '') || COALESCE(' – ' || {t}.system_details, '')",
     search: ['client_id', 'hospital', 'customer_name', 'city', 'contact_person', 'system_details', 'email', 'mobile'],
-    list: ['client_id', 'hospital', 'city', 'system_details', 'coverage', 'warranty_end', 'amc_start', 'amc_end', 'amc_amount', 'next_service', 'cover_status'],
+    list: ['client_id', 'hospital', 'city', 'system_details', 'coverage', 'warranty_end', 'amc_start', 'amc_end', 'amc_amount', 'amc_invoice', 'breakdowns_used', 'next_service', 'cover_status'],
     fields: [
       { key: 'client_id', label: 'Client ID', type: 'text' },
       { key: 'hospital', label: 'Hospital Name', type: 'text', required: true, span: 2 },
@@ -1231,6 +1243,13 @@ export const ENTITIES = {
       { key: 'warranty_start', label: 'Warranty Start', type: 'date' },
       { key: 'warranty_end', label: 'Warranty End', type: 'date', hint: 'Start + months if blank' },
       { key: 'services_covered', label: 'Services Covered per Year', type: 'number', default: 3 },
+      { key: 'breakdowns_allowed', label: 'Breakdown Calls Included per Year', type: 'number', hint: 'Blank = no limit. After these, a breakdown call is chargeable' },
+      { key: 'breakdowns_used', label: 'Breakdown Calls Used', type: 'text', computed: "(SELECT COUNT(*) FROM service_tickets k WHERE k.amc_id = {t}.id AND k.category = 'Breakdown' AND k.date >= COALESCE({t}.amc_start, {t}.warranty_start, '0000') AND k.date <= COALESCE({t}.amc_end, {t}.warranty_end, '9999')) || COALESCE(' of ' || CAST({t}.breakdowns_allowed AS INTEGER), '')" },
+      { key: 'ot_systems', label: 'System Details by OT', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        { key: 'ot', label: 'OT / Room', type: 'text', width: 90 }, { key: 'ahu_cfm', label: 'AHU capacity (CFM)', type: 'text', width: 90 }, { key: 'ac_tr', label: 'AC (TR)', type: 'text', width: 60 },
+        { key: 'odu', label: 'No of ODU', type: 'text', width: 60 }, { key: 'return_dampers', label: 'Return air dampers (size × qty)', type: 'text', width: 120 }, { key: 'fresh_dampers', label: 'Fresh air dampers (size × qty)', type: 'text', width: 120 },
+        { key: 'hepa', label: 'HEPA filters (size × qty)', type: 'text', width: 110 }, { key: 'plc_sr', label: 'PLC Sr No', type: 'text', width: 80 }, { key: 'gsm_sr', label: 'GSM Sr No', type: 'text', width: 80 }, { key: 'remark', label: 'Remark', type: 'text', width: 120 },
+      ] },
       { key: 'service_plan', label: 'Service Visits (S1, S2 …)', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
         { key: 'visit', label: 'Visit', type: 'text', width: 60 }, { key: 'planned', label: 'Planned', type: 'date', width: 140 },
         { key: 'done', label: 'Done On', type: 'date', width: 140 }, { key: 'report', label: 'Service Report', type: 'text', width: 140 }, { key: 'remark', label: 'Remark', type: 'text', width: 200 }] },
@@ -1238,6 +1257,7 @@ export const ENTITIES = {
       { key: 'amc_end', label: 'AMC End', type: 'date' },
       { key: 'amc_amount_agreement', label: 'AMC Amount as per Agreement (₹)', type: 'money' },
       { key: 'amc_amount', label: 'AMC Amount (₹, incl. GST)', type: 'money' },
+      { key: 'amc_invoice', label: 'AMC Invoice', type: 'text', computed: "(SELECT CASE WHEN COUNT(*) = 0 THEN 'Not raised' WHEN SUM(i.status = 'Paid') = COUNT(*) THEN 'Paid' WHEN SUM(i.status = 'Draft') = COUNT(*) THEN 'PI not sent yet' ELSE 'Payment pending' END FROM invoices i WHERE i.amc_id = {t}.id AND i.status <> 'Cancelled')" },
       { key: 'variance', label: 'Variance (₹)', type: 'money', computed: "ROUND(COALESCE({t}.amc_amount, 0) - COALESCE({t}.amc_amount_agreement, 0), 2)" },
       { key: 'particle_count_date', label: 'Particle Count Done On', type: 'date' },
       { key: 'particle_next', label: 'Next Particle Count', type: 'date', hint: 'One year after the last if blank' },
@@ -1282,7 +1302,7 @@ export const ENTITIES = {
     label: 'Service Reports', singular: 'Service Report', group: 'Service', icon: '📋', write: SERVICE,
     display: "{t}.report_no || ' ' || COALESCE({t}.hospital, '')",
     search: ['report_no', 'hospital', 'attended_by', 'problem', 'work_done'],
-    list: ['report_no', 'date', 'hospital', 'call_type', 'attended_by', 'ticket_id', 'amc_id', 'status'],
+    list: ['report_no', 'date', 'hospital', 'ot_no', 'call_type', 'result', 'attended_by', 'ticket_id', 'signed_by', 'status'],
     statusField: 'status', print: 'servicereport',
     fields: [
       { key: 'report_no', label: 'Report No', type: 'text', readonly: true, hint: 'Auto: SR-001/2026-27' },
@@ -1304,12 +1324,27 @@ export const ENTITIES = {
       { key: 'gsm_sr', label: 'GSM Model Sr No', type: 'text' },
       { key: 'problem', label: 'Problem Observation', type: 'textarea', span: 2 },
       { key: 'work_done', label: 'Work Done / Resolving Issue', type: 'textarea', span: 2 },
+      { key: 'result', label: 'Problem Solved?', type: 'select', options: SERVICE_RESULTS, hint: 'Not solved: the complaint stays open with the next step and date below' },
+      { key: 'next_action', label: 'If Not Solved: Next Step', type: 'textarea', span: 2 },
+      { key: 'revisit_date', label: 'Revisit On', type: 'date' },
+      { key: 'material_used', label: 'Material Used (from the Service stock)', type: 'lines', span: 2, itemRef: true, amounts: false, columns: [
+        { key: 'description', label: 'Material', type: 'text', width: 260 }, { key: 'qty', label: 'Qty', type: 'number', width: 70 }, { key: 'uom', label: 'UOM', type: 'text', width: 60 }, { key: 'remark', label: 'Remark', type: 'text', width: 160 },
+      ] },
+      { key: 'stock_slip', label: 'Service Stock Slip', type: 'text', readonly: true },
       { key: 'end_date', label: 'End of Service Date', type: 'date' },
       { key: 'end_time', label: 'End Time', type: 'text' },
       { key: 'attended_by', label: 'Call Attended By', type: 'text' },
       { key: 'checklist', label: 'Annexure I – Service Protocol Check List', type: 'lines', span: 2, amounts: false, schedule: true, default: [{"step":"Checking & cleaning of AHU filters – pre filter with water, fine filter & fresh air filter by blower","done":""},{"step":"Checking & cleaning of ESP filter with cotton","done":""},{"step":"Checking of all electrical wiring – motor, heater, UV & ESP","done":""},{"step":"Checking & cleaning of AC coil","done":""},{"step":"Cleaning of AC coil drain tray & piping by water at full pressure","done":""},{"step":"Checking motor electrical connections, belt alignment, heater connections & current, UV on/off, ESP connections","done":""},{"step":"Cleaning of AHU inside area by water & cloth","done":""},{"step":"Cleaning of AHU outside body by water","done":""},{"step":"Checking CFM of return, supply, fresh & bypass air and damper opening","done":""},{"step":"Checking de-fumigation fan electrical connection & switches","done":""},{"step":"Checking PLC based AHU control panel wiring & cleaning of panel","done":""},{"step":"Checking AC outdoor fan, compressor, wiring, suction & liquid line pressure, LP/HP connection","done":""},{"step":"Cleaning of outdoor unit return grill (back side) by water","done":""},{"step":"Cleaning inside OT – all return air grills; checking UV tube light assembly","done":""},{"step":"Checking surgeon control panel & outside panel – electrical wiring connections","done":""},{"step":"Checking pendant alignment & electrical connections","done":""},{"step":"Checking OT door accessories & their alignment","done":""},{"step":"Checking all panelling silicon joints","done":""},{"step":"Checking plenum tube lights & 2×2 lights","done":""},{"step":"Checking setting of temperature & humidity","done":""},{"step":"Checking HEPA pressure & room pressure meter","done":""},{"step":"Checking electrical connections of X-ray viewer & switches","done":""},{"step":"Checking pass box UV light & door lock","done":""},{"step":"Checking supply air & return air CFM","done":""}],
         columns: [{ key: 'step', label: 'Service protocol step', type: 'text', width: 560 }, { key: 'done', label: 'Yes / No', type: 'select', options: ['', 'Yes', 'No', 'N/A'], width: 90 }] },
-      { key: 'ot_no', label: 'OT No (testing)', type: 'text' },
+      { key: 'ot_no', label: 'OT No (testing)', type: 'text', hint: 'The OT as in the AMC register: AHU capacity, AC (TR), ODU, PLC and GSM fill in by themselves' },
+      { key: 'tests_done', label: 'Testing Done', type: 'checks', span: 2, options: SERVICE_TESTS },
+      { key: 'particle_count', label: 'Particle Count', type: 'select', options: ['', 'Done', 'Not done'], hint: 'Done: the AMC register gets the date and the next one' },
+      { key: 'particle_result', label: 'Particle Count Result / Report No', type: 'text' },
+      { key: 'dampers', label: 'Return Air / Fresh Air Dampers', type: 'lines', span: 2, amounts: false, schedule: true, columns: [
+        { key: 'ot', label: 'OT', type: 'text', width: 70 }, { key: 'damper', label: 'Damper', type: 'select', options: ['Return air', 'Fresh air', 'Bypass', 'Supply'], width: 100 },
+        { key: 'size', label: 'Size', type: 'text', width: 80 }, { key: 'qty', label: 'Qty', type: 'text', width: 50 }, { key: 'opening', label: 'Opening %', type: 'text', width: 70 },
+        { key: 'velocity', label: 'Velocity m/s / CFM', type: 'text', width: 90 }, { key: 'condition', label: 'Condition', type: 'select', options: ['', 'OK', 'Cleaned', 'Adjusted', 'Needs repair', 'Replaced'], width: 100 }, { key: 'remark', label: 'Remark', type: 'text', width: 140 },
+      ] },
       { key: 'vfd_hz', label: 'VFD Freq (Hz)', type: 'text' },
       { key: 'hepa_pa', label: 'HEPA Pressure (Pa)', type: 'text' },
       { key: 'positive_pa', label: 'Positive Pressure (Pa)', type: 'text' },
@@ -1325,7 +1360,11 @@ export const ENTITIES = {
       { key: 'fb_resolution', label: 'Resolution of your concern', type: 'select', options: ["","Very Satisfied","Satisfied","Neutral","Dissatisfied","Very Dissatisfied"] },
       { key: 'additional_feedback', label: 'Additional Feedback / Information', type: 'textarea', span: 2 },
       { key: 'customer_rep', label: 'Customer / Representative (name)', type: 'text' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Completed'], default: 'Draft' },
+      { key: 'signed_by', label: 'Signed By (client)', type: 'text', readonly: true },
+      { key: 'signed_designation', label: 'Designation', type: 'text', readonly: true },
+      { key: 'signed_at', label: 'Signed At', type: 'text', readonly: true },
+      { key: 'client_sign', label: 'Client Signature', type: 'json', hidden: true },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Completed'], default: 'Draft', readonly: true },
     ],
   },
   // Root cause analysis of a complaint (format WIESPL RCA template).
@@ -1333,7 +1372,7 @@ export const ENTITIES = {
     label: 'Root Cause Analysis (RCA)', singular: 'RCA', group: 'Service', icon: '🔍', write: SERVICE,
     display: "{t}.rca_no || ' ' || COALESCE({t}.hospital, '')",
     search: ['rca_no', 'hospital', 'complaint_details', 'root_cause'],
-    list: ['rca_no', 'date', 'hospital', 'complaint_date', 'complaint_details', 'status'],
+    list: ['rca_no', 'date', 'hospital', 'complaint_details', 'action_by', 'due_date', 'status'],
     statusField: 'status', print: 'rca',
     fields: [
       { key: 'rca_no', label: 'RCA No', type: 'text', readonly: true, hint: 'Auto: RCA-001/2026-27' },
@@ -1348,6 +1387,7 @@ export const ENTITIES = {
       { key: 'complaint_details', label: 'Complaint Details', type: 'textarea', span: 2 },
       { key: 'action_date', label: 'Date of Action Taken', type: 'date' },
       { key: 'action_by', label: 'Action Taken By', type: 'text' },
+      { key: 'due_date', label: 'RCA Due By', type: 'date', hint: '4 days after the breakdown call was attended' },
       { key: 'observation', label: 'Observation before resolving the issue', type: 'textarea', span: 2 },
       { key: 'team', label: 'Investigative Team', type: 'text', span: 2 },
       { key: 'findings', label: 'Findings', type: 'textarea', span: 2 },
