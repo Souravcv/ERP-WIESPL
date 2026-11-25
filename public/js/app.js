@@ -113,13 +113,21 @@ function highlightNav() {
 export async function refreshPending() {
   try {
     const [rows, n] = await Promise.all([api('/approvals?status=Pending&limit=200'), taskCount()]);
+    // the menu is redrawn only when a count changed: a redraw under the mouse could turn a click into another link
+    const key = `${state.user?.role}|${rows.length}|${n}`;
+    if (key === navKey && document.querySelector('#nav a')) return;
+    navKey = key;
     tasksOpen = n;
     buildNav(rows.length);
   } catch { /* nav still usable */ }
 }
+let navKey = '';
 
 async function route() {
-  const view = $('view');
+  // Each screen draws into its own box. A screen still loading when another is chosen (a quick second click in the
+  // menu) finishes into a box that is no longer on the page, so it cannot cover the screen that was chosen after it.
+  const view = h('div.screen');
+  $('view').replaceChildren(view);
   markNav();
   const [page, a, b] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   $('sidebar').classList.remove('open');
@@ -255,6 +263,7 @@ async function start() {
   $('app').classList.remove('hidden');
   $('user-name').textContent = `${state.user.name} · ${state.user.role_label || state.user.role}`;
   buildNav();
+  navKey = ''; // a fresh sign-in: the counts are filled in again
   initAssistant();
   refreshPending();
   startNotifications();
