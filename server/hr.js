@@ -106,8 +106,22 @@ function fence(loc, p) {
   const radius = Number(loc.radius_m) || 200;
   return { distance: d, inside: d - Math.min(Number(p.accuracy) || 0, 100) <= radius, radius };
 }
-function nearest(sites, p) {
-  return sites.map(l => ({ loc: l, ...fence(l, p) })).sort((a, b) => a.distance - b.distance)[0] || null;
+// Sites assigned to the employee on a date (site assignments).
+function assignedIds(emp, date) {
+  return new Set(db.prepare("SELECT location_id FROM site_assignments WHERE employee_id = ? AND from_date <= ? AND (to_date IS NULL OR to_date = '' OR to_date >= ?)").all(emp.id, date, date).map(r => r.location_id));
+}
+// The work location to clock in at, from the phone's position, out of every active location (office, factory, client
+// site): of those the person stands in, the one assigned to them today first, then their usual location, then the
+// nearest; when they stand in none, the nearest of all (inside: false). The same order as the phone screen.
+export function pickSite(emp, date, p) {
+  const today = assignedIds(emp, date);
+  const all = activeSites().map(l => ({ loc: l, ...fence(l, p), rank: today.has(l.id) ? 0 : l.id === emp.default_location_id ? 1 : 2 }));
+  return all.filter(x => x.inside).sort((a, b) => a.rank - b.rank || a.distance - b.distance)[0] || all.sort((a, b) => a.distance - b.distance)[0] || null;
+}
+const km = m => (m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+function siteList(list, emp, date) {
+  const today = assignedIds(emp, date);
+  return list.map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m, rank: today.has(l.id) ? 0 : l.id === emp.default_location_id ? 1 : 2 }));
 }
 
 function position(body) {
@@ -270,22 +284,30 @@ export function clockIn(user, body = {}, ip, device = null) {
   if (existing?.check_in) throw new HttpError(409, `You clocked in already today at ${hhmm(existing.check_in)}`);
   const p = position(body);
   const travel = body.mode === 'Travel / outstation';
-  let f = null;
+  let f = null, notice = null;
   const inFlags = [];
   if (!travel) {
-    const sites = allowedSites(emp, t);
+    // The server works out the site from the position itself (the screen only suggests): the nearest work location
+    // the person stands in, their sites for today first. A site chosen on the screen is kept when they are at it.
+    const best = pickSite(emp, t, p);
+    if (!best) throw new HttpError(409, 'No work location has a position in the CRM yet: ask HR to set the office / site location, or choose Travel / outstation with a note');
+    let chosen = null;
     if (body.site_id) {
-      // The site the employee chose: they must be at it. A site not assigned to them is allowed, and HR sees it.
       const loc = activeSites().find(l => l.id === Number(body.site_id));
       if (!loc) throw new HttpError(400, 'That site has no position in the CRM: choose another site, or ask HR to set its location');
-      f = { loc, ...fence(loc, p) };
-      if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${loc.name} (allowed ${f.radius} m). Choose the site where you are now, or Travel / outstation with a note.`);
-      if (!sites.some(l => l.id === loc.id)) inFlags.push(`site not assigned to them (${loc.name})`);
-    } else {
-      if (!sites.length) throw new HttpError(409, 'No work location is set for you today: choose your site from the list, ask HR / the service coordinator to assign your site, or choose Travel / outstation with a note');
-      f = nearest(sites, p);
-      if (!f.inside) throw new HttpError(409, `You are ${f.distance >= 1000 ? (f.distance / 1000).toFixed(1) + ' km' : f.distance + ' m'} from ${f.loc.name} (allowed ${f.radius} m). Choose the site where you are from the list, or Travel / outstation with a note.`);
+      chosen = { loc, ...fence(loc, p) };
     }
+    if (chosen?.inside || (chosen && !best.inside)) f = chosen;
+    else {
+      f = best;
+      if (chosen && best.inside) { inFlags.push(`chose ${chosen.loc.name} (${km(chosen.distance)} away) but was at ${best.loc.name}`); notice = `You are at ${best.loc.name}, not ${chosen.loc.name}: clocked in at ${best.loc.name}`; }
+    }
+    // Not within any work location: the clock-in is still recorded, at the site chosen or the nearest one, for HR to check.
+    if (!f.inside) {
+      inFlags.push(`clocked in outside every work location (${f.loc.name} is ${km(f.distance)} away)`);
+      notice = `You are ${km(f.distance)} from ${f.loc.name}, outside every work location. Clock-in recorded; HR will check this day.`;
+    }
+    if (!allowedSites(emp, t).some(l => l.id === f.loc.id)) inFlags.push(`site not assigned to them (${f.loc.name})`);
   } else if (!String(body.note || '').trim()) throw new HttpError(400, 'Write where you are going / why (travel or outstation work)');
   if (needsPhoto(emp) && !body.photo) throw new HttpError(400, 'Take a selfie to clock in');
   return tx(() => {
@@ -296,7 +318,7 @@ export function clockIn(user, body = {}, ip, device = null) {
     const photoId = savePhoto(att.id, 'Clock in', body.photo, user);
     addPing(getRow('attendance', att.id), emp, 'In', p, f, ip, photoId, [...inFlags, ...sharedDevice(att.id, emp, device, user)]);
     audit(user.name, 'attendance', att.id, 'clock in', f ? `${f.loc.name} ${f.distance} m` : 'travel');
-    return { attendance: forPhone(evaluate(att.id)), site: f?.loc.name || null };
+    return { attendance: forPhone(evaluate(att.id)), site: f?.loc.name || null, distance: f?.distance ?? null, inside: f ? f.inside : null, notice };
   });
 }
 
@@ -478,9 +500,10 @@ export function myDay(user) {
   return { employee: { id: emp.id, name: emp.name, code: emp.emp_code, field_staff: emp.field_staff, photos: needsPhoto(emp), shift_start: sh.from, shift_end: sh.to },
     // an approved short / half-day leave today: the person still clocks in (later) or out (earlier)
     leave_today: lvToday.length ? { type: lvToday[0].type, half: lvToday.some(isHalf), part: !!part, minutes: cover, come_by: part ? hm(sh.start + cover) : null, go_from: part ? hm(sh.stop - cover) : null } : null,
-    today: t, attendance: forPhone(att), sites: allowedSites(emp, t).map(l => ({ id: l.id, name: l.name, kind: l.kind, lat: l.lat, lng: l.lng, radius_m: l.radius_m })),
+    // with the position and radius, so the phone can preselect the nearest site at clock-in (rank: 0 assigned today, 1 usual location)
+    today: t, attendance: forPhone(att), sites: siteList(allowedSites(emp, t), emp, t),
     // other active sites, also selectable at clock-in (HR sees when a site is not assigned)
-    other_sites: activeSites().filter(l => !allowedSites(emp, t).some(a => a.id === l.id)).map(l => ({ id: l.id, name: l.name, kind: l.kind })),
+    other_sites: siteList(activeSites().filter(l => !allowedSites(emp, t).some(a => a.id === l.id)), emp, t),
     rules: rules(), ...clockOutWait(emp, att), month, leaves, balance: balances(t, emp.id).rows[0] || null, holiday: db.prepare('SELECT name FROM holidays WHERE date = ?').get(t)?.name || null, weekly_off: isWeeklyOff(emp, t) };
 }
 

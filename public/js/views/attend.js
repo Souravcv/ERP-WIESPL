@@ -12,8 +12,18 @@ window.addEventListener('hashchange', () => { if (!location.hash.startsWith('#/a
 // location checks while clocked in, also with the phone locked. null in a normal browser.
 const app = window.Capacitor?.isNativePlatform?.() ? (method, options = {}) => window.Capacitor.nativePromise('AttendanceTracker', method, options) : null;
 
+// The phone's position, high accuracy: a second fix when the first is rough (over ±50 m) or late, the better one kept.
+const GOOD_FIX = 50;
+async function locate() {
+  let first;
+  try { first = await fixOnce(); }
+  catch (e) { if (/blocked|not allowed|secure|cannot give/i.test(e.message)) throw e; return fixOnce(); }
+  if (!(first.accuracy > GOOD_FIX)) return first;
+  const second = await fixOnce().catch(() => null);
+  return second && second.accuracy < first.accuracy ? second : first;
+}
 // One GPS fix, as precise as the phone can give within 20 s.
-function locate() {
+function fixOnce() {
   if (app) return app('getPosition').catch(e => { throw new Error(e?.message || String(e)); });
   return new Promise((resolve, reject) => {
     if (!window.isSecureContext) return reject(new Error('GPS works only on the secure (https) address of the CRM: open it on the phone through the https link'));
@@ -77,6 +87,22 @@ export async function backgroundChecks() {
 }
 
 const dist = m => (m == null ? '' : m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${m} m`);
+// The site to suggest at clock-in, the same order as the server (server/hr.js pickSite): of the work locations the
+// person stands in (distance less the GPS uncertainty, up to 100 m, within the radius), their sites for today first,
+// then their usual location, then the nearest; when they stand in none, the nearest of all (inside: false).
+function metres(a, b) {
+  const R = 6371000, rad = x => (Number(x) * Math.PI) / 180;
+  const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)));
+}
+export function nearestSite(sites, p) {
+  const all = sites.filter(s => s.lat != null && s.lng != null).map(s => {
+    const d = metres(p, s);
+    return { site: s, distance: d, inside: d - Math.min(Number(p.accuracy) || 0, 100) <= (Number(s.radius_m) || 200), rank: s.rank ?? 2 };
+  });
+  return { best: all.filter(x => x.inside).sort((a, b) => a.rank - b.rank || a.distance - b.distance)[0] || [...all].sort((a, b) => a.distance - b.distance)[0] || null, all };
+}
 const maps = (lat, lng) => `https://www.google.com/maps?q=${lat},${lng}`;
 const hm = s => String(s || '').slice(11, 16) || String(s || '').slice(0, 5);
 
@@ -139,14 +165,36 @@ export async function attendView(root) {
   const site = h('select', h('option', { value: '' }, 'Nearest site where I am (automatic)'),
     me.sites.length ? h('optgroup', { label: 'My sites and offices' }, me.sites.map(s => h('option', { value: s.id }, s.name))) : null,
     (me.other_sites || []).length ? h('optgroup', { label: 'Other sites' }, me.other_sites.map(s => h('option', { value: s.id }, s.name))) : null);
-  const siteLbl = h('label', 'Site', site);
+  // Where am I: the position is read as soon as the clock-in box shows, the nearest site is preselected with its
+  // distance ("Lokmanya Hospital · 120 m"), and the person can still choose another one.
+  const where = h('div', { class: 'no-i18n', style: { fontSize: '15px', marginTop: '-2px' } });
+  let fix = null, touched = false;
+  site.onchange = () => { touched = true; };
+  const allSites = [...me.sites, ...(me.other_sites || [])];
+  const showWhere = (text, color, again = true) => where.replaceChildren(h('span', { style: { color } }, text),
+    again ? h('button.btn', { style: { marginLeft: '8px', padding: '2px 10px', fontSize: '13px' }, onclick: () => findMe() }, '🔄 Find me again') : null);
+  async function findMe() {
+    showWhere('📍 Finding where you are…', 'var(--muted, #666)', false);
+    try {
+      const pos = await locate();
+      fix = { pos, at: Date.now() };
+      const { best, all } = nearestSite(allSites, pos);
+      for (const o of site.options) { const x = all.find(y => String(y.site.id) === o.value); if (x) o.textContent = `${x.site.name} · ${dist(x.distance)}`; }
+      if (!best) return showWhere('No work location has a position in the CRM yet: choose Travel / outstation, or ask HR', 'var(--warn)');
+      if (!touched) site.value = String(best.site.id);
+      const rough = pos.accuracy > R.maxAccuracy ? ` GPS is rough (±${pos.accuracy} m): step outside or near a window and press Find me again.` : '';
+      if (best.inside) showWhere(`📍 ${best.site.name} · ${dist(best.distance)}${rough}`, rough ? 'var(--warn)' : 'var(--good)');
+      else showWhere(`⚠️ You are not at any work location: nearest is ${best.site.name}, ${dist(best.distance)}. You can still clock in; HR will check the day.${rough}`, 'var(--warn)');
+    } catch (e) { fix = null; showWhere(`📍 ${e.message}`, 'var(--bad)'); }
+  }
+  const siteLbl = h('label', 'Site', site, where);
   const noteLbl = h('label', { style: { display: 'none' } }, 'Note', note);   // only asked for travel / outstation
   mode.onchange = () => { const travel = mode.value === 'Travel / outstation'; siteLbl.style.display = travel ? 'none' : ''; noteLbl.style.display = travel ? '' : 'none'; };
   const needPhoto = me.employee.photos === true; // field staff, and only while Settings → Field staff photos is On
-  const send = async (path, extra = {}, withPhoto = needPhoto) => {
+  const send = async (path, extra = {}, withPhoto = needPhoto, recent = null) => {
     const photo = withPhoto ? await selfie() : undefined;
-    toast('Getting your location…');
-    const pos = await locate();
+    // a fix from the last minute is used as it is (the one shown on the screen)
+    const pos = recent && Date.now() - recent.at < 60e3 ? recent.pos : (toast('Getting your location…'), await locate());
     return api(path, { method: 'POST', body: { ...pos, ...extra, photo } });
   };
 
@@ -183,7 +231,11 @@ export async function attendView(root) {
     !a?.check_in && a?.status !== 'On Leave' ? h('div.grid', { style: { gap: '10px' } },
       h('label', 'Where', mode), siteLbl, noteLbl,
       h('button.btn.primary', { style: { fontSize: '18px', padding: '14px' }, onclick: busy(async () => {
-        try { const r = await send('/hr/clock-in', { mode: mode.value, note: note.value, site_id: mode.value === 'Travel / outstation' ? undefined : site.value || undefined }); toast(r.site ? `Clocked in at ${r.site}` : 'Clocked in (travel)'); reload(); } catch (e) { fail(e); }
+        try {
+          const r = await send('/hr/clock-in', { mode: mode.value, note: note.value, site_id: mode.value === 'Travel / outstation' ? undefined : site.value || undefined }, needPhoto, fix);
+          toast(r.notice || (r.site ? `Clocked in at ${r.site}${r.distance != null ? ' · ' + dist(r.distance) : ''}` : 'Clocked in (travel)'), !!r.notice && r.inside === false);
+          reload();
+        } catch (e) { fail(e); }
       }) }, needPhoto ? '📸 Clock in (selfie + location)' : '📍 Clock in')) : null,
     working ? h('div.grid', { style: { gap: '10px' } },
       needPhoto ? h('button.btn.good', { style: { fontSize: '17px', padding: '13px' }, onclick: busy(async () => {
@@ -246,4 +298,5 @@ export async function attendView(root) {
   // the guide opens by itself until the person has clocked in a few times
   root.replaceChildren(h('div.page-head', h('h1', '🕘 My Attendance')), card, attendGuide({ open: me.month.filter(d => d.check_in).length < 3, app: !!app, every: R.pingMinutes }), sites, leave, month);
   if (working && !app) autoCheck();
+  if (!a?.check_in && a?.status !== 'On Leave') findMe();
 }
