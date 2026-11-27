@@ -234,6 +234,10 @@ export function postProduction(id, body = {}, user) {
       insertRow('stock_moves', { type: 'PRODUCED', date: p.date, doc_no: p.entry_no, item_id: f.item_id, qty: f.qty, rate: each || rate(f.item_id), uom: f.uom || null,
         project_id: f.project_id || null, issued_to: p.for_site || null, purpose: `Made in production (${p.shift || ''})`, remarks: [f.remark, p.remarks].filter(Boolean).join(' · ') || null }, user, { system: true });
     }
+    // the finished goods stay with Production (owner, 27 Nov 2026): Production sends them to the store or a site later
+    // (Department Stores → Send from Production)
+    for (const f of fgs) insertRow('stock_moves', { type: 'TRANSFER', date: p.date, doc_no: p.entry_no, item_id: f.item_id, qty: f.qty, rate: rate(f.item_id), uom: f.uom || null,
+      project_id: f.project_id || null, from_location: 'Store', to_location: 'Production', purpose: 'Finished goods made: kept in production', remarks: 'Production entry ' + p.entry_no }, user, { system: true });
     const out = updateRow('production_entries', id, { status: 'Posted', unit_cost: unit, posted_by: `${user.name} (${stamp()})` }, user, { system: true });
     audit(user.name, 'production_entries', p.id, 'posted', p.fg_summary || `${p.qty} × ${p.fg_item_id_label || p.fg_item_id}`);
     return out;

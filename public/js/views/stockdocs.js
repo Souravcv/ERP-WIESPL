@@ -50,6 +50,12 @@ export async function stockMovementsView(root) {
   const out = h('div');
   const open = new Set();
 
+  // the project of a stock line, set or corrected where the slip is opened (blank = general stock)
+  const projectSel = m => {
+    const s = h('select', { style: { maxWidth: '260px' } }, h('option', { value: '' }, '— no project (stock) —'), projects.map(o => h('option', { value: o.id, selected: Number(m.project_id) === o.id }, o.label)));
+    s.onchange = busy(async () => { await api('/stock/set-project', { method: 'POST', body: { ids: [m.id], project_id: s.value ? Number(s.value) : null } }); m.project_id = s.value ? Number(s.value) : null; toast('Project saved'); });
+    return s;
+  };
   async function lines(r, cell) {
     try {
       const d = await api(`/stock/doc?type=${r.type}&doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`);
@@ -58,7 +64,7 @@ export async function stockMovementsView(root) {
         h('table.data', h('thead', h('tr', ['#', 'Item', 'Qty', 'UOM', priced ? 'Rate' : null, priced ? 'Value' : null, r.type === 'INWARD' ? 'PO' : null, 'Project', 'Remark', ''].filter(x => x !== null).map((x, i) => h('th' + (['Qty', 'Rate', 'Value'].includes(x) ? '.num' : ''), x)))),
           h('tbody', d.moves.map((m, i) => h('tr', h('td.muted', i + 1), h('td', h('a', { href: `#/view/items/${m.item_id}` }, m.item_id_label)), h('td.num', m.qty), h('td', m.uom || ''),
             priced ? h('td.num', inr(m.rate)) : null, priced ? h('td.num', inr(m.value)) : null,
-            r.type === 'INWARD' ? h('td', m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null, h('td', m.project_id_label || ''), h('td', m.remarks || ''),
+            r.type === 'INWARD' ? h('td', m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null, h('td', { style: { minWidth: '200px' } }, mayChange ? projectSel(m) : (m.project_id_label || '')), h('td', m.remarks || ''),
             h('td.nowrap', h('a.icon-btn', { href: `#/view/stock_moves/${m.id}`, title: 'Open this line' }, '👁'),
               mayChange && r.type !== 'INWARD' ? h('a.icon-btn', { href: `#/edit/stock_moves/${m.id}`, title: 'Edit this line' }, '✏️') : null,
               mayDelete ? h('button.icon-btn.del', { type: 'button', title: 'Delete this line', onclick: remove([m.id], `Line ${i + 1} (${m.item_id_label}, ${m.qty} ${m.uom || ''})`) }, '🗑') : null)))),
@@ -157,7 +163,8 @@ export async function grnEditView(root) {
   const [d, vendors, allPos] = await Promise.all([api(`/stock/doc?type=INWARD&doc=${encodeURIComponent(p.doc)}&date=${p.date}`), refOptions('vendors'), api('/purchase_orders?limit=5000')]);
   const m0 = d.moves[0];
   const head = { date: m0.date, vendor_id: m0.vendor_id, supplier: m0.supplier || '', invoice_no: m0.invoice_no || '', invoice_date: m0.invoice_date || '', po_id: m0.po_id || null };
-  const lines = d.moves.map(m => ({ id: m.id, item_id: m.item_id, label: m.item_id_label, uom: m.uom, qty: m.qty, rate: m.rate, po_line: m.po_id === head.po_id ? m.po_line : null }));
+  const lines = d.moves.map(m => ({ id: m.id, item_id: m.item_id, label: m.item_id_label, uom: m.uom, qty: m.qty, rate: m.rate, po_line: m.po_id === head.po_id ? m.po_line : null, project_id: m.project_id || null }));
+  const projects = await refOptions('projects');
   const poChoices = allPos.filter(x => !['Draft', 'Cancelled', 'Rejected', 'Pending Approval'].includes(x.status))
     .map(x => ({ id: x.id, label: `${x.po_no} · ${x.vendor_id_label || ''}${x.status === 'Archived (old)' ? ' · old' : x.status === 'Approved' || x.status === 'Sent' ? '' : ' · ' + x.status}`, vendor_id: x.vendor_id }));
   let po = head.po_id ? await api(`/purchase_orders/${head.po_id}`) : null;
@@ -191,7 +198,7 @@ export async function grnEditView(root) {
         field('Invoice Date', v('invoice_date', h('input', { type: 'date' }))))),
       po ? h('p.muted', `PO ${po.po_no}${po.revision ? ` Rev. ${po.revision}` : ''} · ${po.vendor_id_label || ''} · `, badge(po.status), ' — choose the PO line each item came against; the PO’s received quantities are updated when you save.') : h('p.muted', 'No PO attached. Choose the PO above to link this GRN to it.'),
       h('div.card.flush', h('div.table-wrap', h('table.data.lines',
-        h('thead', h('tr', h('th', '#'), h('th', 'Item'), h('th', 'Qty *'), h('th', 'UOM'), h('th', 'Price / piece'), h('th.num', 'Value'), po ? h('th', 'PO line') : null)),
+        h('thead', h('tr', h('th', '#'), h('th', 'Item'), h('th', 'Qty *'), h('th', 'UOM'), h('th', 'Price / piece'), h('th.num', 'Value'), h('th', 'Project'), po ? h('th', 'PO line') : null)),
         h('tbody', lines.map((ln, i) => {
           const val = h('td.num', inr((Number(ln.qty) || 0) * (Number(ln.rate) || 0)));
           const upd = () => { val.textContent = inr((Number(ln.qty) || 0) * (Number(ln.rate) || 0)); sum(); };
@@ -200,15 +207,16 @@ export async function grnEditView(root) {
           return h('tr', h('td.muted', i + 1), h('td', ln.label),
             h('td', h('input', { type: 'number', step: 'any', value: ln.qty, style: { width: '90px' }, oninput: e => { ln.qty = e.target.value; upd(); } })), h('td', ln.uom || ''),
             h('td', h('input', { type: 'number', step: 'any', value: ln.rate ?? '', style: { width: '110px' }, oninput: e => { ln.rate = e.target.value; upd(); } })), val,
+            h('td', (() => { const ps = h('select', { style: { maxWidth: '240px' } }, h('option', { value: '' }, '— no project (stock) —'), projects.map(o => h('option', { value: o.id, selected: Number(ln.project_id) === o.id }, o.label))); ps.onchange = () => { ln.project_id = ps.value ? Number(ps.value) : null; }; return ps; })()),
             sel ? h('td', sel) : null);
         })),
-        h('tfoot', h('tr', h('td', { colspan: 5 }, 'Total'), h('td.num', total), po ? h('td') : null))))));
+        h('tfoot', h('tr', h('td', { colspan: 5 }, 'Total'), h('td.num', total), h('td'), po ? h('td') : null))))));
     sum();
   }
 
   async function save(allowNegative = false) {
     const payload = { doc: p.doc, date: p.date, ...head, po_id: head.po_id || null, allowNegative,
-      lines: lines.map(l => ({ id: l.id, qty: Number(l.qty), rate: l.rate === '' || l.rate == null ? null : Number(l.rate), po_line: l.po_line })) };
+      lines: lines.map(l => ({ id: l.id, qty: Number(l.qty), rate: l.rate === '' || l.rate == null ? null : Number(l.rate), po_line: l.po_line, project_id: l.project_id || null })) };
     if (!head.po_id) payload.po_no = null;
     try {
       const r = await api('/stock/grn', { method: 'PUT', body: payload });

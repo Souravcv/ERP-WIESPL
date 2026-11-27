@@ -1041,6 +1041,34 @@ function actionsFor(entity, row, reload, ctx = {}) {
         reload();
       }) }, '✓ Mark Delivered'));
       if (can(entity) && st === 'Draft') A.push(h('button.btn.danger', { onclick: status('Cancelled', 'Cancel this challan?') }, 'Cancel'));
+      // the material check after posting: the store chooses who checks; that person (or the store) checks line by line
+      if (['Dispatched', 'Delivered'].includes(st)) {
+        const isStore = hasFunction(state.user.role, 'stock_post');
+        const cs = row.check_status || 'To check';
+        A.push(h('span.badge', { style: { background: cs === 'Checked – OK' ? '#dcfce7' : cs === 'Checked – problem' ? '#fee2e2' : '#fef3c7', color: cs === 'Checked – OK' ? '#166534' : cs === 'Checked – problem' ? '#991b1b' : '#92400e' } },
+          cs === 'To check' ? `📦 To check${row.checker ? ' · ' + row.checker : ' · nobody assigned'}` : `📦 ${cs}${row.checked_by ? ' · ' + row.checked_by : ''}`));
+        if (isStore) A.push(h('button.btn', { onclick: go(async () => {
+          const people = await api('/people').catch(() => []);
+          const sel = h('select', h('option', { value: '' }, '— choose —'), people.map(p => h('option', { value: p.name, selected: p.name === row.checker }, p.name)));
+          const ok = await modal('Who checks the material of this challan?', h('div.grid', h('p.muted', 'They get a pop-up and the challan in “My tasks”. The person chosen is remembered for the next challans.'), h('label', 'Checker', sel)),
+            [{ label: 'Cancel', value: false }, { label: 'Assign', cls: 'primary', value: true }]);
+          if (!ok) return;
+          await post(`/challans/${id}/checker`, { checker: sel.value }); toast(`${sel.value} will check it`); reload();
+        }) }, row.checker ? '👤 Change checker' : '👤 Assign checker'));
+        if ((row.checker === state.user.name || isStore) && cs !== 'Checked – OK') A.push(h('button.btn.primary', { onclick: go(async () => {
+          const ls = (row.lines || []).map((l, i) => ({ l, i })).filter(x => Number(x.l.qty) > 0);
+          const prev = new Map((row.check_lines || []).map(x => [x.i, x]));
+          const rows = ls.map(({ l, i }) => ({ i, l, res: h('select', ['OK', 'Short', 'Wrong item', 'Damaged'].map(o => h('option', { selected: prev.get(i)?.result === o }, o))), note: h('input', { value: prev.get(i)?.note || '', placeholder: 'what is wrong' }) }));
+          const notes = h('textarea', { rows: 2, placeholder: 'Any remark' });
+          const ok = await modal(`Check the material – ${row.challan_no}`, h('div', h('p.muted', 'Compare the material ready to go with the challan, line by line.'),
+            h('div.table-wrap', h('table.data', h('thead', h('tr', ['Material', 'Qty', 'Check', 'Note'].map(x => h('th', x)))),
+              h('tbody', rows.map(x => h('tr', h('td', { style: { minWidth: '200px' } }, x.l.description || ''), h('td.num', `${x.l.qty} ${x.l.uom || ''}`), h('td', x.res), h('td', x.note)))))),
+            h('label', 'Remarks', notes)), [{ label: 'Cancel', value: false }, { label: '✔ Save the check', cls: 'primary', action: async () => {
+              const r2 = await post(`/challans/${id}/check`, { lines: rows.map(x => ({ i: x.i, result: x.res.value, note: x.note.value })), notes: notes.value });
+              toast(r2.check_status); return true; } }], { wide: true });
+          if (ok) reload();
+        }) }, '✔ Check the material'));
+      }
       break;
     }
     case 'schedule_baselines':

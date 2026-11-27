@@ -188,12 +188,40 @@ export async function stockEntryView(root) {
   const perLine = () => !(boq || bom);
   function lineProjectCell(l, i) {
     const split = splitOf(l);
-    return h('td', { style: { minWidth: '200px' } },
+    if (!split && l.psplit?.length > 1) return h('td', { style: { minWidth: '200px' } }, h('div', { style: { fontSize: '12px', lineHeight: 1.5 } }, l.psplit.map(s => h('div', `${projectName(s.project_id)}: ${s.qty}`))),
+      h('button.btn.small', { type: 'button', onclick: () => projectSplit(l) }, '✎ Projects & qty'));
+    return h('td', { style: { minWidth: '220px' } }, h('div', { style: { display: 'flex', gap: '4px', alignItems: 'center' } },
       split ? h('span.muted', split.map(s => `${projectName(s.project_id)}: ${s.qty}`).join(', '))
-        : itemPicker(projects, lineProject(l) ? Number(lineProject(l)) : null, { onPick: id => { l.project_id = id; render(); } }),
-      h('button.btn.small', { type: 'button', title: 'Part of this material is for another project: add a second line for it', style: { marginTop: '4px' },
-        onclick: () => { lines.splice(i + 1, 0, { po_line: l.po_line, item_id: l.item_id, qty: '', rate: l.rate, gst: l.gst, hsn: l.hsn, uom: l.uom, poPending: l.poPending, project_id: null }); render(); } }, '+ Another project'));
+        : h('div', { style: { flex: 1, minWidth: 0 } }, itemPicker(projects, lineProject(l) ? Number(lineProject(l)) : null, { onPick: id => { l.project_id = id; render(); } })),
+      split ? null : h('button.icon-btn', { type: 'button', title: 'Same material for several projects: one line, give each project its quantity', onclick: () => projectSplit(l) }, '⇉')),
+      null);
   }
+  // Same material for several projects: one line, each project its quantity (as on the PO); saved as a line per project.
+  async function projectSplit(l) {
+    let rows = l.psplit?.length ? l.psplit.map(s => ({ ...s })) : [{ project_id: lineProject(l) ? Number(lineProject(l)) : null, qty: Number(l.qty) || null }, { project_id: null, qty: null }];
+    const box = h('div'), total = h('b');
+    const draw = () => {
+      total.textContent = round2(rows.reduce((a, r) => a + (Number(r.qty) || 0), 0));
+      box.replaceChildren(h('table.data', h('thead', h('tr', h('th', 'Project'), h('th', 'Qty'), h('th'))), h('tbody', rows.map((r, k) => {
+        const sel = h('select', h('option', { value: '' }, '— choose project —'), projects.map(o => h('option', { value: o.id, selected: Number(r.project_id) === o.id }, o.label)));
+        sel.onchange = () => { r.project_id = sel.value ? Number(sel.value) : null; };
+        const q = h('input', { type: 'number', step: 'any', min: 0, value: r.qty ?? '', style: { width: '100px' }, oninput: e => { r.qty = e.target.value === '' ? null : Number(e.target.value); total.textContent = round2(rows.reduce((a, x) => a + (Number(x.qty) || 0), 0)); } });
+        return h('tr', h('td', sel), h('td', q), h('td', h('button.icon-btn.del', { type: 'button', onclick: () => { rows.splice(k, 1); draw(); } }, '✕')));
+      }))), h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', marginTop: '8px' } },
+        h('button.btn.small', { type: 'button', onclick: () => { rows.push({ project_id: null, qty: null }); draw(); } }, '+ Project'), h('span', 'Total quantity: ', total, ` ${l.uom || ''}`)));
+    };
+    draw();
+    const ok = await modal('Projects and quantity', h('div.grid', h('p.muted', 'One line for the material; each project gets its own quantity. The line quantity is the total.'), box),
+      [{ label: 'Cancel', value: false }, { label: 'Apply', cls: 'primary', value: true }]);
+    if (!ok) return;
+    const good = rows.filter(r => r.project_id && Number(r.qty) > 0);
+    if (good.length > 1) { l.psplit = good.map(r => ({ project_id: r.project_id, qty: Number(r.qty) })); l.qty = round2(good.reduce((a, r) => a + Number(r.qty), 0)); l.project_id = null; }
+    else if (good.length === 1) { delete l.psplit; l.project_id = good[0].project_id; l.qty = Number(good[0].qty); }
+    else delete l.psplit;
+    render();
+  }
+  // a line split over projects goes to the server as one line per project
+  const expandLines = () => lines.flatMap(l => (l.psplit?.length > 1 ? l.psplit.map(s => ({ ...l, psplit: undefined, qty: s.qty, project_id: s.project_id })) : [l]));
   // Several departments on one slip: a department per line (blank = the one at the top: issued to / transfer to / department).
   const lineDeptCell = (l, i) => h('td', { style: { minWidth: '160px' } },
     h('select', { onchange: e => { l.department = e.target.value || null; } }, h('option', { value: '' }, '(as above)'), COMPANY_DEPARTMENTS.map(d => h('option', { value: d, selected: l.department === d }, d))),
@@ -308,6 +336,7 @@ export async function stockEntryView(root) {
       const stockCell = h('td.num', !it ? '' : deptHeld ? h('span', { title: `What ${header.from_location} holds` }, `${round2(deptHeld.get(it.id) || 0)} ${it.uom || ''}`) : `${round2(it.stock)} ${it.uom || ''}`);
       const short = () => ['OUTWARD', 'TRANSFER', 'SCRAP', 'JOB_OUT'].includes(type) && it && Number(l.qty) > it.stock;
       const qty = h('input', { type: 'number', step: 'any', value: l.qty ?? '', style: { width: '90px' } });
+      if (l.psplit?.length > 1) { qty.readOnly = true; qty.title = 'Total of the projects: change it with “Projects & qty”'; }
       const rate = h('input', { type: 'number', step: 'any', value: l.rate ?? '', placeholder: type === 'JOB_IN' ? 'if charged' : 'required', style: { width: '110px' } });
       const value = h('td.num');
       const upd = () => {
@@ -350,7 +379,7 @@ export async function stockEntryView(root) {
 
   // Outward / transfer: saved as a draft (no stock change); someone allowed to post checks and posts it.
   async function saveDraft() {
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null, ...(perLine() ? { project_id: lineProject(l) } : {}) })) };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: expandLines().filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rate: itemById.get(l.item_id)?.rate ?? null, ...(perLine() ? { project_id: lineProject(l) } : {}) })) };
     if (type !== 'OUTWARD') delete payload.doc_no;
     if (makeChallan && !boq && !bom) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
@@ -378,7 +407,7 @@ export async function stockEntryView(root) {
     }
     if (DRAFTED.includes(type)) return saveDraft();
     // Outward slips carry no price on screen; the item price is still stored for the consumption value in the stock summary.
-    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: lines.filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(perLine() && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
+    const payload = { ...header, ...((boq || bom) ? ch : {}), type, lines: expandLines().filter(l => l.item_id && l.qty !== '' && Number(l.qty)).map(l => ({ ...l, rack: l.rack ?? itemById.get(l.item_id)?.location ?? null, rate: PRICED.includes(type) ? l.rate ?? null : itemById.get(l.item_id)?.rate ?? null, ...(perLine() && !splitOf(l) ? { project_id: lineProject(l) } : {}) })), allowNegative, allowReserved };
     if (makeChallan && !boq && !bom && ['OUTWARD', 'TRANSFER'].includes(type)) Object.assign(payload, { make_challan: true, challan: ch });
     if ((boq || bom) && lines.some(l => Number(l.qty) && !l[linkKey()])) throw new Error(`Pick the ${bom ? 'BOQ' : 'work order'} material on every line (type part of its name and choose it)`);
     if (type === 'JOB_OUT' && !header.vendor_id && !String(header.to_location || '').trim()) throw new Error('Choose the job work vendor (or type the name)');

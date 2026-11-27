@@ -7,6 +7,7 @@ import { saveAttachment } from './roles.js';
 import { hasFunction } from '../public/js/schema.js';
 import { qtyFromText } from './hooks.js';
 import { challanCheck } from './sitematerial.js';
+import { tellChecker } from './challancheck.js';
 
 const norm = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 function cell(v) {
@@ -210,7 +211,9 @@ export function dispatchFromBoq(boqId, body, user, { post = false } = {}) {
         allowNegative: !!body?.allowNegative && hasFunction(user.role, 'allow_negative') }, user);
     }
     updateRow('challans', ch.id, { status: 'Dispatched', issue_no: stockLines.length ? ch.challan_no : null, issue_type: stockLines.length ? 'OUTWARD' : null, dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
-    return { challan: getRow('challans', ch.id), stock_lines: stockLines.length };
+    const posted = getRow('challans', ch.id);
+    tellChecker(posted, user);
+    return { challan: posted, stock_lines: stockLines.length };
   });
 }
 
@@ -285,7 +288,9 @@ export function dispatchChallan(id, body, user) {
       }, user);
     }
     updateRow('challans', id, { ...(overrunOk ? { overrun_ok: overrunOk } : {}), status: 'Dispatched', issue_no: stockDoc?.doc_no || null, issue_type: stockDoc ? 'OUTWARD' : null, dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
-    return { ...getRow('challans', id), stock_lines: stockLines.length, stock_doc: stockDoc?.doc_no || null };
+    const posted = getRow('challans', id);
+    tellChecker(posted, user);
+    return { ...posted, stock_lines: stockLines.length, stock_doc: stockDoc?.doc_no || null };
   });
 }
 
@@ -497,7 +502,9 @@ export function dispatchFromBom(bomId, body, user, { post = false } = {}) {
         allowNegative: !!body?.allowNegative && hasFunction(user.role, 'allow_negative') }, user);
     }
     updateRow('challans', ch.id, { status: 'Dispatched', issue_no: stockLines.length ? ch.challan_no : null, issue_type: stockLines.length ? 'OUTWARD' : null, dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})` }, user, { system: true });
-    return { challan: getRow('challans', ch.id), stock_lines: stockLines.length };
+    const posted = getRow('challans', ch.id);
+    tellChecker(posted, user);
+    return { challan: posted, stock_lines: stockLines.length };
   });
 }
 
@@ -526,9 +533,10 @@ export function challanForIssue(body, issue, user) {
   const ch = insertRow('challans', {
     ...extra, ...(body.doc_no ? { challan_no: body.doc_no } : {}), date: body.date || undefined, project_id: body.project_id || null, issue_no: issue.doc_no, issue_type: body.type, status: 'Dispatched',
     challan_type: c.challan_type || (body.type === 'TRANSFER' ? 'Returnable' : 'Non-Returnable'),
-    remarks: c.remarks || body.purpose || null, lines, overrun_ok: overrunOk || null,
+    remarks: c.remarks || body.purpose || null, lines, overrun_ok: overrunOk || null, ...(c.checker ? { checker: c.checker } : {}),
     dispatched_by: `${user.name} (${new Date().toLocaleString('sv-SE').slice(0, 16)})`,
   }, user, { system: true });
+  tellChecker(ch, user);
   return ch;
 }
 

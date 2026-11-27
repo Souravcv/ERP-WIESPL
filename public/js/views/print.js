@@ -335,13 +335,15 @@ function poDoc(po, v, s, internal = false) {
       h('tr', td([h('b', 'Ref.:- '), po.quotation_ref ? `Your quotation / P.I. No. ${po.quotation_ref}${po.quotation_date ? ' dated ' + fmtDate(po.quotation_date).replaceAll('/', '.') : ''}` : 'Your quotation / P.I. No. & date'])),
       h('tr', td(multiline(s.po_greeting || ''))))),
     h('table', { style: { marginTop: '-1px' } },
-      h('thead', h('tr', ['Sr. No.', 'ITEM NAME', 'ITEM CODE', 'SPECIFICATIONS', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 4 && i !== 5 ? '.num' : ''), x)))),
+      h('thead', h('tr', ['Sr. No.', 'ITEM NAME & SPECIFICATION', 'ITEM CODE', 'Qty.', 'UOM', 'Rate (₹)', 'GST', 'Amount (₹)'].map((x, i) => h('th' + (i >= 3 && i !== 4 ? '.num' : ''), x)))),
       h('tbody', lines.map(l => h('tr',
-        td(l.description ? ++sr : ''), td(h('b', l.description || '')), td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
-        td([h('div.spec', l.spec || ''), internal && (l.site || l.site_label) ? h('div', { style: { fontSize: '10px', fontWeight: 600 } }, `${l.split?.length > 1 ? 'For' : 'Site'}: ${l.site || l.site_label}`) : null, hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null]),
+        td(l.description ? ++sr : ''),
+        td([...descSpec(l.description, l.spec, true), internal && (l.site || l.site_label) ? h('div', { style: { fontSize: '10px', fontWeight: 600, overflowWrap: 'anywhere' } }, `${l.split?.length > 1 ? 'For' : 'Site'}: ${l.site || l.site_label}`) : null,
+          hasVendorCode && l.hsn ? h('div', { style: { fontSize: '10px', color: '#555' } }, `HSN/SAC ${l.hsn}`) : null], { style: { width: '46%' } }),
+        td(hasVendorCode ? l.vendor_code || '' : l.hsn || ''),
         td(l.qty ?? '', { class: 'num' }), td(l.uom || ''), td(l.rate != null && Number(l.qty) ? inr(l.rate) : '', { class: 'num' }),
         td(Number(l.qty) ? `${l.gst ?? 0}%` : '', { class: 'num' }), td(Number(l.qty) ? inr((Number(l.qty) || 0) * (Number(l.rate) || 0)) : '', { class: 'num' })))),
-      h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 8, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
+      h('tfoot', h('tr', td(h('b', 'Sub Total'), { colspan: 7, style: { textAlign: 'right' } }), td(h('b', rs(t.items)), { class: 'num' })))),
     h('table', { style: { marginTop: '-1px' } }, h('tbody', h('tr',
       td([h('b', 'Terms & conditions :'), h('table', { style: { border: 'none', marginTop: '4px' } }, h('tbody', terms.filter(([, val], i) => i === 0 || val).map(([k, val]) =>
         h('tr', h('td', { style: { border: 'none', width: '22px', verticalAlign: 'top' } }, ['Advance', 'Balance'].includes(k) ? '' : ++n),
@@ -388,31 +390,35 @@ function materialRequestDoc(r, s) {
   const info = [['MR No', r.mr_no], ['Date', fmtDate(r.date)], ['Requested by', r.requested_by], ['Department', r.department], ['For', r.purpose], ['Site', r.site || r.project_id_label], ['Needed by', fmtDate(r.needed_by)], ['Status', r.status]].filter(x => x[1]);
   return h('div.doc', page(companyHead(s, 'MATERIAL REQUEST (TO STORE)'),
     h('table', h('tbody', info.reduce((rows, x, i) => { if (i % 2 === 0) rows.push([]); rows.at(-1).push(h('th', { style: { width: '16%' } }, x[0]), h('td', x[1])); return rows; }, []).map(c => h('tr', c)))),
-    h('table', { style: { marginTop: '8px' } }, h('thead', h('tr', ['Sr', 'Material', 'Specification', 'Qty', 'UOM', 'Site', 'Issued', 'To purchase', 'Remark'].map(x => h('th', x)))),
-      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', l.site || r.site || ''),
+    h('table', { style: { marginTop: '8px' } }, h('thead', h('tr', ['Sr', 'Material', 'Qty', 'UOM', 'Site', 'Issued', 'To purchase', 'Remark'].map(x => h('th', x)))),
+      h('tbody', lines.map((l, i) => h('tr', h('td', i + 1), h('td', { style: { width: '38%' } }, descSpec(l.description, l.spec)), h('td.num', l.qty ?? ''), h('td', l.uom || ''), h('td', { style: { overflowWrap: 'anywhere', wordBreak: 'break-word' } }, l.site || r.site || ''),
         h('td.num', l.issued || ''), h('td.num', l.to_purchase || ''), h('td', l.remark || ''))))),
     r.store_note ? h('div.spec', { style: { marginTop: '8px' } }, h('b', 'Store decision: '), r.store_note) : null,
     h('table', { style: { marginTop: '24px' } }, h('tbody', h('tr', ['Requested by', 'Store', 'Received by'].map(x => h('th', { style: { width: '33%' } }, x))),
       h('tr', h('td', { style: { height: '60px', verticalAlign: 'bottom' } }, r.requested_by || ''), h('td', { style: { verticalAlign: 'bottom' } }, plainSigner(r.processed_by || '')), h('td'))))));
 }
 
+// Material description with its specification below it (prints have no separate Specification column).
+const descSpec = (desc, spec, bold = false) => [bold ? h('b', desc || '') : (desc || ''), spec ? h('div.spec', { style: { fontSize: '10.5px', color: '#333', marginTop: '2px' } }, spec) : null];
+
 function requisitionDoc(r, s) {
   const lines = (r.lines || []).filter(l => l.description || l.spec || l.qty);
   const siteOf = l => l.site || l.site_label || '';
   const showSite = lines.some(siteOf);
   const blanks = Math.max(0, 11 - lines.length);
+  const cols = showSite ? 6 : 5; // Sr, Material (+ specification), Qty, UOM, [Site], Remark: the frame spans exactly these
   return h('div.doc', h('div.page', { style: { fontSize: '12px' } },
     h('table', h('tbody',
-      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '16px', fontWeight: 700 } }, 'Material Purchase Requisition')),
-      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontWeight: 700, color: '#1f4e9a' } }, s.company_name)),
-      h('tr', h('td', { colspan: 6, style: { textAlign: 'center', fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`, h('br'), `Works : ${s.works_address}`, h('br'), `Tel. : ${s.phone}`)),
-      h('tr', h('td', { colspan: 2 }, h('b', 'Project Name :- '), r.project_name || r.project_id_label || ''), h('td', { colspan: 2 }, h('b', 'Req No - '), r.req_no), h('td', { colspan: 2 }, h('b', 'Date '), fmtDate(r.date))),
-      h('tr', ['Sr. No.', 'Material Description', 'Specification', 'Qty.', 'UOM', showSite ? 'Site' : null, 'Remark'].filter(Boolean).map(x => h('th', x))),
-      lines.map((l, i) => h('tr', h('td', i + 1), h('td', l.description || ''), h('td.spec', l.spec || ''), h('td.num', l.qty ?? ''), h('td', l.uom || ''), showSite ? h('td', { style: { fontWeight: 600 } }, siteOf(l)) : null, h('td', l.remark || ''))),
-      Array.from({ length: blanks }, () => h('tr', Array.from({ length: showSite ? 7 : 6 }, () => h('td', { style: { height: '22px' } }, '')))),
-      h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: 3 }, 'Sign of Purchase Head')),
+      h('tr', h('td', { colspan: cols, style: { textAlign: 'center', fontSize: '16px', fontWeight: 700 } }, 'Material Purchase Requisition')),
+      h('tr', h('td', { colspan: cols, style: { textAlign: 'center', fontWeight: 700, color: '#1f4e9a' } }, s.company_name)),
+      h('tr', h('td', { colspan: cols, style: { textAlign: 'center', fontSize: '10.5px' } }, `Reg. : ${s.reg_address}`, h('br'), `Works : ${s.works_address}`, h('br'), `Tel. : ${s.phone}`)),
+      h('tr', h('td', { colspan: 2 }, h('b', 'Project Name :- '), r.project_name || r.project_id_label || ''), h('td', { colspan: cols - 4 }, h('b', 'Req No - '), r.req_no), h('td', { colspan: 2 }, h('b', 'Date '), fmtDate(r.date))),
+      h('tr', ['Sr. No.', 'Material Description', 'Qty.', 'UOM', showSite ? 'Site' : null, 'Remark'].filter(Boolean).map(x => h('th', x))),
+      lines.map((l, i) => h('tr', h('td', i + 1), h('td', { style: { width: showSite ? '44%' : '55%' } }, descSpec(l.description, l.spec)), h('td.num', l.qty ?? ''), h('td', l.uom || ''), showSite ? h('td', { style: { fontWeight: 600, width: '22%', overflowWrap: 'anywhere', wordBreak: 'break-word' } }, siteOf(l)) : null, h('td', l.remark || ''))),
+      Array.from({ length: blanks }, () => h('tr', Array.from({ length: cols }, () => h('td', { style: { height: '22px' } }, '')))),
+      h('tr', h('th', { colspan: 2 }, 'Name & Sign of Requester'), h('th', 'Stamp'), h('th', { colspan: cols - 3 }, 'Sign of Purchase Head')),
       h('tr', h('td', { colspan: 2, style: { height: '70px', verticalAlign: 'bottom' } }, r.approved_by ? sigImg(r.requested_by) : null, r.requested_by || ''), h('td', { style: { textAlign: 'center', verticalAlign: 'middle' } }, r.approved_by ? stampImg() : null),
-        h('td', { colspan: 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? [sigImg(r.approved_by), `${plainSigner(r.approved_by)} (${r.approved_at || ''})`] : r.status))))));
+        h('td', { colspan: cols - 3, style: { verticalAlign: 'bottom' } }, r.approved_by ? [sigImg(r.approved_by), `${plainSigner(r.approved_by)} (${r.approved_at || ''})`] : r.status))))));
 }
 
 // Techno-commercial requirement sheet (MD, 13 Oct 2026): the enquiry, the detailed form per OT with design figures,

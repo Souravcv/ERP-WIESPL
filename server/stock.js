@@ -551,7 +551,7 @@ export function editGrn(body, user) {
         if (poLine >= 0) newPo.lines[poLine].received = round2((Number(newPo.lines[poLine].received) || 0) + qty);
         else poLine = null;
       }
-      const project = m.project_id || (poLine != null && newPo.lines[poLine].project_id) || newPo?.project_id || null;
+      const project = l.project_id !== undefined ? (Number(l.project_id) || null) : (m.project_id || (poLine != null && newPo.lines[poLine].project_id) || newPo?.project_id || null);
       updateRow('stock_moves', m.id, { ...head, qty, rate, po_id: newPo?.id || null, po_no: newPo ? newPo.po_no : (newPoId === null && body.po_no !== undefined ? body.po_no || null : m.po_no),
         po_line: poLine, vendor_id: head.vendor_id ?? m.vendor_id ?? newPo?.vendor_id ?? null, project_id: project }, user, { system: true });
     }
@@ -636,4 +636,20 @@ export function mergeItems(fromId, intoId, user) {
     audit(user.name, 'items', intoId, `merged ${from.code} ${from.name}`, JSON.stringify(moved));
     return { kept: getRow('items', intoId), moved, stock: stockOf(intoId) };
   });
+}
+
+// The project of stock lines, set or corrected on its own (Stock Movements → open a slip): blank = general stock.
+export function setProject(body, user) {
+  const ids = (body?.ids || []).map(Number).filter(Boolean);
+  if (!ids.length) throw new HttpError(400, 'Choose the lines');
+  const pid = body.project_id ? Number(body.project_id) : null;
+  if (pid && !db.prepare('SELECT 1 FROM projects WHERE id = ?').get(pid)) throw new HttpError(400, 'No such project');
+  for (const id of ids) {
+    const m = db.prepare('SELECT id, project_id FROM stock_moves WHERE id = ?').get(id);
+    if (!m) throw new HttpError(404, 'Line not found');
+    if ((m.project_id || null) === pid) continue;
+    db.prepare('UPDATE stock_moves SET project_id = ? WHERE id = ?').run(pid, id);
+    audit(user.name, 'stock_moves', id, 'project', `${m.project_id || '-'} → ${pid || '-'}`);
+  }
+  return { ok: true, count: ids.length };
 }

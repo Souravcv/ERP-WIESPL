@@ -17,6 +17,7 @@ import { prepPlan as prepQcPlan, prepRecord as prepQcRecord } from './qcplans.js
 import { nextEnquiryNo } from './enquiries.js';
 import { HttpError } from './crud.js';
 import { completionCheck } from './sitematerial.js';
+import { markToCheck } from './challancheck.js';
 
 // Item codes continue the Smart Store numbering: finished goods FG001, FG002 …; everything else 1001, 1002 … (highest + 1).
 export function nextItemCode(category) {
@@ -354,6 +355,7 @@ export function beforeSave(name, row, existing, user) {
       if ('qty_text' in row && row.qty == null && (existing?.qty == null || 'qty' in row)) row.qty = qtyFromText(row.qty_text);
       break;
     case 'challans': {
+      markToCheck(row, existing); // a challan just posted waits for its material check
       // Delivery challans DC-001/2026-27 …, returnable challans their own series RE-001/2026-27 …
       const returnable = (row.challan_type ?? existing?.challan_type) === 'Returnable';
       const challanNo = () => docNo(returnable ? 'challan_ret' : 'challan', date, (n, fy) => `${returnable ? 'RE' : 'DC'}-${n}/20${fy}`);

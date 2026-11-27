@@ -51,6 +51,7 @@ import * as policies from './policies.js';
 import * as iqc from './iqc.js';
 import * as deptStore from './deptstore.js';
 import * as siteMat from './sitematerial.js';
+import * as challanCheck from './challancheck.js';
 import * as scheduleXlsx from './scheduleexcel.js';
 import * as tds from './tds.js';
 import * as pofollow from './pofollow.js';
@@ -709,6 +710,10 @@ api.post('/material_lists/import', need('material_lists'), wrap(req => flow.impo
 api.get('/store/boq-check', wrap(req => { if (!canView('boms', req.user.role)) throw new HttpError(403, 'No access'); return flow.storeOverview(); }));
 api.post('/challans/:id/porter', need('challans'), wrap(req => dispatch.setPorter(req.params.id, req.body, req.user)));
 api.post('/challans/:id/deliver', need('challans'), wrap(req => dispatch.deliverChallan(req.params.id, req.body, req.user)));
+// the material check after posting (server/challancheck.js); the project of stock lines set on its own
+api.post('/challans/:id/checker', wrap(req => challanCheck.assignChecker(req.params.id, req.body, req.user)));
+api.post('/challans/:id/check', wrap(req => challanCheck.checkChallan(req.params.id, req.body, req.user)));
+api.post('/stock/set-project', need('stock_moves'), wrap(req => stock.setProject(req.body, req.user)));
 
 // ---------------------------------------------------------------- store
 // Outward and transfer slips go through a draft (below); the rest (GRN, return, scrap, adjustment) is saved at once.
