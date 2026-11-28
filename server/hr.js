@@ -376,17 +376,36 @@ export function check(user, body = {}, ip) {
   // A plain check within 20 s of the last one adds nothing (e.g. the button pressed again and again).
   const last = db.prepare('SELECT at FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
   if (kind === 'Auto' && last && Date.parse(now().replace(' ', 'T')) - Date.parse(String(last.at).replace(' ', 'T')) < 20e3) return { recorded: true, at: now().slice(11, 16) };
-  return tx(() => {
+  const r = tx(() => {
     const prev = db.prepare('SELECT inside FROM attendance_pings WHERE attendance_id = ? ORDER BY id DESC LIMIT 1').get(att.id);
     const photoId = savePhoto(att.id, 'Presence check', body.photo, user);
     const s = followSite(att, emp, p, ip, user);
     addPing(s.att, emp, kind, p, s.f, ip, photoId);
+    // The shift is over and the person has clearly left the site without clocking out: close the day at the last
+    // time they were seen at the site and flag it for HR. The phone then gets 409 and stops the location checks.
+    if (s.f && !s.f.inside && !s.moved && (prev?.inside === 'No' || s.f.distance > 500) && hhmm(now()) >= dayOverAt(emp, att)) {
+      const seen = db.prepare("SELECT MAX(at) at FROM attendance_pings WHERE attendance_id = ? AND inside = 'Yes'").get(att.id)?.at;
+      const out = seen && seen >= att.check_in ? seen : now();
+      const note = `no clock-out: closed automatically after the shift (last at the site ${hhmm(out)})`;
+      insertRow('attendance_pings', { attendance_id: att.id, employee_id: emp.id, at: now(), kind: 'Out', lat: p.lat, lng: p.lng, accuracy_m: p.accuracy, distance_m: s.f.distance,
+        inside: 'No', ip: ip || null, note: 'Closed automatically: shift over, away from the site', flags: note }, { name: emp.name }, { system: true });
+      updateRow('attendance', att.id, { check_out: out, out_distance_m: s.f.distance, out_since: null, out_reason: null, away_since: null }, user, { system: true });
+      audit('system', 'attendance', att.id, 'auto clock out', note);
+      evaluate(att.id);
+      return { closed: hhmm(out) };
+    }
     evaluate(att.id);
     if (s.f && !s.moved) awayAlert(getRow('attendance', att.id), emp, s.loc, s.f, prev?.inside === 'No', user);
     // The phone is told only that the check was recorded (and the new site after a move): being inside is for HR.
     return { recorded: true, at: now().slice(11, 16), ...(s.moved ? { site: s.moved } : {}) };
   });
+  if (r.closed) throw new HttpError(409, `Your shift is over and you had left the site, so the day was closed at ${r.closed} (you did not clock out). Location checks have stopped. Please clock out yourself next time.`);
+  return r;
 }
+
+// When the working day is over for the location checks: the time the person may clock out (their shift end, or
+// 8 h + break after a late start; shorter with an approved short / half-day leave), else the shift end.
+const dayOverAt = (emp, att) => earliestOut(emp, att) || shiftOf(emp).to;
 
 // Someone left the site: alert HR and their reporting manager once they are clearly away (two checks outside in a
 // row, or more than 1 km), at most once an hour; tell them again when the person is back at the site.

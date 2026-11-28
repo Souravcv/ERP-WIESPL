@@ -12,6 +12,7 @@ const TABS = [['', 'All'], ['in', '⬇ All inward'], ['out', '⬆ All outward'],
 const PRICED = ['INWARD', 'OPENING', 'JOB_IN'];
 const printUrl = r => `#/print/stockdoc/${r.type}?doc=${encodeURIComponent(r.doc_no || '')}`;
 const editUrl = r => `#/grn-edit?doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`;
+const slipUrl = r => `#/slip-edit/${r.type}?doc=${encodeURIComponent(r.doc_key)}&date=${r.date}`;
 const party = r => ({
   INWARD: [r.vendor || r.supplier, r.invoice_no && `inv. ${r.invoice_no}`],
   TRANSFER: [r.to_location && `→ ${r.to_location}`, r.project],
@@ -66,7 +67,7 @@ export async function stockMovementsView(root) {
             priced ? h('td.num', inr(m.rate)) : null, priced ? h('td.num', inr(m.value)) : null,
             r.type === 'INWARD' ? h('td', m.po_no || h('span', { style: { color: 'var(--warn)' } }, 'no PO')) : null, h('td', { style: { minWidth: '200px' } }, mayChange ? projectSel(m) : (m.project_id_label || '')), h('td', m.remarks || ''),
             h('td.nowrap', h('a.icon-btn', { href: `#/view/stock_moves/${m.id}`, title: 'Open this line' }, '👁'),
-              mayChange && r.type !== 'INWARD' ? h('a.icon-btn', { href: `#/edit/stock_moves/${m.id}`, title: 'Edit this line' }, '✏️') : null,
+              mayChange && r.type !== 'INWARD' ? h('a.icon-btn', { href: slipUrl(r), title: 'Edit the slip (all lines)' }, '✏️') : null,
               mayDelete ? h('button.icon-btn.del', { type: 'button', title: 'Delete this line', onclick: remove([m.id], `Line ${i + 1} (${m.item_id_label}, ${m.qty} ${m.uom || ''})`) }, '🗑') : null)))),
           h('tfoot', h('tr', h('td'), h('td', h('b', `Total (${d.moves.length} item${d.moves.length === 1 ? '' : 's'})`)), h('td.num', h('b', round2(d.moves.reduce((a, m) => a + (Number(m.qty) || 0), 0)))), h('td'),
             priced ? h('td') : null, priced ? h('td.num', h('b', inr(d.moves.reduce((a, m) => a + (Number(m.value) || 0), 0)))) : null, r.type === 'INWARD' ? h('td') : null, h('td'), h('td'), h('td')))),
@@ -74,6 +75,7 @@ export async function stockMovementsView(root) {
           h('a.btn.small', { href: printUrl(r), target: '_blank' }, '🖨 Print'),
           r.type === 'INWARD' ? h('a.btn.small', { href: `#/print/iqc/x?doc=${encodeURIComponent(r.doc_no || '')}&date=${r.date}`, target: '_blank', title: 'Incoming inspection report of this GRN' }, '🔍 IQC report') : null,
           r.type === 'INWARD' && mayEdit ? h('a.btn.small.primary', { href: editUrl(r) }, r.with_po ? '✏ Edit GRN / change PO' : '📎 Attach PO / edit GRN') : null,
+          r.type !== 'INWARD' && mayChange ? h('a.btn.small.primary', { href: slipUrl(r) }, '✏ Edit slip (all lines)') : null,
           mayDelete ? h('button.btn.small.danger', { type: 'button', style: { marginLeft: 'auto' }, onclick: remove(d.moves.map(m => m.id), `The whole slip ${r.doc_no || ''} (${d.moves.length} line${d.moves.length === 1 ? '' : 's'})`) }, '🗑 Delete slip') : null)));
     } catch (e) { fail(e); }
   }
@@ -82,7 +84,7 @@ export async function stockMovementsView(root) {
   const query = () => new URLSearchParams(Object.entries({ ...(one() ? { type } : type ? { dir: type } : {}), q: f.q.value, from: f.from.value, to: f.to.value,
     po: type === 'INWARD' || !one() ? f.po.value : '', project: project || '', item: item || '' }).filter(([, v]) => v)).toString();
   const lineActions = (m, label) => h('td.nowrap', h('a.icon-btn', { href: `#/view/stock_moves/${m.id}`, title: 'Open this line' }, '👁'),
-    mayChange && m.type !== 'INWARD' ? h('a.icon-btn', { href: `#/edit/stock_moves/${m.id}`, title: 'Edit this line' }, '✏️') : null,
+    mayChange && m.type !== 'INWARD' ? h('a.icon-btn', { href: slipUrl(m), title: 'Edit its slip (all lines)' }, '✏️') : null,
     mayChange && m.type === 'INWARD' && mayEdit ? h('a.icon-btn', { href: editUrl({ doc_key: m.doc_key, date: m.date }), title: 'Edit this GRN / change its PO' }, '✏️') : null,
     mayDelete ? h('button.icon-btn.del', { type: 'button', title: 'Delete this line', onclick: remove([m.id], label) }, '🗑') : null);
 
@@ -238,6 +240,84 @@ export async function grnEditView(root) {
       h('a.btn', { href: '#/stock-movements?type=INWARD' }, 'Cancel'),
       h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save GRN'))),
     h('p.muted', 'Changing a quantity changes the stock. Moving the GRN to another PO takes the quantities off the old PO and puts them on the new one.'),
+    body);
+  render();
+}
+
+// ---------------------------------------------------------------- edit a whole slip (issue, transfer, return, scrap …)
+// All lines of the slip on one screen: the header once, every line's item / qty / project / remark, add or remove lines,
+// one Save. (GRNs have their own editor above.)
+const SLIP_FIELDS = { // header fields shown per movement type
+  OUTWARD: [['issued_to', 'Issued To / Site / Department'], ['requested_by', 'Requested By']],
+  TRANSFER: [['from_location', 'From Location'], ['to_location', 'To Location'], ['requested_by', 'Requested By'], ['purpose', 'Purpose']],
+  RETURN: [['issued_to', 'Returned From / Site'], ['against_issue_no', 'Original Issue No'], ['reason', 'Reason']],
+  SCRAP: [['issued_to', 'From / Site'], ['reason', 'Reason']],
+  JOB_OUT: [['to_location', 'Sent To'], ['purpose', 'Work']],
+  JOB_IN: [['invoice_no', 'Challan / Invoice No'], ['purpose', 'Work']],
+  ADJUST: [['reason', 'Reason']],
+  OPENING: [],
+  PRODUCED: [['purpose', 'Purpose']],
+  MOVE: [['from_location', 'From'], ['to_location', 'To'], ['purpose', 'Purpose']],
+};
+export async function slipEditView(root) {
+  // #/slip-edit/<TYPE>?doc=…&date=…
+  const p = { ...qs(), type: decodeURIComponent(location.hash.split('?')[0].split('/')[2] || '') };
+  if (p.type === 'INWARD') { location.hash = `#/grn-edit?doc=${encodeURIComponent(p.doc)}&date=${p.date}`; return; }
+  const [d, items, projects] = await Promise.all([api(`/stock/doc?type=${encodeURIComponent(p.type)}&doc=${encodeURIComponent(p.doc)}&date=${p.date}`), refOptions('items'), refOptions('projects')]);
+  const mayDelete = canDelete('stock_moves', state.user.role);
+  const m0 = d.moves[0];
+  const fields = [['date', 'Date', 'date'], ...(SLIP_FIELDS[p.type] || []), ['department', 'Department']];
+  const head = Object.fromEntries(fields.map(([k]) => [k, m0[k] ?? '']));
+  const lines = d.moves.map(m => ({ id: m.id, item_id: m.item_id, label: m.item_id_label, uom: m.uom, qty: m.qty, project_id: m.project_id || null, remarks: m.remarks || '' }));
+  const removed = [];
+  const body = h('div');
+  const typeName = MOVE_TYPES[p.type]?.label || p.type;
+
+  function render() {
+    body.replaceChildren(
+      h('div.card', h('div.form-grid',
+        h('label', 'Slip No', h('input', { value: d.doc_no || '', disabled: true })),
+        fields.map(([k, label, t]) => { const el = h('input', { type: t || 'text' }); el.value = head[k] ?? ''; el.oninput = () => { head[k] = el.value; }; return h('label', label, el); }))),
+      h('div.card.flush', h('div.table-wrap', h('table.data.lines',
+        h('thead', h('tr', h('th', '#'), h('th', 'Item *'), h('th', 'Qty *'), h('th', 'UOM'), h('th', 'Project'), h('th', 'Remark'), h('th'))),
+        h('tbody', lines.map((ln, i) => h('tr',
+          h('td.muted', i + 1),
+          h('td', { style: { minWidth: '240px' } }, itemPicker(items, ln.item_id ? Number(ln.item_id) : null, { onPick: id => { ln.item_id = id || null; const it = items.find(x => x.id === id); if (it?.uom) { ln.uom = it.uom; render(); } } })),
+          h('td', (() => { const q = h('input', { type: 'number', step: 'any', min: 0, style: { width: '90px' } }); q.value = ln.qty ?? ''; q.oninput = () => { ln.qty = q.value; }; return q; })()),
+          h('td', ln.uom || ''),
+          h('td', (() => { const ps = h('select', { style: { minWidth: '170px', maxWidth: '240px' } }, h('option', { value: '' }, '— no project (stock) —'), projects.map(o => h('option', { value: o.id, selected: Number(ln.project_id) === o.id }, o.label))); ps.onchange = () => { ln.project_id = ps.value ? Number(ps.value) : null; }; return ps; })()),
+          h('td', (() => { const r = h('input', { style: { minWidth: '140px' } }); r.value = ln.remarks; r.oninput = () => { ln.remarks = r.value; }; return r; })()),
+          h('td', (ln.id ? mayDelete : true) && lines.length > 1 ? h('button.icon-btn.del', { type: 'button', title: 'Remove this line', onclick: () => { if (ln.id) removed.push(ln.id); lines.splice(i, 1); render(); } }, '🗑') : null))))))),
+      h('div', { style: { display: 'flex', gap: '8px', margin: '8px 0' } },
+        h('button.btn', { type: 'button', onclick: () => { lines.push({ id: null, item_id: null, qty: '', uom: '', project_id: lines.at(-1)?.project_id ?? null, remarks: '' }); render(); } }, '+ Add line'),
+        removed.length ? h('span.muted', { style: { alignSelf: 'center' } }, `${removed.length} line(s) will be removed when you save`) : null));
+  }
+
+  async function save(allowNegative = false) {
+    const bad = lines.findIndex(l => !l.item_id || !(Number(l.qty) > 0 || p.type === 'ADJUST'));
+    if (bad >= 0) { toast(`Line ${bad + 1}: choose the item and enter the quantity`, true); return; }
+    const payload = { type: p.type, doc: p.doc, date: p.date, head, remove: removed, allowNegative,
+      lines: lines.map(l => ({ id: l.id || undefined, item_id: Number(l.item_id), qty: Number(l.qty), project_id: l.project_id || null, remarks: l.remarks || '' })) };
+    try {
+      const r = await api('/stock/slip', { method: 'PUT', body: payload });
+      clearRefCache('items');
+      toast(`${typeName} ${r.doc || ''} saved: ${r.changed} changed, ${r.added} added, ${r.removed} removed`);
+      location.hash = `#/stock-movements?type=${p.type}&q=${encodeURIComponent(r.doc || '')}`;
+    } catch (e) {
+      if (/Not enough stock/.test(e.message) && !allowNegative && hasFunction(state.user.role, 'allow_negative')) {
+        const ok = await modal('Not enough stock', h('pre', { style: { whiteSpace: 'pre-wrap' } }, e.message), [{ label: 'Cancel', value: false }, { label: 'Save anyway', cls: 'danger solid', value: true }]);
+        if (ok) return save(true);
+        return;
+      }
+      throw e;
+    }
+  }
+  root.replaceChildren(
+    h('div.page-head', h('h1', `✏ ${typeName} ${d.doc_no || ''}`), h('div.actions',
+      h('a.btn', { href: `#/print/stockdoc/${p.type}?doc=${encodeURIComponent(d.doc_no || '')}`, target: '_blank' }, '🖨 Print'),
+      h('a.btn', { href: `#/stock-movements?type=${p.type}` }, 'Cancel'),
+      h('button.btn.primary', { onclick: busy(() => save()) }, '💾 Save slip'))),
+    h('p.muted', 'Change any line, add or remove lines, then save once. The date and the fields at the top apply to every line. Changing a quantity or item changes the stock.'),
     body);
   render();
 }

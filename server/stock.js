@@ -697,3 +697,63 @@ export function setMinLevels(body, user) {
   });
   return { ok: true, changed };
 }
+
+// ---------------------------------------------------------------- edit a whole slip at once (issue, transfer, return …)
+// The header (date, issued to, locations, reason, remarks …) for every line, each line's item / qty / project / remark,
+// lines removed and lines added, saved together. Each line goes through the normal save (same checks as editing one
+// line). No item may go below zero because of the change, unless the person may allow negative stock.
+const SLIP_HEAD = ['date', 'issued_to', 'requested_by', 'department', 'from_location', 'to_location', 'against_issue_no', 'reason', 'purpose', 'vendor_id', 'invoice_no', 'invoice_date'];
+const SLIP_LINE = ['item_id', 'qty', 'project_id', 'remarks', 'department', 'rate'];
+export function editSlip(body, user) {
+  const type = body?.type;
+  if (!type || type === 'INWARD') throw new HttpError(400, 'A GRN is edited with “Edit GRN”');
+  const moves = docMoves(type, body.doc, body.date);
+  if (!moves.length) throw new HttpError(404, 'No such slip – it may have been changed; reload the page');
+  const ids = new Set(moves.map(m => m.id));
+  const lines = Array.isArray(body.lines) ? body.lines : [];
+  const remove = [...new Set((body.remove || []).map(Number))];
+  for (const l of lines) if (l.id && !ids.has(Number(l.id))) throw new HttpError(400, 'A line does not belong to this slip');
+  for (const id of remove) if (!ids.has(id)) throw new HttpError(400, 'A line does not belong to this slip');
+  if (remove.length >= moves.length && !lines.some(l => !l.id)) throw new HttpError(400, 'A slip needs at least one line – use “Delete slip” to remove it all');
+  const head = {};
+  for (const k of SLIP_HEAD) if (body.head && k in body.head) head[k] = body.head[k] === '' ? null : body.head[k];
+  if ('date' in head && !head.date) delete head.date;
+  const touched = new Set([...moves.map(m => m.item_id), ...lines.map(l => Number(l.item_id)).filter(Boolean)]);
+  const before = new Map([...touched].map(id => [id, stockOf(id)]));
+  return tx(() => {
+    const kept = moves.filter(m => !remove.includes(m.id));
+    for (const id of remove) deleteRow('stock_moves', id, user);
+    let changed = 0;
+    for (const m of kept) {
+      const l = lines.find(x => Number(x.id) === m.id) || {};
+      const patch = { ...head };
+      for (const k of SLIP_LINE) if (k in l) patch[k] = l[k] === '' ? null : l[k];
+      if (patch.qty != null && !(Number(patch.qty) > 0) && type !== 'ADJUST') throw new HttpError(400, `Line ${moves.indexOf(m) + 1}: enter a quantity`);
+      if (patch.item_id === null) throw new HttpError(400, `Line ${moves.indexOf(m) + 1}: choose the item`);
+      if (Object.keys(patch).some(k => String(patch[k] ?? '') !== String(m[k] ?? ''))) { updateRow('stock_moves', m.id, patch, user); changed++; }
+    }
+    const first = getRow('stock_moves', kept[0]?.id ?? moves[0].id) || moves[0];
+    let added = 0;
+    for (const l of lines.filter(x => !x.id)) {
+      if (!l.item_id) continue;
+      if (!(Number(l.qty) > 0) && type !== 'ADJUST') throw new HttpError(400, 'A new line needs a quantity');
+      const row = { type, date: head.date || first.date, doc_no: first.doc_no };
+      for (const k of HEADER_KEYS) if (first[k] != null) row[k] = first[k];
+      Object.assign(row, head);
+      for (const k of SLIP_LINE) if (l[k] !== undefined && l[k] !== '') row[k] = l[k];
+      if (!('project_id' in l)) row.project_id = first.project_id ?? null;
+      insertRow('stock_moves', row, user);
+      added++;
+    }
+    if (!body.allowNegative) {
+      const short = [];
+      for (const id of touched) {
+        const now = stockOf(id), was = before.get(id) ?? 0;
+        if (now < -1e-9 && now < was - 1e-9) short.push(`${db.prepare('SELECT name FROM items WHERE id = ?').get(id)?.name || id}: stock would be ${round2(now)}`);
+      }
+      if (short.length) throw Object.assign(new HttpError(409, `Not enough stock for this change:\n${short.join('\n')}`), { code: 'SHORT_STOCK' });
+    }
+    audit(user.name, 'stock_moves', moves[0].id, 'slip edited', `${type} ${moves[0].doc_no || ''}: ${changed} changed, ${added} added, ${remove.length} removed`);
+    return { ok: true, changed, added, removed: remove.length, doc: first.doc_no, date: head.date || first.date };
+  });
+}

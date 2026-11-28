@@ -11,7 +11,7 @@ import { signatureDialog } from './signs.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
 import { minLevelsView } from './views/minlevels.js';
-import { stockMovementsView, grnEditView } from './views/stockdocs.js';
+import { stockMovementsView, grnEditView, slipEditView } from './views/stockdocs.js';
 import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
 import { storeCheckView } from './views/storecheck.js';
@@ -154,6 +154,7 @@ async function route() {
       case 'min-levels': await minLevelsView(view); break;
       case 'stock-movements': await stockMovementsView(view); break;
       case 'grn-edit': await grnEditView(view); break;
+      case 'slip-edit': await slipEditView(view); break;
       case 'po-tracker': await poTrackerView(view); break;
       case 'boq': await boqView(view, a); break;
       case 'bom': await bomView(view, a); break;

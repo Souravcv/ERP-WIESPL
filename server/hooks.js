@@ -5,7 +5,7 @@ import { db, nextSeq, getSettings } from './db.js';
 import { quoteTotals, linesTotals, gstTotals, poTotals } from '../public/js/calc.js';
 import { GST_STATE_CODES, MOVE_TYPES, TDS_SECTIONS, ENTITIES } from '../public/js/schema.js';
 import { prefillProduction, productionHead } from './storeflow.js';
-import { parseLatLng, prepLeave, markLeave } from './hr.js';
+import { parseLatLng, prepLeave, markLeave, haversine } from './hr.js';
 import { prepEmployee, prepOnboarding, afterOnboarding, prepReview, afterReview, prepSeparation } from './hrfile.js';
 import { beforeSaveTask, afterSaveTask } from './worktasks.js';
 import { applyBaseline } from './schedule.js';
@@ -417,6 +417,21 @@ export function beforeSave(name, row, existing, user) {
         const ll = parseLatLng(row.maps_link);
         if (!ll) throw Object.assign(new Error('Could not read a position from that link: open the pin in Google Maps and copy the link that shows @lat,lng, or type "18.6201, 73.7447"'), { status: 400 });
         [row.lat, row.lng] = ll;
+      }
+      {
+        // One place, one site: no second active site with the same name or inside another site's circle
+        // (two sites on one spot split the attendance and the clock-in picks either).
+        const m = { ...existing, ...row };
+        if (String(m.active ?? 'Yes') !== 'No') {
+          const key = s => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+          for (const o of db.prepare("SELECT id, name, lat, lng, radius_m FROM work_locations WHERE id <> ? AND COALESCE(active, 'Yes') = 'Yes'").all(existing?.id ?? 0)) {
+            if (key(o.name) && key(o.name) === key(m.name)) throw Object.assign(new Error(`A site named "${o.name}" already exists. Use that one, or give this site a different name.`), { status: 409 });
+            if (m.lat == null || m.lng == null || o.lat == null || o.lng == null) continue;
+            const d = Math.round(haversine(Number(m.lat), Number(m.lng), o.lat, o.lng));
+            if (d < Math.max(Number(m.radius_m) || 200, Number(o.radius_m) || 200))
+              throw Object.assign(new Error(`"${o.name}" is already at this place (${d} m away, inside its ${o.radius_m || 200} m circle). Use that site instead of adding another one; if it is really a different site, move the pin or make the circles smaller.`), { status: 409 });
+          }
+        }
       }
       break;
     case 'attendance':

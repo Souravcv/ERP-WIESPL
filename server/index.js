@@ -909,6 +909,10 @@ api.put('/stock/grn', need('stock_moves'), wrap(req => {
   if (!hasFunction(req.user.role, 'stock_post')) throw new HttpError(403, 'Only the store (people allowed to post stock) can change a GRN');
   return stock.editGrn({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user);
 }));
+api.put('/stock/slip', need('stock_moves'), wrap(req => {
+  if (req.body?.remove?.length && !canDelete('stock_moves', req.user.role)) throw new HttpError(403, 'Only people with full access to Stock Movements can remove lines');
+  return stock.editSlip({ ...req.body, allowNegative: !!req.body?.allowNegative && hasFunction(req.user.role, 'allow_negative') }, req.user);
+}));
 api.post('/purchase_orders/:id/revise', need('purchase_orders'), wrap(req => wf.revisePO(req.params.id, req.user)));
 api.post('/stock/drafts', need('stock_moves'), wrap(req => insertRow('stock_drafts', { ...draftRow(req.body), status: 'Draft', prepared_by: req.user.name }, req.user, { system: true })));
 api.put('/stock/drafts/:id', need('stock_moves'), wrap(req => {
