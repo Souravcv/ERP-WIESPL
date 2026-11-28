@@ -936,6 +936,8 @@ api.post('/stock/drafts/:id/cancel', need('stock_moves'), wrap(req => {
 const itemView = req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); };
 api.get('/stock/available/:itemId', wrap(req => { itemView(req); return { stock: stock.stockOf(Number(req.params.itemId)) }; }));
 api.get('/stock/summary', wrap(req => { itemView(req); return stock.stockSummary(req.query); }));
+api.get('/stock/min-levels', wrap(req => { itemView(req); return stock.minLevels(); }));
+api.post('/stock/min-levels', need('items'), wrap(req => stock.setMinLevels(req.body, req.user)));
 api.get('/dashboard/accounts', wrap(req => { if (!canView('invoices', req.user.role) && !hasFunction(req.user.role, 'po_commercial')) throw new HttpError(403, 'No access to accounts'); return stock.accountsDashboard(); }));
 api.post('/products/import-boq', need('products'), express.raw({ type: () => true, limit: '30mb' }), wrap(req => importer.importProductBoq(req.body, req.query.set, req.user)));
 api.get('/dashboard/store', wrap(req => { if (!canView('items', req.user.role)) throw new HttpError(403, 'No access to the store'); return stock.storeDashboard(req.query); }));

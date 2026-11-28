@@ -530,6 +530,7 @@ export async function stockSummaryView(root) {
   root.replaceChildren(
     h('div.page-head', h('h1', '📊 Stock Summary'), h('div.actions',
       h('a.btn', { href: '#/stock-entry' }, '🔁 Stock Entry'),
+      h('a.btn', { href: '#/min-levels' }, '📉 Set minimum levels'),
       h('button.btn', { onclick: () => download(`/api/export/stock-summary?${query()}`) }, '⬇ Export Excel'),
       canCarry ? h('button.btn', { onclick: () => carryForward().catch(fail) }, '🏁 1 April Opening Stock') : null)),
     h('div.toolbar', f.q, f.category, f.fsn, f.abc, f.only, h('span.muted', 'From'), f.from, h('span.muted', 'to'), f.to),

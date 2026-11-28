@@ -53,7 +53,7 @@ export async function storeDashboard(box) {
     a.low && [`${a.low} item(s) are at or below their minimum level – raise a requisition.`, '#/stock-summary?only=low'],
     a.non_moving && [`${a.non_moving} item(s) worth ${rs(a.non_moving_value)} have not been issued this year (non-moving). Use them on projects, return to vendor or scrap.`, '#/stock-summary'],
     a.no_price && [`${a.no_price} item(s) in stock have no price, so the stock value is understated – enter their price in the item master.`, '#/list/items'],
-    a.no_min_level && [`${a.no_min_level} fast-moving item(s) have no minimum stock level – set one so low stock is flagged in time.`, '#/list/items'],
+    a.no_min_level && [`${a.no_min_level} fast-moving item(s) have no minimum stock level – set one so low stock is flagged in time.`, '#/min-levels'],
     d.pending_grn && [`${d.pending_grn} approved PO(s) still have material to receive – check with the vendors.`, '#/po-tracker?state=pending'],
   ].filter(Boolean);
   box.replaceChildren(

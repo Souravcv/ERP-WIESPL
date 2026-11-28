@@ -653,3 +653,47 @@ export function setProject(body, user) {
   }
   return { ok: true, count: ids.length };
 }
+
+// ---------------------------------------------------------------- minimum stock levels (quick setting)
+// Every item with its stock, what was used in the last 6 months and a suggested minimum:
+// enough for the supplier's lead time (blank = 15 days) plus 15 more days of average use, for items issued in 2+ months.
+export function minLevels() {
+  const since = new Date(Date.now() - 182 * 864e5).toISOString().slice(0, 10);
+  const rows = db.prepare(`SELECT t.id, t.code, t.name, t.category, t.uom, COALESCE(t.reorder_level, 0) reorder_level, t.lead_days,
+      ${STOCK_SQL.replaceAll('{t}', 't')} AS stock,
+      (SELECT COALESCE(SUM(m.qty), 0) FROM stock_moves m WHERE m.item_id = t.id AND m.date >= ? AND m.type IN ('OUTWARD', 'TRANSFER')
+        AND COALESCE(m.purpose, '') NOT LIKE 'Finished goods made%') used,
+      (SELECT COUNT(DISTINCT substr(m.date, 1, 7)) FROM stock_moves m WHERE m.item_id = t.id AND m.date >= ? AND m.type IN ('OUTWARD', 'TRANSFER')
+        AND COALESCE(m.purpose, '') NOT LIKE 'Finished goods made%') months
+    FROM items t ORDER BY t.code`).all(since, since);
+  for (const r of rows) {
+    r.stock = round2(r.stock); r.used = round2(r.used);
+    const days = (Number(r.lead_days) || 15) + 15;
+    r.suggested = r.months >= 2 ? Math.ceil(r.used / 182 * days) : null; // a one-off (one project) use is no reason to keep stock
+    r.fsn = r.months >= 4 ? 'FAST' : r.months >= 1 ? 'SLOW' : 'NON-M';
+    r.low = r.reorder_level > 0 && r.stock <= r.reorder_level;
+  }
+  return { since, rows };
+}
+
+export function setMinLevels(body, user) {
+  const list = Array.isArray(body?.levels) ? body.levels : [];
+  if (!list.length) throw new HttpError(400, 'Nothing to save');
+  if (list.length > 5000) throw new HttpError(400, 'Too many at once');
+  const get = db.prepare('SELECT id, name, reorder_level FROM items WHERE id = ?');
+  const upd = db.prepare('UPDATE items SET reorder_level = ? WHERE id = ?');
+  let changed = 0;
+  tx(() => {
+    for (const x of list) {
+      const id = Number(x.id), v = x.min === '' || x.min == null ? 0 : Number(x.min);
+      if (!Number.isFinite(v) || v < 0) throw new HttpError(400, `Minimum must be 0 or more (item ${id})`);
+      const it = get.get(id);
+      if (!it) throw new HttpError(404, `Item ${id} not found`);
+      if ((Number(it.reorder_level) || 0) === v) continue;
+      upd.run(v, id);
+      audit(user.name, 'items', id, 'minimum level', `${it.reorder_level || 0} → ${v}`);
+      changed++;
+    }
+  });
+  return { ok: true, changed };
+}

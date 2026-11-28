@@ -99,6 +99,7 @@ table.data tbody tr:hover { background: var(--surface-2); }
 table.data tr.clickable { cursor: pointer; }
 table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 table.data td.clip { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 600px) { table.data.minlv td, table.data.minlv th { padding: 7px 5px; } table.data.minlv .btn.small { padding: 4px 7px; } }
 table.data tfoot td { font-weight: 700; background: var(--surface-2); }
 .pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; padding: 10px; color: var(--text-2); }
 

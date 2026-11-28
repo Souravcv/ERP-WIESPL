@@ -10,6 +10,7 @@ import { printView } from './views/print.js';
 import { signatureDialog } from './signs.js';
 import { usersView, rolesView, settingsView, auditView, importView, searchView } from './views/admin.js';
 import { stockEntryView, stockSummaryView, poTrackerView } from './views/stock.js';
+import { minLevelsView } from './views/minlevels.js';
 import { stockMovementsView, grnEditView } from './views/stockdocs.js';
 import { boqView } from './views/dispatch.js';
 import { bomView } from './views/bom.js';
@@ -32,7 +33,7 @@ const EXTRA_LINKS = {
   Service: [['#/service', '📊', 'Service Dashboard', 'service_tickets']],
   HR: [['#/hr', '👥', 'HR & Attendance Dashboard', 'attendance']],
   Production: [['#/lots?tab=iqc', '🔍', 'IQC – incoming inspection (GRN)', 'fn:iqc_inspect'], ['#/production/orders', '🏭', 'Production Dashboard (plan & daily review)', 'production_orders'], ['#/project-qc', '✅', 'Project QC', 'project_qc']],
-  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'fn:see_store_stock'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'fn:see_store_stock'], ['#/site-material', '🧾', 'Site Material (per site)', 'stock_moves'], ['#/list/scrap_register', '♻️', 'Scrap Register (weighed in / sold)', 'scrap_register'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'fn:see_store_stock'], ['#/stock-summary', '📊', 'Stock Summary', 'fn:see_store_stock'], ['#/store-check', '📦', 'BOQ Store Check', 'fn:see_store_stock'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
+  Store: [['#/stock-entry', '🔁', 'Stock Entry (GRN / Issue)', 'stock_moves'], ['#/stock-movements', '🗂️', 'Stock Movements (by GRN / slip)', 'stock_moves'], ['#/project-store', '🏗️', 'Project Store (in store / pending per project)', 'fn:see_store_stock'], ['#/dept-stores', '🏬', 'Department Stores (what each department holds)', 'fn:see_store_stock'], ['#/site-material', '🧾', 'Site Material (per site)', 'stock_moves'], ['#/list/scrap_register', '♻️', 'Scrap Register (weighed in / sold)', 'scrap_register'], ['#/lots', '🏷️', 'Lots, IQC & FIFO', 'fn:see_store_stock'], ['#/stock-summary', '📊', 'Stock Summary', 'fn:see_store_stock'], ['#/min-levels', '📉', 'Minimum Stock Levels (set quickly)', 'fn:see_store_stock'], ['#/store-check', '📦', 'BOQ Store Check', 'fn:see_store_stock'], ['#/production/daily', '🏭', 'Production: Daily Output & Stock', 'production_entries']],
 };
 // [href, icon, label, who: 'admin' or a function key]
 const ADMIN_LINKS = [
@@ -150,6 +151,7 @@ async function route() {
       case 'import': await importView(view); break;
       case 'stock-entry': await stockEntryView(view); break;
       case 'stock-summary': await stockSummaryView(view); break;
+      case 'min-levels': await minLevelsView(view); break;
       case 'stock-movements': await stockMovementsView(view); break;
       case 'grn-edit': await grnEditView(view); break;
       case 'po-tracker': await poTrackerView(view); break;
